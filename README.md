@@ -57,8 +57,14 @@ make test           # capability tests
 make smoke MODEL=bailing_moe_v2    # per-model smoke test
 ```
 
-Requires `ttnn` to be importable in the active Python environment (currently
-not declared as a pip dep — see `PROJECT_PROPOSAL.md` open question OQ-1).
+Requires `ttnn` and `tracy` (both tt-metal-built C extensions) to be importable
+in the active Python environment — they are not declared as pip deps because
+they have no PyPI distribution. See `PROJECT_PROPOSAL.md` open question OQ-1.
+
+`transformers==5.9.0` is the strict pin for this branch; every other dep in
+`pyproject.toml` mirrors the specifier used by HF transformers v5.9.0's own
+`setup.py`. See `docs/migration_notes.md` for the bump procedure when moving
+to a different transformers release.
 
 ## Versioning
 

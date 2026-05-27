@@ -40,15 +40,14 @@ because the test suite needs:
 
 - a real (built-from-tt-metal) `ttnn` import
 - `tracy` (currently a tt-metal-built C extension; not on PyPI)
-- `transformers==5.9.0` (git-only as of writing — several tests have explicit
-  `assert transformers.__version__.startswith("5.")` guards)
 - optional model-specific deps such as `torchvision` (for `test_modeling_resnet`),
   `decord`/`av` (for video tests), etc.
 
-These are documented as **open question OQ-1** in
-[`PROJECT_PROPOSAL.md`](../PROJECT_PROPOSAL.md) §11 ("ttnn as a declared
-dependency"). They are environment concerns; nothing about the test files is
-intrinsically broken by the migration.
+`transformers==5.9.0` is pinned in `pyproject.toml` and installs cleanly from
+PyPI — it is no longer in this list. The remaining gaps (`ttnn`, `tracy`) are
+documented as **open question OQ-1** in
+[`PROJECT_PROPOSAL.md`](../PROJECT_PROPOSAL.md) §11. They are environment
+concerns; nothing about the test files is intrinsically broken by the migration.
 
 ### Tests with surviving cross-repo imports (will need manual help during port)
 
@@ -69,8 +68,8 @@ python -m pytest tests/ --collect-only -q \
 From the repo root:
 
 ```bash
-pip install -e . --no-build-isolation --no-deps
-pip install loguru pytest
+pip install -e . --no-build-isolation
+pip install pytest
 
 # AST + stubbed-import sweep
 python3 -c "

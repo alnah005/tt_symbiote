@@ -18,20 +18,49 @@ requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 keywords = ["tenstorrent", "ttnn", "transformers", "huggingface", "tt-metal", "machine learning"]
 dynamic = ["version"]
-# NOTE on runtime-only dependencies (OQ-1 in PROJECT_PROPOSAL.md §11):
-# Several runtime dependencies are intentionally NOT declared in `dependencies`
-# below because they are not pip-installable on the targeted release channel:
-#   - `ttnn`            : built from tt-metal source; install separately.
-#   - `tracy`           : C extension built by tt-metal; install via tt-metal.
-#   - `transformers==5.9.0` : pinned in spirit but v5.x is git-only as of
-#                              this writing. Install with
-#                              `pip install git+https://github.com/huggingface/transformers.git`
-# Revisit before any external release once these have PyPI wheels.
+# Pinning policy (per PROJECT_PROPOSAL.md §10):
+#
+# - `transformers` is pinned to a single EXACT version per tt_symbiote branch.
+#   Different transformers versions can ship model code or config schemas that
+#   are mutually incompatible; the strict `==` is what guarantees the modeling
+#   files in src/tt_symbiote/models/<model>/ stay coherent with the
+#   transformers release we vendored against.
+#
+# - Every other dependency below MIRRORS THE SPECIFIER USED BY transformers
+#   v5.9.0 verbatim (see https://github.com/huggingface/transformers/blob/v5.9.0/setup.py).
+#   Hugging Face themselves use lower-bound / capped-range pins, not exact pins,
+#   to stay compatible with the platform-specific wheel sets of torch / numpy /
+#   tokenizers / etc. We deliberately do not tighten these further, since doing
+#   so would create resolver conflicts against `transformers==5.9.0`.
+#
+# - `torch` is promoted from HF's optional `torch` extra into our hard deps
+#   (tt_symbiote always imports it). Same goes for `accelerate`, which HF pairs
+#   with torch in that extra.
+#
+# - `loguru` is tt_symbiote-specific (not in HF) and is needed by the vendored
+#   arch helpers in src/tt_symbiote/core/arch.py.
+#
+# - `ttnn` and `tracy` are NOT declared here. Both are tt-metal-built C
+#   extensions with no PyPI distribution, so they remain user-supplied
+#   (OQ-1 in PROJECT_PROPOSAL.md §11). Revisit when tt-metal ships PyPI wheels.
 dependencies = [
-  "torch",
+  # tt_symbiote-specific pin
+  "transformers==5.9.0",
+  # Mirror of transformers v5.9.0's `extras["torch"]` (required for us)
+  "torch>=2.4",
+  "accelerate>=1.1.0",
+  # Mirror of transformers v5.9.0's `install_requires`
+  "huggingface-hub>=1.5.0,<2.0",
+  "numpy>=1.17",
+  "packaging>=20.0",
+  "pyyaml>=5.1",
+  "regex>=2025.10.22",
+  "tokenizers>=0.22.0,<=0.23.0",
+  "typer",
+  "safetensors>=0.4.3",
+  "tqdm>=4.27",
+  # tt_symbiote-specific extra (vendored arch helpers)
   "loguru>=0.6.0",
-  "numpy>=1.24.4,<2",
-  "tqdm",
 ]
 
 [project.optional-dependencies]

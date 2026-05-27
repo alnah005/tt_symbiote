@@ -18,6 +18,40 @@ The same SHA is recorded as a "Vendored from" comment in every vendored file
 (`src/tt_symbiote/core/{ccl.py, arch.py}` and
 `src/tt_symbiote/integrations/tt_cnn/{builder, executor, pipeline}.py`).
 
+## Dependency pinning policy
+
+The branch `aroberge/bootstrap` targets `transformers==5.9.0`. The
+`[project.dependencies]` block in `pyproject.toml` is structured so that
+**every dependency other than `transformers`** mirrors the specifier used by
+HF transformers v5.9.0's own
+[`setup.py`](https://github.com/huggingface/transformers/blob/v5.9.0/setup.py)
+verbatim:
+
+- `transformers==5.9.0` — strict equality (our pin).
+- `torch>=2.4`, `accelerate>=1.1.0` — promoted from HF's optional `torch` extra
+  into our hard deps since tt_symbiote always imports torch.
+- `huggingface-hub>=1.5.0,<2.0`, `numpy>=1.17`, `packaging>=20.0`,
+  `pyyaml>=5.1`, `regex>=2025.10.22`, `tokenizers>=0.22.0,<=0.23.0`, `typer`,
+  `safetensors>=0.4.3`, `tqdm>=4.27` — all from HF's `install_requires`,
+  same specifiers verbatim.
+- `loguru>=0.6.0` — tt_symbiote-specific (vendored arch helpers).
+
+HF themselves do not use exact pins on any of these (they use `>=` lower
+bounds and capped ranges), because exact pins would conflict with the
+platform-specific wheel sets of torch / numpy / tokenizers. We follow their
+posture. Reproducibility across machines, if/when it becomes a requirement,
+should be solved with a separate `requirements.lock` / `uv.lock` file rather
+than by tightening these specifiers.
+
+Bump procedure when moving to a new transformers release:
+
+1. Cut a new tt_symbiote branch (e.g. `transformers-v5.10.0`).
+2. Open https://github.com/huggingface/transformers/blob/v5.10.0/setup.py
+3. Copy every entry of `_deps` that backs `install_requires` and
+   `extras["torch"]` into the dependency block above, verbatim.
+4. Re-run the migration codemod against the new transformers source if the
+   model APIs changed.
+
 ## Tooling left in `scripts/` (committed for reproducibility)
 
 | Script | Purpose |
