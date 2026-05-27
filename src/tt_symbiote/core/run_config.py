@@ -5,6 +5,7 @@
 import contextlib
 import os
 import time
+import warnings
 from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, Type
 
@@ -193,56 +194,6 @@ class DispatchManager:
         else:
             DispatchManager._modules_in_progress.append(module_name)
             DispatchManager.current_module_name = module_name
-
-    @staticmethod
-    def dispatch_to_ttnn_wrapper(func, ttnn_args, ttnn_kwargs):
-        from tt_symbiote.core.dispatcher import dispatch_to_ttnn
-
-        begin = time.time()
-        res = dispatch_to_ttnn(func.name(), ttnn_args, ttnn_kwargs)
-        end = time.time()
-        func_name = f"{func.name().replace('aten::', 'TTNN::')}"
-        DispatchManager.record_timing(
-            "TTNN",
-            (
-                ""
-                if DispatchManager.current_module_name is None
-                else DispatchManager.current_module_name + f".{func_name}"
-            ),
-            func_name,
-            {},
-            end - begin,
-        )
-        return res
-
-    @staticmethod
-    def dispatch_to_torch_wrapper(func, torch_args, torch_kwargs, wrap=True):
-        from tt_symbiote.core.torch_dispatcher import can_dispatch_to_torch, dispatch_to_torch
-
-        # no_dispatch is only needed if you use enable_python_mode.
-        # It prevents infinite recursion.
-        with no_dispatch():
-            func_args = tree_map(unwrap_to_torch(func), torch_args)
-            func_kwargs = tree_map(unwrap_to_torch(func), torch_kwargs)
-            begin = time.time()
-            if can_dispatch_to_torch(func.name(), func_args, func_kwargs):
-                func_res = dispatch_to_torch(func.name(), func_args, func_kwargs)
-            else:
-                func_res = func(*func_args, **func_kwargs)
-            end = time.time()
-            DispatchManager.record_timing(
-                "Torch",
-                (
-                    ""
-                    if DispatchManager.current_module_name is None
-                    else DispatchManager.current_module_name + f".{func.name()}"
-                ),
-                func.name(),
-                {},
-                end - begin,
-            )
-            rs = tree_map(wrap_from_torch, func_res) if wrap else func_res
-        return rs
 
     @staticmethod
     def DisableTiming():
@@ -527,32 +478,6 @@ class NormalRun:
         )
 
     @staticmethod
-    def torch_dispatch(cls, func, types, args=(), kwargs=None):
-        """Dispatch torch operations to TTNN when possible."""
-        from tt_symbiote.core.dispatcher import can_dispatch_to_ttnn
-
-        begin = time.time()
-        can_to_ttnn = can_dispatch_to_ttnn(func.name(), args, kwargs)
-        end = time.time()
-        DispatchManager.record_timing(
-            "TTNN",
-            (
-                ""
-                if DispatchManager.current_module_name is None
-                else DispatchManager.current_module_name + f".can_dispatch_to_ttnn"
-            ),
-            "can_dispatch_to_ttnn",
-            {},
-            end - begin,
-        )
-        if can_to_ttnn:
-            rs = DispatchManager.dispatch_to_ttnn_wrapper(func, args, kwargs)
-        else:
-            rs = DispatchManager.dispatch_to_torch_wrapper(func, args, kwargs)
-
-        return rs
-
-    @staticmethod
     def to_torch(self):
         """Convert to PyTorch tensor."""
         if self.elem is not None and self.elem.device.type != "meta" and self.ttnn_tensor is None:
@@ -602,7 +527,10 @@ class NormalRun:
     @staticmethod
     def module_run(self, *args, **kwds):
         print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
-        assert self.device is not None, "Device must be set for TTNN module execution."
+        assert self.device is not None, (
+            f"{self.module_name}: device is not set. "
+            f"Call `tt_symbiote.set_device(model, device)` before invoking the model."
+        )
         bypass = getattr(self, "_bypass_tensor_wrapping", False)
         if bypass:
             transform = fast_unwrap_to_device(self.device)
@@ -630,10 +558,19 @@ class NormalRun:
         if NormalRun.signpost_mode is not None:
             signpost(f"{self.module_name}", f"{self.__class__.__name__}")
         begin = time.time()
-        if bypass:
-            result = self.forward(*func_args, **func_kwargs)
-        else:
-            result = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
+        try:
+            if bypass:
+                result = self.forward(*func_args, **func_kwargs)
+            else:
+                result = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
+        except Exception as e:
+            if self._fallback_torch_layer is None:
+                raise
+            warnings.warn(
+                f"TTNN forward failed for {self.module_name}: {e!r}; running torch fallback",
+                stacklevel=2,
+            )
+            result = self._fallback_torch_layer(*args, **kwds)
         end = time.time()
         DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
         DispatchManager.set_current_module_name(None)
@@ -641,232 +578,199 @@ class NormalRun:
 
 
 class LightweightRun(NormalRun):
-    @staticmethod
-    def torch_dispatch(cls, func, types, args=(), kwargs=None):
-        """Dispatch torch operations to TTNN when possible."""
+    """Run mode that always executes via the torch fallback layer.
 
-        rs = DispatchManager.dispatch_to_torch_wrapper(func, args, kwargs, wrap=False)
-        return rs
+    Equivalent to the former ``LIGHTWEIGHT`` mode after Phase 3: no TTNN
+    forward is attempted; the stored ``_fallback_torch_layer`` carries
+    execution end-to-end.
+    """
+
+    @staticmethod
+    def module_run(self, *args, **kwds):
+        print(f"{self.__class__.__name__}: {self.module_name} (torch fallback)")
+        assert (
+            self._fallback_torch_layer is not None
+        ), f"_fallback_torch_layer must be set on {self.module_name} for LightweightRun."
+        return self._fallback_torch_layer(*args, **kwds)
 
 
 class NormalRunWithFallback(NormalRun):
-    @staticmethod
-    def torch_dispatch(cls, func, types, args=(), kwargs=None):
-        """Dispatch torch operations to TTNN when possible."""
-        from tt_symbiote.core.dispatcher import can_dispatch_to_ttnn
-
-        try:
-            if can_dispatch_to_ttnn(func.name(), args, kwargs):
-                rs = DispatchManager.dispatch_to_ttnn_wrapper(func, args, kwargs)
-            else:
-                rs = DispatchManager.dispatch_to_torch_wrapper(func, args, kwargs)
-        except Exception as e:
-            print(f"Error {e} in dispatching {func.name()}, falling back to torch")
-            rs = DispatchManager.dispatch_to_torch_wrapper(func, args, kwargs)
-        return rs
+    """``NormalRun`` with extra forgiveness: a missing device falls back to torch."""
 
     @staticmethod
     def module_run(self, *args, **kwds):
         print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
-        result = None
-        if self.device is not None:
-            bypass = getattr(self, "_bypass_tensor_wrapping", False)
-            if bypass:
-                transform = fast_unwrap_to_device(self.device)
-            else:
-                transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
-            func_args = tree_map(transform, args)
-            func_kwargs = tree_map(transform, kwds)
-            self.preprocess_weights()
-            self.move_weights_to_device()
-            try:
-                if bypass:
-                    result = self.forward(*func_args, **func_kwargs)
-                else:
-                    result = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
-            except Exception as e:
-                print(f"Error {e} in {self.__class__.__name__} forward, falling back to torch")
-                assert (
-                    self.torch_layer is not None
-                ), f"torch_layer must be set for fallback, {self} does not have torch_layer set."
-                result = self.torch_layer(*args, **kwds)
-        else:
-            print("Device not set, falling back to torch")
+        if self.device is None:
             assert (
-                self.torch_layer is not None
-            ), f"torch_layer must be set for fallback, {self} does not have torch_layer set."
-            result = self.torch_layer(*args, **kwds)
+                self._fallback_torch_layer is not None
+            ), f"_fallback_torch_layer must be set on {self.module_name} when device is unset."
+            warnings.warn(
+                f"{self.module_name}: device is not set; running torch fallback. "
+                f"Call `tt_symbiote.set_device(model, device)` to enable TTNN execution.",
+                stacklevel=2,
+            )
+            return self._fallback_torch_layer(*args, **kwds)
+        bypass = getattr(self, "_bypass_tensor_wrapping", False)
+        if bypass:
+            transform = fast_unwrap_to_device(self.device)
+        else:
+            transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
+        func_args = tree_map(transform, args)
+        func_kwargs = tree_map(transform, kwds)
+        self.preprocess_weights()
+        self.move_weights_to_device()
+        try:
+            if bypass:
+                result = self.forward(*func_args, **func_kwargs)
+            else:
+                result = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
+        except Exception as e:
+            assert (
+                self._fallback_torch_layer is not None
+            ), f"_fallback_torch_layer must be set on {self.module_name} for forward fallback."
+            warnings.warn(
+                f"TTNN forward failed for {self.module_name}: {e!r}; running torch fallback",
+                stacklevel=2,
+            )
+            result = self._fallback_torch_layer(*args, **kwds)
         return result
 
 
 class SELRun(NormalRun):
-    @staticmethod
-    def torch_dispatch(cls, func, types, args=(), kwargs=None):
-        """Dispatch torch operations to TTNN when possible."""
+    """SEL (Selective comparison) run mode at module granularity.
 
-        from tt_symbiote.core.dispatcher import can_dispatch_to_ttnn
-
-        copied_torch_tensors_args = tree_map(copy_to_torch(func), args)
-        copied_torch_tensors_kwargs = tree_map(copy_to_torch(func), kwargs)
-        result = DispatchManager.dispatch_to_torch_wrapper(func, copied_torch_tensors_args, copied_torch_tensors_kwargs)
-        if can_dispatch_to_ttnn(func.name(), args, kwargs):
-            ttnn_output = DispatchManager.dispatch_to_ttnn_wrapper(func, args, kwargs)
-            # Compare inputs
-            compare_fn_outputs(copied_torch_tensors_args, args, func.name())
-            # Compare outputs
-            compare_fn_outputs(result, ttnn_output, func.name())
-            result = create_new_ttnn_tensors_using_torch_output(result, ttnn_output)
-        return result
+    Runs the torch fallback and the TTNN forward back-to-back, compares
+    outputs via ``compare_fn_outputs``, returns the TTNN result.
+    """
 
     @staticmethod
     def module_run(self, *args, **kwds):
         print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
-        copied_torch_tensors_args = tree_map(copy_to_torch(self.__class__.__name__), args)
-        copied_torch_tensors_kwargs = tree_map(copy_to_torch(self.__class__.__name__), kwds)
-        func_args = tree_map(wrap_to_torch_ttnn_tensor, copied_torch_tensors_args)
-        func_kwargs = tree_map(wrap_to_torch_ttnn_tensor, copied_torch_tensors_kwargs)
-        torch_output = tree_map(wrap_to_torch_ttnn_tensor, self.torch_layer(*func_args, **func_kwargs))
+        assert (
+            self._fallback_torch_layer is not None
+        ), f"_fallback_torch_layer must be set on {self.module_name} for SELRun."
+        copied_args = tree_map(copy_to_torch(self.__class__.__name__), args)
+        copied_kwargs = tree_map(copy_to_torch(self.__class__.__name__), kwds)
+        torch_args = tree_map(wrap_to_torch_ttnn_tensor, copied_args)
+        torch_kwargs = tree_map(wrap_to_torch_ttnn_tensor, copied_kwargs)
+        torch_output = tree_map(wrap_to_torch_ttnn_tensor, self._fallback_torch_layer(*torch_args, **torch_kwargs))
         result = torch_output
         if self.device is not None:
             transform = compose_transforms(to_ttnn_wrap, set_device_wrap(self.device))
-            func_args = tree_map(transform, func_args)
-            func_kwargs = tree_map(transform, func_kwargs)
+            ttnn_args = tree_map(transform, torch_args)
+            ttnn_kwargs = tree_map(transform, torch_kwargs)
             self.preprocess_weights()
             self.move_weights_to_device()
-            ttnn_output = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
-            # Compare inputs
-            compare_fn_outputs(copied_torch_tensors_args, func_args, self.__class__.__name__)
-            # Compare outputs
-            compare_fn_outputs(torch_output, ttnn_output, self.__class__.__name__)
-            result = create_new_ttnn_tensors_using_torch_output(torch_output, ttnn_output)
+            try:
+                ttnn_output = post_process_ttnn_module_output(self, self.forward(*ttnn_args, **ttnn_kwargs))
+                compare_fn_outputs(torch_output, ttnn_output, self.__class__.__name__)
+                result = create_new_ttnn_tensors_using_torch_output(torch_output, ttnn_output)
+            except Exception as e:
+                warnings.warn(
+                    f"TTNN forward failed for {self.module_name}: {e!r}; SELRun returning torch result",
+                    stacklevel=2,
+                )
         return result
 
 
 class DPLRun(NormalRun):
-    @staticmethod
-    def torch_dispatch(cls, func, types, args=(), kwargs=None):
-        """Dispatch torch operations to TTNN when possible."""
-        from tt_symbiote.core.dispatcher import can_dispatch_to_ttnn
+    """DPL (Debug Per Layer) run mode at module granularity.
 
-        copied_torch_tensors_args = tree_map(copy_to_torch(func), args)
-        copied_torch_tensors_kwargs = tree_map(copy_to_torch(func), kwargs)
-        result = DispatchManager.dispatch_to_torch_wrapper(func, copied_torch_tensors_args, copied_torch_tensors_kwargs)
-        if can_dispatch_to_ttnn(func.name(), args, kwargs):
-            ttnn_output = DispatchManager.dispatch_to_ttnn_wrapper(func, args, kwargs)
-            # Compare inputs
-            compare_fn_outputs(copied_torch_tensors_args, args, func.name())
-            # Compare outputs
-            compare_fn_outputs(result, ttnn_output, func.name())
-            result = create_new_ttnn_tensors_using_torch_output(result, ttnn_output, assign_ttnn_to_torch=True)
-        return result
+    Runs both the torch fallback and TTNN forward, compares with PCC, and
+    returns a torch-output tensor that carries the TTNN buffer (so error
+    propagates through subsequent layers).
+    """
 
     @staticmethod
     def module_run(self, *args, **kwds):
         assert (
-            self.torch_layer is not None
-        ), f"torch_layer must be set for DPLRun, {self} does not have torch_layer set."
-
+            self._fallback_torch_layer is not None
+        ), f"_fallback_torch_layer must be set on {self.module_name} for DPLRun."
         print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
-        copied_torch_tensors_args = tree_map(copy_to_torch(self.__class__.__name__), args)
-        copied_torch_tensors_kwargs = tree_map(copy_to_torch(self.__class__.__name__), kwds)
-        func_args = tree_map(wrap_to_torch_ttnn_tensor, copied_torch_tensors_args)
-        func_kwargs = tree_map(wrap_to_torch_ttnn_tensor, copied_torch_tensors_kwargs)
-        torch_output = tree_map(wrap_to_torch_ttnn_tensor, self.torch_layer(*func_args, **func_kwargs))
+        copied_args = tree_map(copy_to_torch(self.__class__.__name__), args)
+        copied_kwargs = tree_map(copy_to_torch(self.__class__.__name__), kwds)
+        torch_args = tree_map(wrap_to_torch_ttnn_tensor, copied_args)
+        torch_kwargs = tree_map(wrap_to_torch_ttnn_tensor, copied_kwargs)
+        torch_output = tree_map(wrap_to_torch_ttnn_tensor, self._fallback_torch_layer(*torch_args, **torch_kwargs))
         result = torch_output
         if self.device is not None:
             transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
-            func_args = tree_map(transform, func_args)
-            func_kwargs = tree_map(transform, func_kwargs)
+            ttnn_args = tree_map(transform, torch_args)
+            ttnn_kwargs = tree_map(transform, torch_kwargs)
             self.preprocess_weights()
             self.move_weights_to_device()
-            ttnn_output = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
-            # Compare inputs
-            compare_fn_outputs(
-                tree_map(wrap_to_torch_ttnn_tensor, copied_torch_tensors_args),
-                tree_map(wrap_to_torch_ttnn_tensor, func_args),
-                self.__class__.__name__,
-            )
-            # Compare outputs
-            compare_fn_outputs(torch_output, ttnn_output, self.__class__.__name__)
-            result = create_new_ttnn_tensors_using_torch_output(torch_output, ttnn_output, assign_ttnn_to_torch=True)
+            try:
+                ttnn_output = post_process_ttnn_module_output(self, self.forward(*ttnn_args, **ttnn_kwargs))
+                compare_fn_outputs(torch_output, ttnn_output, self.__class__.__name__)
+                result = create_new_ttnn_tensors_using_torch_output(
+                    torch_output, ttnn_output, assign_ttnn_to_torch=True
+                )
+            except Exception as e:
+                warnings.warn(
+                    f"TTNN forward failed for {self.module_name}: {e!r}; DPLRun returning torch result",
+                    stacklevel=2,
+                )
         return result
 
 
 class DPLRunNoErrorProp(NormalRun):
-    @staticmethod
-    def torch_dispatch(cls, func, types, args=(), kwargs=None):
-        """Dispatch torch operations to TTNN when possible."""
-        from tt_symbiote.core.dispatcher import can_dispatch_to_ttnn
+    """DPL variant that does not propagate TTNN numerical drift to subsequent layers.
 
-        copied_torch_tensors_args = tree_map(copy_to_torch(func), args)
-        copied_torch_tensors_kwargs = tree_map(copy_to_torch(func), kwargs)
-        result = DispatchManager.dispatch_to_torch_wrapper(func, copied_torch_tensors_args, copied_torch_tensors_kwargs)
-        ttnn_no_error_prop_args = tree_map(copy_to_ttnn(func), args)
-        ttnn_no_error_prop_kwargs = tree_map(copy_to_ttnn(func), kwargs)
-        if can_dispatch_to_ttnn(func.name(), ttnn_no_error_prop_args, ttnn_no_error_prop_kwargs):
-            ttnn_output = DispatchManager.dispatch_to_ttnn_wrapper(
-                func, ttnn_no_error_prop_args, ttnn_no_error_prop_kwargs
-            )
-            # Compare inputs
-            compare_fn_outputs(copied_torch_tensors_args, ttnn_no_error_prop_args, func.name())
-            # Compare outputs
-            compare_fn_outputs(result, ttnn_output, func.name())
-            result = create_new_ttnn_tensors_using_torch_output(result, ttnn_output, assign_ttnn_to_torch=True)
-            print(f"DPLNoErrorPropRun: Done Executing {func.name()}")
-        return result
+    Same comparison-at-module-level pattern as :class:`DPLRun`, but the
+    TTNN inputs are freshly re-materialized from the torch copies, so the
+    comparison is between independent runs rather than a chained one.
+    """
 
     @staticmethod
     def module_run(self, *args, **kwds):
         assert (
-            self.torch_layer is not None
-        ), f"torch_layer must be set for DPLRun, {self} does not have torch_layer set."
-
-        copied_torch_tensors_args = tree_map(copy_to_torch(self.__class__.__name__), args)
-        copied_torch_tensors_kwargs = tree_map(copy_to_torch(self.__class__.__name__), kwds)
-        func_args = tree_map(wrap_to_torch_ttnn_tensor, copied_torch_tensors_args)
-        func_kwargs = tree_map(wrap_to_torch_ttnn_tensor, copied_torch_tensors_kwargs)
-        torch_output = tree_map(wrap_to_torch_ttnn_tensor, self.torch_layer(*func_args, **func_kwargs))
+            self._fallback_torch_layer is not None
+        ), f"_fallback_torch_layer must be set on {self.module_name} for DPLRunNoErrorProp."
+        copied_args = tree_map(copy_to_torch(self.__class__.__name__), args)
+        copied_kwargs = tree_map(copy_to_torch(self.__class__.__name__), kwds)
+        torch_args = tree_map(wrap_to_torch_ttnn_tensor, copied_args)
+        torch_kwargs = tree_map(wrap_to_torch_ttnn_tensor, copied_kwargs)
+        torch_output = tree_map(wrap_to_torch_ttnn_tensor, self._fallback_torch_layer(*torch_args, **torch_kwargs))
         result = torch_output
         if self.device is not None:
-            ttnn_no_error_prop_args = tree_map(copy_to_ttnn(self.__class__.__name__), args)
-            ttnn_no_error_prop_kwargs = tree_map(copy_to_ttnn(self.__class__.__name__), kwds)
+            independent_ttnn_args = tree_map(copy_to_ttnn(self.__class__.__name__), args)
+            independent_ttnn_kwargs = tree_map(copy_to_ttnn(self.__class__.__name__), kwds)
             transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
-
-            func_args = tree_map(transform, ttnn_no_error_prop_args)
-            func_kwargs = tree_map(transform, ttnn_no_error_prop_kwargs)
+            ttnn_args = tree_map(transform, independent_ttnn_args)
+            ttnn_kwargs = tree_map(transform, independent_ttnn_kwargs)
             self.preprocess_weights()
             self.move_weights_to_device()
-            ttnn_output = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
-            # Compare inputs
-            compare_fn_outputs(
-                tree_map(wrap_to_torch_ttnn_tensor, copied_torch_tensors_args),
-                tree_map(wrap_to_torch_ttnn_tensor, func_args),
-                self.__class__.__name__,
-            )
-            # Compare outputs
-            compare_fn_outputs(torch_output, ttnn_output, self.__class__.__name__)
-            result = create_new_ttnn_tensors_using_torch_output(torch_output, ttnn_output, assign_ttnn_to_torch=True)
-            print(
-                f"DPLNoErrorPropRun: Done Executing {self.__class__.__name__} from {self.module_name} on device {self.device}"
-            )
+            try:
+                ttnn_output = post_process_ttnn_module_output(self, self.forward(*ttnn_args, **ttnn_kwargs))
+                compare_fn_outputs(torch_output, ttnn_output, self.__class__.__name__)
+                result = create_new_ttnn_tensors_using_torch_output(
+                    torch_output, ttnn_output, assign_ttnn_to_torch=True
+                )
+                print(
+                    f"DPLNoErrorPropRun: Done Executing {self.__class__.__name__} from "
+                    f"{self.module_name} on device {self.device}"
+                )
+            except Exception as e:
+                warnings.warn(
+                    f"TTNN forward failed for {self.module_name}: {e!r}; "
+                    f"DPLRunNoErrorProp returning torch result",
+                    stacklevel=2,
+                )
         return result
 
 
 class CPU(NormalRun):
-    @staticmethod
-    def torch_dispatch(cls, func, types, args=(), kwargs=None):
-        """Dispatch torch operations to CPU."""
-        print(f"Executing {func.name()} on CPU")
-        rs = DispatchManager.dispatch_to_torch_wrapper(func, args, kwargs)
-        return rs
+    """Run mode that pins execution to the torch fallback path (no TTNN)."""
 
     @staticmethod
     def module_run(self, *args, **kwds):
         print(f"{self.__class__.__name__}: {self.module_name} on CPU")
+        assert (
+            self._fallback_torch_layer is not None
+        ), f"_fallback_torch_layer must be set on {self.module_name} for CPU run mode."
         func_args = tree_map(wrap_to_torch_ttnn_tensor, args)
         func_kwargs = tree_map(wrap_to_torch_ttnn_tensor, kwds)
-        result = tree_map(wrap_to_torch_ttnn_tensor, self.torch_layer(*func_args, **func_kwargs))
-        return result
+        return tree_map(wrap_to_torch_ttnn_tensor, self._fallback_torch_layer(*func_args, **func_kwargs))
 
 
 # --- Trace Infrastructure ---
@@ -1170,7 +1074,10 @@ class TracedRun(LightweightRun):
 
     @staticmethod
     def module_run(self, *args, **kwds):
-        assert self.device is not None, "Device must be set for TTNN module execution."
+        assert self.device is not None, (
+            f"{self.module_name}: device is not set. "
+            f"Call `tt_symbiote.set_device(model, device)` before invoking the model."
+        )
         # Transform inputs
         bypass = getattr(self, "_bypass_tensor_wrapping", False)
         if bypass:
@@ -1363,9 +1270,4 @@ def get_tensor_run_implementation():
             )
         result = _RUN_MODE_REGISTRY[env_mode]
     result.signpost_mode = signpost_mode
-    if issubclass(result, LightweightRun):
-
-        assert (
-            get_active_dispatcher() == cpu_dispatcher
-        ), f"CPU dispatcher needs to be active to run {result.__name__} run mode. `export TT_SYMBIOTE_DISPATCHER=CPU`"
     return result

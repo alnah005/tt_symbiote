@@ -1,4 +1,4 @@
-# Phase 2 smoke check — what was actually verified
+# Phase 2/3 smoke check — what was actually verified
 
 The Phase 1+2 plan requested a `pip install -e . && pytest tests/ --collect-only`
 smoke check at the end of Phase 2. The achievable smoke check on the migration
@@ -7,31 +7,17 @@ so subsequent phases know what is and isn't proven.
 
 ## Achievable on the migration host
 
-- **AST parse:** 100% (45 source files, 47 test files, 92 total) parse with the
-  CPython 3.10 AST module. No syntax errors.
+- **AST parse:** 100% of files parse with the CPython 3.10 AST module. No
+  syntax errors.
 - **Editable install:** `pip install -e . --no-build-isolation --no-deps`
   succeeds and registers `tt_symbiote` as an editable package.
-- **Stubbed import smoke:** 31 of 33 non-`__init__` modules under
-  `src/tt_symbiote/` import cleanly when `ttnn` and `tracy` are stubbed via
-  `scripts/_smoke_conftest.py`.
+- **Stubbed import smoke:** every non-`__init__` module under
+  `src/tt_symbiote/` imports cleanly when `ttnn` and `tracy` are stubbed via
+  `scripts/_smoke_conftest.py`. After **Phase 3** removed the dispatcher
+  subsystem, the two `NameError`s that Phase 2 documented are gone.
 - **Top-level `import tt_symbiote`** succeeds.
 
-## Known gaps (not blocking Phase 2)
-
-### Two dispatcher modules that don't import
-
-```
-tt_symbiote/core/dispatchers/dispatcher_config.py:
-    NameError: name 'default_dispatcher' is not defined
-tt_symbiote/core/dispatchers/tensor_operations_dispatcher.py:
-    NameError: name 'handle_view' is not defined
-```
-
-Both are caused by the codemod intentionally dropping
-`from models.experimental.tt_symbiote.core.dispatchers.*` imports (per the plan,
-§2.3 rule 1). The entire `core/dispatcher.py`, `core/torch_dispatcher.py`, and
-`core/dispatchers/` subtree is **slated for deletion in Phase 3** — these
-NameErrors disappear when the dispatcher subsystem is removed.
+## Known gaps (not blocking)
 
 ### pytest collect-only requires a fuller runtime
 
@@ -83,9 +69,9 @@ for p in sorted(Path('src/tt_symbiote').rglob('*.py')):
     mod = 'tt_symbiote.' + str(p.relative_to('src/tt_symbiote')).replace('/','.').removesuffix('.py')
     try: importlib.import_module(mod)
     except Exception as e: errs.append((mod, type(e).__name__, str(e)[:120]))
-print(f'{len(errs)} import errors (expected: 2 dispatcher NameErrors)')
+print(f'{len(errs)} import errors (expected: 0 after Phase 3)')
 for m, t, e in errs: print(f'  [{t}] {m}: {e}')
 "
 ```
 
-Expected output: `2 import errors (expected: 2 dispatcher NameErrors)`.
+Expected output: `0 import errors (expected: 0 after Phase 3)`.

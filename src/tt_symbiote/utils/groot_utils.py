@@ -614,31 +614,6 @@ class DPLRunExtended(NormalRun):
         return NormalRun.to_torch(self)
 
     @staticmethod
-    def torch_dispatch(cls, func, types, args=(), kwargs=None):
-        from tt_symbiote.core.dispatcher import can_dispatch_to_ttnn
-        from tt_symbiote.core.run_config import (
-            DispatchManager,
-            copy_to_torch,
-            create_new_ttnn_tensors_using_torch_output,
-        )
-
-        in_torch_ref = getattr(_DPL_TORCH_REF_RUNNING, "value", False)
-        if in_torch_ref:
-            return DispatchManager.dispatch_to_torch_wrapper(func, args, kwargs)
-        copied_torch_args = tree_map(copy_to_torch(func), args)
-        copied_torch_kwargs = tree_map(copy_to_torch(func), kwargs)
-        result = DispatchManager.dispatch_to_torch_wrapper(func, copied_torch_args, copied_torch_kwargs)
-        if can_dispatch_to_ttnn(func.name(), args, kwargs):
-            device = _get_device_from_dpl_args(args, kwargs)
-            ref_ttnn_args, ref_ttnn_kwargs = _ref_args_to_ttnn_on_device(copied_torch_args, copied_torch_kwargs, device)
-            if ref_ttnn_args is not None:
-                ttnn_output_same_input = DispatchManager.dispatch_to_ttnn_wrapper(func, ref_ttnn_args, ref_ttnn_kwargs)
-                compare_fn_outputs(result, ttnn_output_same_input, func.name())
-            ttnn_output = DispatchManager.dispatch_to_ttnn_wrapper(func, args, kwargs)
-            result = create_new_ttnn_tensors_using_torch_output(result, ttnn_output, assign_ttnn_to_torch=True)
-        return tree_map(_populate_elem_on_ttnn_result, result)
-
-    @staticmethod
     def module_run(self, *args, **kwds):
         from tt_symbiote.core import run_config
 
@@ -898,85 +873,6 @@ def _unwrap_to_torch_safe(func):
         return _orig(e)
 
     return _safe
-
-
-def _dispatch_to_torch_wrapper_gr00t(func, torch_args, torch_kwargs):
-    import time
-
-    from tt_symbiote.core.tensor import TorchTTNNTensor
-    from tt_symbiote.core.run_config import DispatchManager
-    from tt_symbiote.core.torch_dispatcher import can_dispatch_to_torch, dispatch_to_torch
-
-    im2col_logical_shape = None
-    if func.name().startswith("aten::im2col") and len(torch_args) >= 5:
-        if isinstance(torch_args[0], TorchTTNNTensor) and torch_args[0].ttnn_tensor is not None:
-            im2col_logical_shape = tuple(int(i) for i in torch_args[0].ttnn_tensor.shape)
-    with no_dispatch():
-        func_args = list(tree_map(_unwrap_to_torch_safe(func), torch_args))
-        func_kwargs = dict(tree_map(_unwrap_to_torch_safe(func), torch_kwargs))
-        if func.name().startswith("aten::im2col") and len(torch_args) >= 5:
-            if isinstance(torch_args[0], TorchTTNNTensor) and isinstance(func_args[0], torch.Tensor):
-                t, shp = func_args[0], (
-                    im2col_logical_shape
-                    if (im2col_logical_shape and len(im2col_logical_shape) == 4)
-                    else torch_args[0].shape
-                )
-                if len(shp) == 4:
-                    N, C = int(shp[0]), int(shp[1])
-                    expected_in_numel = N * C * int(shp[2]) * int(shp[3])
-                    if t.numel() == 2965872 and N == 1 and C == 1152:
-                        func_args[0] = t.flatten()[:903168].clone().reshape(1, 1152, 28, 28)
-                    elif t.numel() > expected_in_numel:
-                        func_args[0] = t.flatten()[:expected_in_numel].clone().reshape(N, C, int(shp[2]), int(shp[3]))
-                    elif t.numel() < expected_in_numel:
-                        spatial = t.numel() // (N * C)
-                        if spatial > 0:
-                            H = isqrt(spatial)
-                            W = spatial // H
-                            func_args[0] = (
-                                t.flatten().clone().reshape(N, C, H, W)
-                                if H * W == spatial and H > 0 and W > 0
-                                else t.contiguous().clone()
-                            )
-                        else:
-                            func_args[0] = t.contiguous().clone()
-                    else:
-                        func_args[0] = (
-                            t[: int(shp[0]), : int(shp[1]), : int(shp[2]), : int(shp[3])].contiguous().clone()
-                        )
-        if func.name() == "aten::view" and len(func_args) >= 2:
-            t, shape = func_args[0], func_args[1]
-            if isinstance(t, torch.Tensor) and isinstance(shape, (list, tuple)) and len(shape) > 0:
-                target_numel = reduce(operator.mul, shape, 1)
-                if t.numel() > target_numel and target_numel > 0:
-                    func_args[0] = t.flatten()[:target_numel].clone()
-        target_dtype = _dtype_from_torch_args(func_args, func_kwargs)
-        if target_dtype is not None:
-
-            def _cast_to_dtype(e):
-                return (
-                    e.to(target_dtype)
-                    if isinstance(e, torch.Tensor) and e.is_floating_point() and e.dtype != target_dtype
-                    else e
-                )
-
-            func_args = tree_map(_cast_to_dtype, func_args)
-            func_kwargs = {k: _cast_to_dtype(v) for k, v in func_kwargs.items()}
-        begin = time.time()
-        func_res = (
-            dispatch_to_torch(func.name(), tuple(func_args), func_kwargs)
-            if can_dispatch_to_torch(func.name(), tuple(func_args), func_kwargs)
-            else func(*tuple(func_args), **func_kwargs)
-        )
-        end = time.time()
-        DispatchManager.record_timing(
-            "Torch",
-            DispatchManager.current_module_name + f".{func.name()}" if DispatchManager.current_module_name else "",
-            func.name(),
-            {},
-            end - begin,
-        )
-        return tree_map(wrap_from_torch, func_res)
 
 
 def _get_device_from_dpl_args(args, kwargs):
@@ -1500,7 +1396,11 @@ def patch_run_config_for_gr00t():
     run_config.NormalRun.module_run = _normal_module_run_patched
 
     run_config.create_new_ttnn_tensors_using_torch_output = _create_new_ttnn_tensors_using_torch_output_relaxed
-    DispatchManager.dispatch_to_torch_wrapper = staticmethod(_dispatch_to_torch_wrapper_gr00t)
+    # NOTE: Phase 3 removed DispatchManager.dispatch_to_torch_wrapper and the
+    # per-op torch dispatcher. The corresponding GR00T monkey-patch
+    # (_dispatch_to_torch_wrapper_gr00t) was deleted with them. The im2col
+    # / aten::view shape fixups it used to do must be re-implemented inside
+    # each affected TTNNModule.forward when GR00T is re-ported in Phase 7.
     run_config.copy_to_torch = _copy_to_torch_extended
     run_config.get_default_distributed_tensor_config = get_default_distributed_tensor_config
 
