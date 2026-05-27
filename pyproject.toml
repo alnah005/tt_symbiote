@@ -18,16 +18,20 @@ requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 keywords = ["tenstorrent", "ttnn", "transformers", "huggingface", "tt-metal", "machine learning"]
 dynamic = ["version"]
-# NOTE on ttnn (OQ-1 in PROJECT_PROPOSAL.md §11): ttnn is NOT declared here for v0.
-# The library imports ttnn at runtime; users must supply it via an editable install
-# of tt-metal or a locally-built wheel. Revisit before any external release.
+# NOTE on runtime-only dependencies (OQ-1 in PROJECT_PROPOSAL.md §11):
+# Several runtime dependencies are intentionally NOT declared in `dependencies`
+# below because they are not pip-installable on the targeted release channel:
+#   - `ttnn`            : built from tt-metal source; install separately.
+#   - `tracy`           : C extension built by tt-metal; install via tt-metal.
+#   - `transformers==5.9.0` : pinned in spirit but v5.x is git-only as of
+#                              this writing. Install with
+#                              `pip install git+https://github.com/huggingface/transformers.git`
+# Revisit before any external release once these have PyPI wheels.
 dependencies = [
-  "transformers==5.9.0",
   "torch",
   "loguru>=0.6.0",
   "numpy>=1.24.4,<2",
   "tqdm",
-  "tracy-profiler",
 ]
 
 [project.optional-dependencies]
