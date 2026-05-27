@@ -5,9 +5,11 @@ mirrors [`transformers`](https://github.com/huggingface/transformers) and whose
 folder layout mirrors `transformers/src/transformers/`. Provides TTNN-accelerated
 implementations of HF model architectures.
 
-> **Status: Phase 1/2 bootstrap.** API target is below; nothing runs end-to-end yet.
-> See [`PROJECT_PROPOSAL.md`](PROJECT_PROPOSAL.md) for the full design, phased delivery
-> plan, and open questions.
+> **Status: Phase 4 complete (dispatcher removed, public API in place).** The
+> 43 `Auto*` classes, `set_device`, `register_modules`, and `register_recipe`
+> all import and behave per spec. Models are re-ported starting in Phase 5.
+> See [`PROJECT_PROPOSAL.md`](PROJECT_PROPOSAL.md) for the full design,
+> phased delivery plan, and open questions.
 
 ## Target user-facing API
 

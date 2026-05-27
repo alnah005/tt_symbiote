@@ -1,10 +1,16 @@
 import pytest
-from tt_symbiote.integrations.ttnn_moe import Glm4MoeConfig
 
 
 @pytest.fixture
 def default_glm_config():
-    """Default GLM configuration for testing."""
+    """Default GLM configuration for testing.
+
+    The import is deferred so this conftest itself does not require ``ttnn``
+    at collection time — that lets ``pytest tests/auto/`` run without the
+    TTNN runtime installed (see ``tests/auto/conftest.py``).
+    """
+    from tt_symbiote.integrations.ttnn_moe import Glm4MoeConfig
+
     return Glm4MoeConfig(
         hidden_size=2048,
         intermediate_size=10240,

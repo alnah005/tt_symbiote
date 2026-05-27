@@ -2,21 +2,51 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device management utilities for TTNN modules."""
+"""Device management utilities for TTNN modules.
+
+The single public entry point is :func:`set_device`. It is the mandatory
+final step of the ``tt_symbiote`` loading flow (per ``PROJECT_PROPOSAL.md``
+§4.4) and does five things in order:
+
+1. Walks the model graph.
+2. For every ``TTNNModule``, reads ``forward.__tt_allowed_archs__``. If the
+   active device architecture (resolved from ``MESH_DEVICE``) is not in the
+   allowed set, the module is swapped in place with its
+   ``_fallback_torch_layer`` and a warning is logged.
+3. Calls ``to_device(device)`` and (for multi-device meshes)
+   ``set_device_state(...)`` on every remaining TTNN module.
+4. Calls ``preprocess_weights()`` then ``move_weights_to_device()`` on every
+   visited TTNN module (subsumes the explicit per-test loop that callers
+   previously wrote by hand).
+5. Sets ``_tt_symbiote_device_set = True`` on the root object and on every
+   visited TTNN module.
+
+Hard-error enforcement: ``run_config.module_run`` asserts
+``self._device is not None`` with a message that names ``set_device``, so a
+forward called before ``set_device`` fails with a clear diagnostic.
+"""
+
 import functools
+import os
 import time
+import warnings
+from typing import Any, Optional
 
 from torch import nn
 
+from tt_symbiote.core.module import MeshShapeToDeviceArch, TTNNModule
 from tt_symbiote.core.run_config import DispatchManager, DistributedConfig
 from tt_symbiote.utils.graph_visualization import draw_model_graph
 
 
+__all__ = ["DeviceInit", "set_device"]
+
+
 class DeviceInit:
-    DEVICE_TO_STATE_DICT = {}
+    DEVICE_TO_STATE_DICT: dict = {}
 
     @classmethod
-    def init_state(cls, device):
+    def init_state(cls, device) -> Optional[DistributedConfig]:
         """Initialize device state if not already initialized."""
         if device not in cls.DEVICE_TO_STATE_DICT:
             res = cls.init_state_impl(device)
@@ -28,18 +58,19 @@ class DeviceInit:
     @classmethod
     def init_state_impl(cls, device) -> DistributedConfig:
         """Implementation-specific device state initialization."""
-        # Placeholder for actual device state initialization logic
         return DistributedConfig(device)
 
 
-def _initialize_module_on_device(module: "TTNNModule", device, device_init=DeviceInit):
-    """Initialize a TTNN module on the specified device."""
+def _initialize_module_on_device(module: "TTNNModule", device, device_init=DeviceInit) -> None:
+    """Bind a TTNN module to ``device`` and (for meshes) set its distributed config."""
     module.to_device(device)
     if device.get_num_devices() > 1:
         module.set_device_state(device_init.init_state(device))
 
 
 def timed_call(original_call, module_name, module_class):
+    """Wrap ``forward``/``call`` with the legacy timing instrumentation."""
+
     @functools.wraps(original_call)
     def new_call(*args, **kwargs):
         begin = time.time()
@@ -53,60 +84,188 @@ def timed_call(original_call, module_name, module_class):
     return new_call
 
 
-def set_device(obj, device, device_init=DeviceInit, **kwargs):
-    """Recursively set device for all TTNN modules in a model."""
-    from tt_symbiote.core.module import TTNNModule
+def _active_device_arch() -> Any:
+    """Resolve the active device architecture from ``MESH_DEVICE``.
+
+    Returns the matching :class:`DeviceArch` enum value or ``None`` if the
+    environment variable is unset or unrecognized. ``set_device`` uses this
+    to decide whether each ``@run_on_devices``-stamped module is supported.
+    """
+    mesh = os.environ.get("MESH_DEVICE")
+    if mesh is None:
+        return None
+    return MeshShapeToDeviceArch.get(mesh)
+
+
+def _module_allowed_archs(module: TTNNModule):
+    """Return ``__tt_allowed_archs__`` stamped on the module's ``forward``, or ``None``."""
+    forward = getattr(type(module), "forward", None)
+    if forward is None:
+        return None
+    return getattr(forward, "__tt_allowed_archs__", None)
+
+
+def _is_arch_supported(module: TTNNModule) -> bool:
+    """``True`` if the module has no arch restriction *or* the active arch is allowed."""
+    allowed = _module_allowed_archs(module)
+    if allowed is None:
+        return True
+    active = _active_device_arch()
+    if active is None:
+        # No MESH_DEVICE set; preserve current behavior and let the
+        # call-time @run_on_devices check raise if it actually runs.
+        return True
+    return active in allowed
+
+
+def _swap_module(parent: Any, key: Any, fallback: Any) -> None:
+    """Replace the child at ``parent[key]`` (or attribute) with ``fallback``.
+
+    Used when a ``@run_on_devices`` proactive check rejects a TTNN module
+    on the current arch. The placement of ``key`` depends on the parent's
+    container type:
+
+    - ``nn.Module._modules`` slot (string name)
+    - generic ``__dict__`` attribute (string name; via ``setattr``)
+    - ``dict`` value (any hashable key)
+    - ``list`` index (int)
+
+    Tuples are handled by the caller (they require rebuilding the tuple).
+    """
+    if isinstance(parent, nn.Module) and isinstance(key, str) and key in parent._modules:
+        parent._modules[key] = fallback
+        return
+    if isinstance(parent, dict):
+        parent[key] = fallback
+        return
+    if isinstance(parent, list):
+        parent[key] = fallback
+        return
+    if isinstance(key, str):
+        try:
+            setattr(parent, key, fallback)
+            return
+        except Exception:
+            pass
+
+
+def set_device(obj, device, device_init=DeviceInit, **kwargs) -> None:
+    """Bind every ``TTNNModule`` in ``obj`` to ``device``.
+
+    Per ``PROJECT_PROPOSAL.md`` §4.4 this is **mandatory** before any model
+    invocation. See the module docstring for the full contract.
+
+    Keyword arguments:
+      - ``register_forward_hook`` (default ``True``): wrap each module's
+        ``forward``/``call`` with timing instrumentation.
+      - ``dump_visualization`` (default ``True``): write ``model_graph.png``.
+    """
+    initialized_modules: list = []  # collected for the weight-prep pass
 
     # Build module name mapping before recursion
     module_names = {}
     if isinstance(obj, nn.Module):
         module_names = {module: name for name, module in obj.named_modules()}
 
-    def _set_device_recursive(current_obj, parent_is_ttnn=False):
+    def _bind(child: TTNNModule, parent: Any, key: Any) -> Optional[Any]:
+        """Decide TTNN-vs-fallback, mutate parent on swap, return the now-in-place child."""
+        if not _is_arch_supported(child):
+            fallback = child._fallback_torch_layer
+            if fallback is None:
+                warnings.warn(
+                    f"{child.module_name}: device arch unsupported and no "
+                    f"_fallback_torch_layer available; leaving TTNN module in place.",
+                    stacklevel=2,
+                )
+            else:
+                warnings.warn(
+                    f"Running {child.module_name} on CPU; "
+                    f"not supported on {_active_device_arch()}",
+                    stacklevel=2,
+                )
+                _swap_module(parent, key, fallback)
+                return fallback
+        _initialize_module_on_device(child, device, device_init)
+        child._tt_symbiote_device_set = True
+        initialized_modules.append(child)
+        return child
+
+    def _set_device_recursive(current_obj, parent_is_ttnn: bool = False) -> None:
         if isinstance(current_obj, nn.Module):
-            # Get the name for this module from the mapping
             name = module_names.get(current_obj, "")
 
-            # Register forward hook for this module
             if kwargs.get("register_forward_hook", True):
                 if hasattr(current_obj, "forward"):
                     if not hasattr(current_obj.forward, "_is_timed"):
-                        current_obj.forward = timed_call(current_obj.forward, name, current_obj.__class__.__name__)
+                        current_obj.forward = timed_call(
+                            current_obj.forward, name, current_obj.__class__.__name__
+                        )
                         current_obj.forward._is_timed = True
 
-            # nn.Module children: TTNNModule children get bypass=False (parent is nn.Module)
-            for child_name, module in current_obj._modules.items():
+            # _modules children
+            for child_name, module in list(current_obj._modules.items()):
                 if module is None:
                     continue
                 if isinstance(module, TTNNModule):
-                    _initialize_module_on_device(module, device, device_init)
+                    bound = _bind(module, current_obj, child_name)
+                    if bound is not module:
+                        # swapped to fallback; recurse into the fallback to bind any
+                        # nested TTNN modules it owns.
+                        _set_device_recursive(bound, parent_is_ttnn=False)
+                        continue
                 _set_device_recursive(module, parent_is_ttnn=isinstance(current_obj, TTNNModule))
 
+            # public attrs containing TTNN modules / dicts / lists / tuples
             for attr_name in dir(current_obj):
                 if attr_name.startswith("_"):
                     continue
                 try:
                     value = getattr(current_obj, attr_name)
-                except Exception as e:
+                except Exception:
                     continue
                 if isinstance(value, TTNNModule):
-                    _initialize_module_on_device(value, device, device_init)
+                    bound = _bind(value, current_obj, attr_name)
+                    if bound is not value:
+                        _set_device_recursive(bound, parent_is_ttnn=False)
+                        continue
                     _set_device_recursive(value, parent_is_ttnn=isinstance(current_obj, TTNNModule))
-                if isinstance(value, dict):
-                    for k, v in value.items():
+                elif isinstance(value, dict):
+                    for k, v in list(value.items()):
                         if isinstance(v, TTNNModule):
-                            _initialize_module_on_device(v, device, device_init)
+                            bound = _bind(v, value, k)
+                            if bound is not v:
+                                _set_device_recursive(bound, parent_is_ttnn=False)
+                                continue
                         _set_device_recursive(v, parent_is_ttnn=isinstance(current_obj, TTNNModule))
-                if isinstance(value, (list, tuple)):
-                    for v in value:
+                elif isinstance(value, list):
+                    for i, v in enumerate(value):
                         if isinstance(v, TTNNModule):
-                            _initialize_module_on_device(v, device, device_init)
+                            bound = _bind(v, value, i)
+                            if bound is not v:
+                                _set_device_recursive(bound, parent_is_ttnn=False)
+                                continue
                         _set_device_recursive(v, parent_is_ttnn=isinstance(current_obj, TTNNModule))
+                elif isinstance(value, tuple):
+                    # Tuples are immutable; rebuild if any element was a TTNN module
+                    # whose arch fails and is swapped.
+                    new_value = list(value)
+                    mutated = False
+                    for i, v in enumerate(new_value):
+                        if isinstance(v, TTNNModule):
+                            bound = _bind(v, new_value, i)
+                            if bound is not v:
+                                mutated = True
+                                _set_device_recursive(bound, parent_is_ttnn=False)
+                                continue
+                        _set_device_recursive(v, parent_is_ttnn=isinstance(current_obj, TTNNModule))
+                    if mutated:
+                        try:
+                            setattr(current_obj, attr_name, tuple(new_value))
+                        except Exception:
+                            pass
         elif isinstance(current_obj, TTNNModule):
-            # Set bypass based on parent type: TTNN children of TTNN modules bypass wrapping
             if not getattr(current_obj, "_bypass_tensor_wrapping", False):
                 current_obj._bypass_tensor_wrapping = parent_is_ttnn
-            _initialize_module_on_device(current_obj, device, device_init)
             if hasattr(current_obj, "call"):
                 if not hasattr(current_obj.call, "_is_timed"):
                     current_obj.call = timed_call(
@@ -118,23 +277,82 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs):
                     continue
                 try:
                     value = getattr(current_obj, attr_name)
-                except Exception as e:
+                except Exception:
                     continue
                 if isinstance(value, (nn.Module, TTNNModule)):
                     if isinstance(value, TTNNModule):
-                        _initialize_module_on_device(value, device, device_init)
+                        bound = _bind(value, current_obj, attr_name)
+                        if bound is not value:
+                            _set_device_recursive(bound, parent_is_ttnn=False)
+                            continue
                     _set_device_recursive(value, parent_is_ttnn=True)
-                if isinstance(value, dict):
-                    for k, v in value.items():
+                elif isinstance(value, dict):
+                    for k, v in list(value.items()):
                         if isinstance(v, TTNNModule):
-                            _initialize_module_on_device(v, device, device_init)
+                            bound = _bind(v, value, k)
+                            if bound is not v:
+                                _set_device_recursive(bound, parent_is_ttnn=False)
+                                continue
                         _set_device_recursive(v, parent_is_ttnn=True)
-                if isinstance(value, (list, tuple)):
-                    for v in value:
+                elif isinstance(value, list):
+                    for i, v in enumerate(value):
                         if isinstance(v, TTNNModule):
-                            _initialize_module_on_device(v, device, device_init)
+                            bound = _bind(v, value, i)
+                            if bound is not v:
+                                _set_device_recursive(bound, parent_is_ttnn=False)
+                                continue
                         _set_device_recursive(v, parent_is_ttnn=True)
+                elif isinstance(value, tuple):
+                    new_value = list(value)
+                    mutated = False
+                    for i, v in enumerate(new_value):
+                        if isinstance(v, TTNNModule):
+                            bound = _bind(v, new_value, i)
+                            if bound is not v:
+                                mutated = True
+                                _set_device_recursive(bound, parent_is_ttnn=False)
+                                continue
+                        _set_device_recursive(v, parent_is_ttnn=True)
+                    if mutated:
+                        try:
+                            setattr(current_obj, attr_name, tuple(new_value))
+                        except Exception:
+                            pass
 
+    # Root case: if the root is itself a TTNNModule, bind it directly.
+    if isinstance(obj, TTNNModule):
+        if not _is_arch_supported(obj):
+            warnings.warn(
+                f"Root {obj.module_name}: device arch unsupported. "
+                f"Cannot swap root in place; call site should pass the fallback "
+                f"layer instead.",
+                stacklevel=2,
+            )
+        else:
+            _initialize_module_on_device(obj, device, device_init)
+            obj._tt_symbiote_device_set = True
+            initialized_modules.append(obj)
     _set_device_recursive(obj)
+
+    # Phase 4 OQ-3: subsume the explicit preprocess_weights /
+    # move_weights_to_device loop that test/example code previously wrote
+    # by hand after every set_device call.
+    for module in initialized_modules:
+        try:
+            module.preprocess_weights()
+            module.move_weights_to_device()
+        except Exception as e:
+            warnings.warn(
+                f"set_device: failed to (preprocess|move) weights for "
+                f"{module.module_name}: {e!r}",
+                stacklevel=2,
+            )
+
+    # Root marker, read by code that wants to check "did the user call set_device?"
+    try:
+        setattr(obj, "_tt_symbiote_device_set", True)
+    except Exception:
+        pass
+
     if kwargs.get("dump_visualization", True):
         draw_model_graph(obj)

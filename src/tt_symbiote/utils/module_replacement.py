@@ -2,8 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Module replacement utilities for converting PyTorch modules to TTNN."""
+"""Module-replacement utilities for converting PyTorch modules to TTNN.
 
+The canonical entry point is :func:`register_modules` (Phase 4 rename of
+``register_module_replacement_dict``). The old name is retained as a thin
+``DeprecationWarning``-emitting alias for one release per
+``PROJECT_PROPOSAL.md`` §4.1.
+"""
+
+import warnings
 from typing import Dict, Optional, Set, Union
 
 from torch import nn
@@ -138,13 +145,48 @@ def register_module_replacement_dict_with_module_names(
                 setattr(model, attr_name, type(value)(ls_value))
 
 
-def register_module_replacement_dict(
-    model, old_class_to_new_class_dict, model_config=None, exclude_replacement: Optional[Set[str]] = None
+def register_modules(
+    model,
+    old_class_to_new_class_dict,
+    model_config=None,
+    exclude_replacement: Optional[Set[str]] = None,
 ) -> Dict[str, TTNNModule]:
-    """Register module replacements in the model."""
+    """Replace PyTorch sub-modules of ``model`` with their TTNN equivalents.
+
+    ``old_class_to_new_class_dict`` maps PyTorch module *classes* to TTNN
+    wrapper classes. For every PyTorch sub-module whose ``__class__`` matches
+    a key, the wrapper's ``from_torch`` classmethod is invoked and the result
+    is spliced into the model tree in place. Returns ``{module_name: TTNN
+    instance}`` for the modules that were swapped on this call.
+    """
     module_names = {module: name for name, module in model.named_modules()}
     result: Dict[str, TTNNModule] = {}
     register_module_replacement_dict_with_module_names(
         model, old_class_to_new_class_dict, model_config, module_names, exclude_replacement, result
     )
     return result
+
+
+def register_module_replacement_dict(
+    model,
+    old_class_to_new_class_dict,
+    model_config=None,
+    exclude_replacement: Optional[Set[str]] = None,
+) -> Dict[str, TTNNModule]:
+    """Deprecated alias for :func:`register_modules`.
+
+    Will be removed in the next ``tt_symbiote`` release per
+    ``PROJECT_PROPOSAL.md`` §4.1.
+    """
+    warnings.warn(
+        "register_module_replacement_dict is deprecated and will be removed "
+        "in the next tt_symbiote release; use register_modules instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return register_modules(
+        model,
+        old_class_to_new_class_dict,
+        model_config=model_config,
+        exclude_replacement=exclude_replacement,
+    )

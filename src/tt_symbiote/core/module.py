@@ -353,17 +353,21 @@ MeshShapeToDeviceArch = {
 
 
 def run_on_devices(*allowed_archs: DeviceArch):
-    """
-    Decorator to restrict module execution to specific device architectures.
+    """Decorator restricting a TTNNModule method to specific device architectures.
 
     Args:
-        *allowed_archs: DeviceArch enum values that the module can run on.
+        *allowed_archs: ``DeviceArch`` enum values that the module can run on.
 
     Raises:
-        RuntimeError: If the module's device architecture is not in the allowed list.
+        RuntimeError: At call time, if the active device's architecture is not
+            in ``allowed_archs``. This is the runtime defense-in-depth check;
+            Phase 4 also has :func:`tt_symbiote.set_device` introspect
+            ``wrapper.__tt_allowed_archs__`` and proactively swap unsupported
+            modules to their ``_fallback_torch_layer`` so the runtime check
+            should rarely fire in practice.
 
     Example:
-        @run_on_devices(DeviceArch.N300, DeviceArch.T3K_WH)
+        @run_on_devices(DeviceArch.N300, DeviceArch.T3K)
         def forward(self, input_tensor):
             return ttnn.linear(input_tensor, self.tt_weight)
     """
@@ -394,6 +398,9 @@ def run_on_devices(*allowed_archs: DeviceArch):
 
             return func(self, *args, **kwargs)
 
+        # Phase 4: stamp the allowed-arch set on the wrapped function so
+        # set_device can introspect it without invoking the wrapper.
+        wrapper.__tt_allowed_archs__ = allowed_set
         return wrapper
 
     return decorator
