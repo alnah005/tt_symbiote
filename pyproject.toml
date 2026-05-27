@@ -1,0 +1,78 @@
+[build-system]
+requires = [
+  "setuptools==70.1.0",
+  "setuptools-scm==8.1.0",
+  "wheel",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tt_symbiote"
+authors = [
+    {name = "Tenstorrent"},
+    {email = "info@tenstorrent.com"},
+]
+description = "Hugging Face of Tenstorrent: pip-installable TTNN-accelerated drop-in for transformers."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+keywords = ["tenstorrent", "ttnn", "transformers", "huggingface", "tt-metal", "machine learning"]
+dynamic = ["version"]
+# NOTE on ttnn (OQ-1 in PROJECT_PROPOSAL.md §11): ttnn is NOT declared here for v0.
+# The library imports ttnn at runtime; users must supply it via an editable install
+# of tt-metal or a locally-built wheel. Revisit before any external release.
+dependencies = [
+  "transformers==5.9.0",
+  "torch",
+  "loguru>=0.6.0",
+  "numpy>=1.24.4,<2",
+  "tqdm",
+  "tracy-profiler",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pre-commit",
+  "pytest",
+  "pytest-xdist",
+  "black==23.10.1",
+  "isort==5.13.2",
+  "autoflake==2.3.1",
+  "ruff",
+  "yamllint==1.35.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/alnah005/tt_symbiote"
+Repository = "https://github.com/alnah005/tt_symbiote"
+Issues = "https://github.com/alnah005/tt_symbiote/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools_scm]
+fallback_version = "0.0.0.dev0"
+tag_regex = '^(?:v)?(?P<version>\d+\.\d+\.\d+(?:-rc\d+)?)$'
+git_describe_command = [
+  "git", "describe", "--dirty", "--tags", "--long",
+  "--match", "v[0-9]*.[0-9]*.[0-9]*",
+  "--match", "v[0-9]*.[0-9]*.[0-9]*-rc[0-9]*",
+  "--exclude", "*-dev*",
+]
+
+[tool.black]
+line-length = 120
+include = '^(src|tests|examples|scripts)/.*\.py$'
+
+[tool.isort]
+profile = "black"
+line_length = 120
+skip_gitignore = true
+skip = ["__init__.py"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
