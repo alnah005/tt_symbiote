@@ -42,6 +42,14 @@ class _BaseAutoModelClass:
                 f"{cls.__name__} has no HF counterpart configured (set _HF_AUTO_CLASS)."
             )
 
+        # Install compat shims before HF's dynamic remote-code loader runs:
+        # Hub modeling files authored against older transformers releases
+        # frequently import symbols (e.g. ``is_torch_fx_available``) that
+        # have since been removed. See ``tt_symbiote/_hf_compat.py``.
+        from tt_symbiote._hf_compat import install_transformers_shims
+
+        install_transformers_shims()
+
         model = cls._HF_AUTO_CLASS.from_pretrained(pretrained_name_or_path, *args, **kwargs)
 
         hf_class_name = type(model).__name__

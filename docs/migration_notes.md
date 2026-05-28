@@ -360,15 +360,58 @@ exercising the bailing package eagerly. Phase 5 moves the helper to
 (public name `next_power_of_2`) and keeps `_next_power_of_2` as a
 back-compat alias in the modeling file.
 
-### Hardware acceptance — deferred
+### Hardware acceptance — green on T3K
 
-The Phase 5 plan tags `v0.0.0` when the on-hardware smoke test passes.
-At the time of the Phase 5 commit, the local `tt-metal` build was out of
-sync with its Python sources (the cached `_ttnncpp.so` predated a new
-`pool.py` that references `ttnn.global_avg_pool2d`), so the hardware run
-was deferred. The smoke test in
-[`tests/models/bailing_moe_v2/test_modeling_bailing_moe_v2.py`](../tests/models/bailing_moe_v2/test_modeling_bailing_moe_v2.py)
-will be re-run and the tag pushed once the tt-metal binding is rebuilt.
+End-to-end smoke test passes on a Tenstorrent T3K (1×8 mesh). Loading
+`inclusionAI/Ling-mini-2.0` through `tt_symbiote.AutoModelForCausalLM.from_pretrained`,
+binding via `set_device`, and running `model.generate(...)` returns
+coherent text (`"As an AI, I don't have personal preferences or taste
+buds, …"`). The single-pass `register_modules` call dispatched from
+`BailingMoEV2Recipe.build_module_dict` bound every layer (0..19),
+the final `TTNNDistributedRMSNorm`, and the `lm_head`
+(`TTNNLinearIColShardedWRowSharded`, picked up by the recipe's
+`nn.Linear` entry) onto the mesh without manual intervention.
+
+Two pre-existing blockers had to be resolved before the run was green
+and are described in the next section.
+
+### `_hf_compat`: shim layer for `transformers` API drift
+
+Hub modeling files loaded via `trust_remote_code=True` are pinned to the
+`transformers` release the *model author* used at upload time. When
+`tt_symbiote` pins a newer release (5.9.0, per `PROJECT_PROPOSAL.md` §10),
+those Hub files can import symbols that have since been removed or moved
+upstream. [`src/tt_symbiote/_hf_compat.py`](../src/tt_symbiote/_hf_compat.py)
+holds a small, idempotent shim catalog that
+[`_BaseAutoModelClass.from_pretrained`](../src/tt_symbiote/auto/auto_factory.py)
+installs once before invoking the HF auto factory, restoring the legacy
+API surface those files were written against. Today's catalog:
+
+1. **`transformers.utils.import_utils.is_torch_fx_available`** —
+   removed between 4.x and 5.x. The Ling-mini-2.0 Hub file imports it as
+   a feature gate before calling `torch.fx.wrap`. The shim re-installs
+   it as `lambda: hasattr(torch, "fx")` (always `True` on modern PyTorch).
+
+2. **`transformers.modeling_rope_utils.ROPE_INIT_FUNCTIONS["default"]`** —
+   the legacy unscaled-RoPE entry was dropped from the dict between 4.x
+   and 5.x. The Hub file falls back to `self.rope_type = "default"`
+   whenever `config.rope_scaling is None` and then looks the key up,
+   raising `KeyError: 'default'`. The shim re-injects the canonical
+   formula
+   `inv_freq = 1 / base ** (arange(0, dim, 2) / dim)`,
+   reading `rope_theta` / `head_dim` / `partial_rotary_factor` via
+   `getattr` so it works with the *legacy* config shape (avoiding
+   `config.standardize_rope_params()` which the legacy configs do not
+   satisfy).
+
+Both shims are guarded by `if not hasattr(...) / if key not in dict` so
+they're no-ops on transformers releases that still ship the originals.
+The whole installer is gated by a module-level `_INSTALLED` flag for
+idempotency.
+
+This pattern is the recommended way to extend `tt_symbiote` to new
+remote-code models that ride on older `transformers` releases: add a new
+guarded entry to `install_transformers_shims`.
 
 ### New tests
 
