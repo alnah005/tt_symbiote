@@ -413,6 +413,29 @@ This pattern is the recommended way to extend `tt_symbiote` to new
 remote-code models that ride on older `transformers` releases: add a new
 guarded entry to `install_transformers_shims`.
 
+### Standalone install path verified
+
+Hardware acceptance was originally completed inside the tt-metal
+Python env (with `pip install -e .` on top of tt-metal's locally-built
+`ttnn`). It has since been re-verified end-to-end on T3K in a **fully
+standalone** venv with zero tt-metal involvement: a fresh `python -m
+venv`, `pip install ttnn==0.68.0` (whose embedded `sfpi-version` is
+`7.35.3` — the version pre-installed system-wide at
+`/opt/tenstorrent/sfpi/`), plus `pip install -e tt_symbiote`. Ling
+loads, binds across the 1×8 mesh, and generates the same coherent
+text.
+
+That recipe is now codified by
+[`scripts/bootstrap_venv.sh`](../scripts/bootstrap_venv.sh), which
+reads the `(ttnn, sfpi)` pin from
+[`scripts/ttnn-pin.txt`](../scripts/ttnn-pin.txt), probes the system
+sfpi for a match, and bails with a remediation hint if not. PROJECT_PROPOSAL.md
+OQ-1 ("revisit when tt-metal ships PyPI wheels") is partly closed by
+this: ttnn wheels are on PyPI, the bootstrap consumes them, and the
+only remaining system-level prerequisite is the matching sfpi
+RISC-V toolchain (Tenstorrent's apt-installable package, the same
+role CUDA plays for GPU users).
+
 ### New tests
 
 `tests/auto/test_ling_recipe.py` exercises the recipe shape without

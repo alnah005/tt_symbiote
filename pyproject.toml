@@ -40,9 +40,24 @@ dynamic = ["version"]
 # - `loguru` is tt_symbiote-specific (not in HF) and is needed by the vendored
 #   arch helpers in src/tt_symbiote/core/arch.py.
 #
-# - `ttnn` and `tracy` are NOT declared here. Both are tt-metal-built C
-#   extensions with no PyPI distribution, so they remain user-supplied
-#   (OQ-1 in PROJECT_PROPOSAL.md §11). Revisit when tt-metal ships PyPI wheels.
+# - `ttnn` IS published on PyPI (https://pypi.org/project/ttnn/) but is
+#   deliberately NOT declared here. Each `ttnn` wheel embeds a specific
+#   sfpi RISC-V toolchain version inside `ttnn/tt_metal/sfpi-version`,
+#   and JIT-compiles firmware kernels at first device-open time using
+#   the system-installed `riscv-tt-elf-g++`. If the system sfpi at
+#   `/opt/tenstorrent/sfpi/` doesn't match the wheel's pin, every
+#   `open_mesh_device(...)` call fails with "unrecognized command-line
+#   option". So a blanket `pip install tt_symbiote` cannot safely
+#   resolve `ttnn` for the user — `pip` would happily install a wheel
+#   whose sfpi pin disagrees with the host. Instead we ship a thin
+#   bootstrap (`scripts/bootstrap_venv.sh`) that reads
+#   `scripts/ttnn-pin.txt`, probes the system sfpi, and installs the
+#   matching ttnn version. This mirrors how HF transformers leaves CUDA
+#   wheels to the user: the hardware backend is system-prerequisite,
+#   not pip-resolvable.
+#
+# - `tracy` is also NOT declared. It's tt-metal-built and only needed
+#   for performance work.
 dependencies = [
   # tt_symbiote-specific pin
   "transformers==5.9.0",

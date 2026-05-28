@@ -1,0 +1,19 @@
+# scripts/ttnn-pin.txt
+#
+# (ttnn version, matching sfpi version) pair that scripts/bootstrap_venv.sh
+# installs. Sourced as shell variables.
+#
+# How to choose / bump:
+# - Find the sfpi version installed system-wide:
+#     /opt/tenstorrent/sfpi/compiler/bin/riscv-tt-elf-g++ --version
+#   The trailing string like "sfpi:7.35.3[426]" gives the version.
+# - Find the matching PyPI ttnn release by inspecting
+#     pip download --no-deps ttnn==<v> -d /tmp/ttnn-probe
+#     unzip -p /tmp/ttnn-probe/ttnn-*.whl ttnn/tt_metal/sfpi-version
+#   sfpi_version='X.Y.Z' is the line to match.
+# - Set both vars below to the chosen pair.
+#
+# Today's pair (verified end-to-end on T3K, May 2026):
+
+TTNN_VERSION='0.68.0'
+SFPI_REQUIRED='7.35.3'
