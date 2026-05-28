@@ -33,8 +33,18 @@ files here are deliberately **one-shot, non-interactive smoke runs**.
 | `microsoft/resnet-50` | [`run_resnet50.py`](run_resnet50.py) | image classification | N150 / T3K (1x1) | (none yet) |
 | `google/gemma-4-E2B-it` | [`run_gemma4_e2b.py`](run_gemma4_e2b.py) | image-text-to-text (VLM) | N150 (1x1), CPU-first | (Phase 7 in [`docs/migration_notes.md`](../../docs/migration_notes.md)) |
 | `google/gemma-4-31B-it` | [`run_gemma4_31b.py`](run_gemma4_31b.py) | image-text-to-text (VLM) | structurally supported on T3K (1x8), CPU-first | (Phase 7 in [`docs/migration_notes.md`](../../docs/migration_notes.md)) |
+| `Qwen/Qwen3-VL-2B-Instruct` | [`run_qwen3_vl_2b.py`](run_qwen3_vl_2b.py) | image-text-to-text (VLM) | N150 (1x1), CPU-first | (Phase 7 follow-up in [`docs/migration_notes.md`](../../docs/migration_notes.md); first model landed via the [`port-hf-model-to-tt-symbiote`](../../.cursor/skills/port-hf-model-to-tt-symbiote/SKILL.md) skill) |
 
 ## Adding a new model
+
+**Prefer the porting skill.** As of the Phase 7 follow-up commit the
+repeatable workflow below is encoded as a Cursor project-scope skill at
+[`.cursor/skills/port-hf-model-to-tt-symbiote/SKILL.md`](../../.cursor/skills/port-hf-model-to-tt-symbiote/SKILL.md).
+Ask your Cursor agent to *"port `<HF model id>` to `tt_symbiote`"* and
+the skill produces the recipe, tests, and a copy of the e2e script in
+this folder. Qwen3-VL-2B was landed this way with zero design
+decisions during execution. The manual steps below are still accurate
+for hand-written ports and are what the skill automates:
 
 1. Land the model's recipe under `src/tt_symbiote/models/<name>/` and a
    pytest-based hardware smoke under `tests/models/<name>/` (per

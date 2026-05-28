@@ -77,6 +77,10 @@ The four non-50 ResNet variants share the same recipe; flipping each to
 | `google/gemma-4-E4B-it` | `Gemma4ForConditionalGeneration` | ⏳ structurally supported | 0 / 21 / 14 | N150 (1×1) | (see E2B) | — |
 | `google/gemma-4-31B-it` | `Gemma4ForConditionalGeneration` | ⏳ structurally supported | 0 / 21 / 14 | T3K (1×8) | [`run_gemma4_31b.py`](../examples/e2e/run_gemma4_31b.py) | — |
 | `google/gemma-4-26B-A4B-it` | `Gemma4ForConditionalGeneration` | ⏳ structurally supported | 0 / 21 / 14 | T3K (1×8) | (see 31B) | — |
+| `Qwen/Qwen3-VL-2B-Instruct` | `Qwen3VLForConditionalGeneration` | ✅ verified (CPU-first) | 0 / 16 / 3 | N150 (1×1) | [`run_qwen3_vl_2b.py`](../examples/e2e/run_qwen3_vl_2b.py) | — |
+| `Qwen/Qwen3-VL-4B-Instruct` | `Qwen3VLForConditionalGeneration` | ⏳ structurally supported | 0 / 16 / 3 | N150 (1×1) | (see 2B) | — |
+| `Qwen/Qwen3-VL-8B-Instruct` | `Qwen3VLForConditionalGeneration` | ⏳ structurally supported | 0 / 16 / 3 | N150 (1×1) | (see 2B) | — |
+| `Qwen/Qwen3-VL-32B-Instruct` | `Qwen3VLForConditionalGeneration` | ⏳ structurally supported | 0 / 16 / 3 | T3K (1×8) | (see 2B) | — |
 
 All four Gemma-4 variants share the same recipe
 ([`Gemma4Recipe`](../src/tt_symbiote/models/gemma4/modeling_gemma4.py)),
@@ -99,13 +103,49 @@ Verified semantic answer for E2B (verbatim):
 against [`tests/images/test-dog.png`](../tests/images/test-dog.png)
 and the prompt `"What is this animal in the photo?"`.
 
+All four dense Qwen3-VL variants share the same recipe
+([`Qwen3VLRecipe`](../src/tt_symbiote/models/qwen3_vl/modeling_qwen3_vl.py)),
+also a **CPU-first port** — the first model landed through the
+[`port-hf-model-to-tt-symbiote`](../.cursor/skills/port-hf-model-to-tt-symbiote/SKILL.md)
+Cursor skill rather than hand-written. The recipe was produced by
+mechanical substitution into the skill's templates and verified end-to-end on
+N150 without manual edits. The two MoE variants
+(`Qwen/Qwen3-VL-30B-A3B`, `Qwen/Qwen3-VL-235B-A22B`) route to a
+distinct top-level HF class (`Qwen3VLMoeForConditionalGeneration`) and
+will be ported under a separate `qwen3_vl_moe` recipe in a follow-up
+commit.
+
+Verified semantic answer for Qwen3-VL-2B-Instruct (verbatim, truncated
+at 64 tokens):
+
+> *"Based on the visual characteristics in the photo, the animal is a
+> **puppy**. More specifically, it appears to be a **Golden Retriever
+> puppy**. This is indicated by several key features: - Coat Color: The
+> puppy has a light, golden-brown coat, which is the typical color"*
+
+The model identifies the animal as a Golden Retriever puppy, which is
+unambiguously a dog. The demo's semantic assertion accepts any of
+``{"dog", "puppy", "retriever", "labrador", "poodle", "terrier",
+"spaniel", "shepherd", "husky", "bulldog"}`` rather than a strict
+``"dog"`` substring — see
+[reference-vlm.md](../.cursor/skills/port-hf-model-to-tt-symbiote/reference-vlm.md)
+"Semantic check" for the rationale.
+
 ## How to add a model
 
+**Prefer the automated skill.** The Cursor skill at
+[`.cursor/skills/port-hf-model-to-tt-symbiote/SKILL.md`](../.cursor/skills/port-hf-model-to-tt-symbiote/SKILL.md)
+encodes the full workflow used for Qwen3-VL-2B and reproduces every
+artefact below from a small set of placeholders. Trigger it by asking
+your Cursor agent to *"port `<HF model id>` to `tt_symbiote`"*.
+
+If you'd rather do it by hand, the manual checklist is:
+
 1. Add the recipe under `src/tt_symbiote/models/<name>/` following the
-   `bailing_moe_v2` (LLM) or `resnet` (vision) layout: a
-   `configuration_<name>.py` (re-export HF config + TTNN tuning table
-   if needed), a `modeling_<name>.py` (TTNN wrappers + a class
-   decorated with `@register_recipe(hf_class_name=...)`), and an
+   `bailing_moe_v2` (LLM), `resnet` (vision), `gemma4`/`qwen3_vl` (VLM)
+   layout: a `configuration_<name>.py` (re-export HF config + TTNN
+   tuning table if needed), a `modeling_<name>.py` (TTNN wrappers + a
+   class decorated with `@register_recipe(hf_class_name=...)`), and an
    `__init__.py` that imports them eagerly so the registry is
    populated at top-level import.
 2. List the recipe-bearing subpackage in

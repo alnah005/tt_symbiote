@@ -844,3 +844,123 @@ compatibility-report shape check — it does not require live
 hardware or multi-GB downloads. The real e2e demo (with hardware +
 weights) lives in `examples/e2e/run_gemma4_e2b.py` per the Phase 6
 "e2e scripts in `examples/`, not `pytest`" convention.
+
+## Phase 7 follow-up — `port-hf-model-to-tt-symbiote` skill + Qwen3-VL-2B verified on N150
+
+Three CPU-first ports later (Ling-mini-2.0, ResNet, Gemma-4) the shape
+of every port had stabilised: same file tree, same recipe decorator,
+same acceptance gates. The Phase 7 follow-up commit encodes that shape
+as a Cursor project-scope skill so the next port is a templated
+execution rather than a fresh design exercise — and exercises the skill
+end-to-end by porting `Qwen/Qwen3-VL-2B-Instruct`.
+
+### What landed
+
+1. **The skill itself** at
+   `.cursor/skills/port-hf-model-to-tt-symbiote/`. Five files (the
+   skill's main workflow plus three task-specific reference docs)
+   total ~700 lines, plus six templates with `<PLACEHOLDER>` markers.
+   `SKILL.md` is 216 lines — well under the 500-line readability cap
+   recommended by the `create-skill` meta-skill. The three reference
+   files (`reference-llm.md`, `reference-vision.md`,
+   `reference-vlm.md`) cover the deltas across LLM / vision / VLM
+   ports and let the main skill stay short.
+
+2. **`Qwen/Qwen3-VL-2B-Instruct` ported through the skill**:
+   - `src/tt_symbiote/models/qwen3_vl/{__init__.py,
+     configuration_qwen3_vl.py, modeling_qwen3_vl.py}` — produced
+     from the skill's templates by mechanical placeholder
+     substitution (Phase A discovery → `<NAME>=qwen3_vl`,
+     `<HF_CLASS>=Qwen3VLForConditionalGeneration`,
+     `<AUTO_CLASS>=AutoModelForImageTextToText`, etc.).
+   - `tests/auto/test_qwen3_vl_recipe.py` (10 tests, HW-free) and
+     `tests/models/qwen3_vl/test_modeling_qwen3_vl.py` (3 tests,
+     HW-free) — mirror the Gemma-4 test files exactly.
+   - `examples/e2e/run_qwen3_vl_2b.py` — same image + prompt +
+     semantic check as `run_gemma4_e2b.py`. Verified on N150.
+   - One-line append to `src/tt_symbiote/models/__init__.py`
+     (`_RECIPE_BEARING_SUBPACKAGES`).
+
+3. **Permissive semantic-check pattern** in the VLM template.
+   Qwen3-VL-2B identifies the dog in `tests/images/test-dog.png` as
+   *"a Golden Retriever puppy"* — skipping the generic word *"dog"*
+   that Gemma-4 always volunteered. A strict `"dog" in answer.lower()`
+   would have falsely failed; the demo (and the template) now accept
+   any of `{"dog", "puppy", "retriever", "labrador", ...}` so future
+   skill-driven ports get the right behaviour without manual edits.
+   The rationale lives in
+   [`reference-vlm.md`](../.cursor/skills/port-hf-model-to-tt-symbiote/reference-vlm.md)
+   "Semantic check".
+
+### Hardware acceptance — green on N150
+
+End-to-end smoke pass on a single Wormhole chip with the exact same
+image + prompt as Gemma-4:
+
+```text
+Qwen3-VL-2B-Instruct answer: 'Based on the visual characteristics in
+the photo, the animal is a **puppy**. More specifically, it appears
+to be a **Golden Retriever puppy**. This is indicated by several key
+features: - Coat Color: The puppy has a light, golden-brown coat,
+which is the typical color'
+```
+
+`compatibility.report(model)` after that run:
+
+```text
+summary: {
+  tt_implemented_count: 0,
+  cpu_fallback_count: 16,
+  out_of_scope_count: 3,
+  runtime_fallback_count: 0,
+  runtime_unexpected_count: 0,
+}
+```
+
+Wall-clock: ~50 s on a warm cache (TTNN device init + 625-shard
+weight load + a 64-token generation, all on the host CPU). Reproducer:
+[`examples/e2e/run_qwen3_vl_2b.py`](../examples/e2e/run_qwen3_vl_2b.py).
+
+The smaller `cpu_fallback_count` relative to Gemma-4 (16 vs 21)
+reflects Qwen3-VL's simpler architecture — no audio tower, fewer
+shared utility classes — not any difference in coverage completeness.
+
+### What the skill validates
+
+The Qwen3-VL port took zero design decisions during execution: every
+file was produced by template substitution + Phase A discovery. The
+only "iteration" was the semantic-check fix described above, and that
+fix was upstreamed into the skill template so the *next* port gets it
+right by default. This is the load-bearing claim of the Phase 7
+follow-up: future model ports become a sub-hour mechanical task per
+HF model id.
+
+### Follow-ups (explicit, not gating Phase 7 follow-up)
+
+1. **Larger Qwen3-VL dense variants** (4B / 8B / 32B) — same recipe,
+   structural support already in `QWEN3_VL_TTNN_TUNING`. Flipping
+   `hw_verified` to `True` is a model-id swap in `run_qwen3_vl_2b.py`
+   once a user with the disk/RAM budget runs the demo.
+2. **Qwen3-VL MoE variants** (`30B-A3B`, `235B-A22B`) — these
+   register under a distinct HF top-level head
+   (`Qwen3VLMoeForConditionalGeneration`) and need their own recipe
+   at `src/tt_symbiote/models/qwen3_vl_moe/`. Trivial second-pass
+   skill execution.
+3. **TTNN wrappers** for the Qwen3-VL vision tower + text decoder —
+   identical follow-up shape to Gemma-4's Phase 7 list. Each move
+   from `cpu_fallback` to `tt_implemented` in the recipe.
+4. **Video / multi-image inputs** — the Qwen3VLProcessor supports
+   them, but the demo only exercises a single still image.
+5. **Skill self-test in CI** — add a small Github Actions job that
+   runs the HW-free `tests/auto/` + `tests/models/qwen3_vl/` suite
+   to catch regressions in the skill templates without needing
+   live hardware.
+
+### New tests
+
+`tests/auto/test_qwen3_vl_recipe.py` (10 tests, HW-free) and
+`tests/models/qwen3_vl/test_modeling_qwen3_vl.py` (3 tests, HW-free)
+bring the full HW-free suite to 109 tests in `tests/auto/` plus 3 new
+smoke tests. All green on the first run after scaffolding (zero
+iterations on the test files, also a load-bearing claim about the
+skill's correctness).

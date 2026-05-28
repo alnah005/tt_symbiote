@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""<MODEL_HUMAN_NAME> (HF ``<HF_CLASS>``) TTNN port.
+
+Importing this package runs the ``@register_recipe`` decorator in
+:mod:`tt_symbiote.models.<NAME>.modeling_<NAME>` and inserts
+:class:`<CLASS_NAME_PASCAL>` into
+:data:`tt_symbiote.auto.auto_mappings.TT_MODEL_REGISTRY` under the key
+``"<HF_CLASS>"``.
+
+This is a CPU-first port: the recipe leaves the HuggingFace reference
+modeling untouched (empty ``build_module_dict``) and uses the three
+declared class-name lists (``tt_implemented``, ``cpu_fallback``,
+``out_of_scope``) to drive :func:`tt_symbiote.compatibility.report`.
+
+See :mod:`.configuration_<NAME>` for the per-variant TTNN tuning table.
+"""
+
+from tt_symbiote.models.<NAME>.configuration_<NAME> import (
+    <NAME_UPPER>_TTNN_TUNING,
+    <CONFIG_REEXPORTS>,
+    lookup_ttnn_tuning,
+)
+from tt_symbiote.models.<NAME>.modeling_<NAME> import <CLASS_NAME_PASCAL>
+
+__all__ = [
+    "<NAME_UPPER>_TTNN_TUNING",
+    "<CLASS_NAME_PASCAL>",
+    <CONFIG_REEXPORTS_QUOTED>,
+    "lookup_ttnn_tuning",
+]
