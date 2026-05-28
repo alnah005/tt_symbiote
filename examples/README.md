@@ -14,6 +14,10 @@ package. The contents are intentionally **outside the installed package** (per
 - [`chat/`](chat/) — `HF_chat.py`, an interactive chat demo that loads a model
   through `tt_symbiote` and the Hugging Face tokenizer. See
   [`chat/README.md`](chat/README.md).
+- [`e2e/`](e2e/) — non-interactive, one-shot reproducer scripts for models
+  that have been verified end-to-end on real Tenstorrent hardware. One file
+  per model; the folder's `README.md` is also the verified-models tracking
+  table. See [`e2e/README.md`](e2e/README.md).
 
 ## Running an example
 
