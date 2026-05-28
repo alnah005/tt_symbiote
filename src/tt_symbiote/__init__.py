@@ -85,6 +85,23 @@ from tt_symbiote.core.run_config import DispatchManager, TracedRun
 from tt_symbiote.utils.device_management import set_device
 from tt_symbiote.utils.module_replacement import register_modules
 
+# HF-style side-effect import: pulling in :mod:`tt_symbiote.models` triggers
+# the per-model ``@register_recipe`` decorators, populating
+# :data:`tt_symbiote.auto.auto_mappings.TT_MODEL_REGISTRY` before the user
+# can call :meth:`AutoModelForCausalLM.from_pretrained`. Guarded with
+# try/except so a broken model file degrades to "no recipe" rather than
+# blowing up the whole import.
+try:
+    from tt_symbiote import models as _models  # noqa: F401
+except Exception as _e:  # pragma: no cover - exercised on broken installs
+    import warnings as _warnings
+
+    _warnings.warn(
+        f"tt_symbiote: failed to load model recipes ({type(_e).__name__}: {_e}); "
+        f"AutoModel*.from_pretrained will fall back to unmodified HF models.",
+        stacklevel=2,
+    )
+
 __all__ = [
     # 43 AutoModel* classes
     "AutoBackbone",

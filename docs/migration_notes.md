@@ -266,3 +266,125 @@ message) and proactively for `@run_on_devices`-decorated forwards.
 
 These run under `scripts/_smoke_conftest.py` with stubbed `ttnn` and
 `tracy`; they do not require real hardware.
+
+---
+
+## Phase 5 — Ling-mini-2.0 reference port
+
+Phase 5 ports `inclusionAI/Ling-mini-2.0` (HF `BailingMoeV2ForCausalLM`)
+through the new public API and locks in the **single-dict, single-pass
+`Recipe.build_module_dict`** contract (Option 1) for every model that
+follows. It also resolves PROJECT_PROPOSAL.md open question Q9 on KV-cache
+ownership.
+
+### OQ-2 — single-dict module-replacement (Option 1)
+
+Two designs were considered for `Recipe.build_module_dict`:
+
+| Option | Shape | Pros | Cons |
+| --- | --- | --- | --- |
+| **1 — single dict** | `{torch_class: ttnn_class}` applied in one pass by `register_modules` | Each TTNN wrapper class owns its own subtree conversion (`from_torch` builds the children). One pass, one diagnostic surface. Mirrors the way HF model classes are written — each module is responsible for its own children. | Wrappers that previously assumed their children would be swapped by a follow-up pass must now do that swap themselves in `from_torch`. |
+| 2 — list of dicts | `[dict, dict, …]` applied left-to-right | Lets you "stage" replacements (decoder shells first, then linears, then outer wrapper). Matches the pre-Phase-5 test pattern of three sequential `register_module_replacement_dict` calls. | The replacement *order* becomes part of the public contract — fragile. Every model has to think about which pass it belongs to. The wrapper still has to read children to mutate them, so the encapsulation argument is weak. |
+
+We picked **Option 1**. Multi-pass prototyping is still possible inside
+`Recipe.post_register` (call `register_modules` directly there for the
+unusual case), but the public, tested contract is single-dict.
+
+The Ling port demonstrates the collapse:
+
+- Before Phase 5, the test ran `register_module_replacement_dict` three
+  times — first to swap the decoder layer / norm / embedding / rotary,
+  then to swap any leftover `nn.Linear` / `nn.SiLU` (effectively only
+  `lm_head`), then to swap the outer `BailingMoeV2Model` wrapper.
+- After Phase 5, `BailingMoEV2Recipe.build_module_dict` returns one flat
+  dict with two entries: `{BailingMoeV2Model: TTNNBailingMoeV2Model, nn.Linear: TTNNLinearIColShardedWRowSharded}`.
+- `TTNNBailingMoeV2Model.from_torch` itself calls `register_modules` on
+  its own subtree to swap the decoder layers, final norm, `nn.Embedding`,
+  and rotary embedding. The wrapper owns the conversion of everything
+  *inside* the HF `BailingMoeV2Model`; the recipe only describes the
+  *outer* swaps.
+
+See [`src/tt_symbiote/models/bailing_moe_v2/modeling_bailing_moe_v2.py`](../src/tt_symbiote/models/bailing_moe_v2/modeling_bailing_moe_v2.py)
+for the reference layout.
+
+### OQ-9 — KV-cache provisioning
+
+Resolved by extending the `Recipe` protocol with an **optional**
+`make_kv_cache(model, device, **kwargs)` hook (documented in the docstring
+of `auto/auto_mappings.py`; intentionally not part of the `Protocol` body
+so the runtime `isinstance(_, Recipe)` check stays permissive for
+non-cached recipes).
+
+The closest reference architecture in `tt-metal` is `tt_transformers/tt/model.py::Transformer.__init__`,
+which takes `paged_attention_config=` directly so the model owns its KV
+cache. That pattern doesn't translate verbatim because tt_symbiote loads
+the model through HuggingFace (CPU) and only knows the device later in
+`set_device`. We split the constructor in two:
+
+1. The recipe declares **how** to make the cache (`make_kv_cache`).
+2. `set_device` actually calls it (after device binding and weight
+   preprocessing) and attaches the result as `model._tt_kv_cache`.
+
+The user surface stays a single line of HF-style code:
+
+```python
+set_device(model, mesh_device)
+out = model.generate(..., past_key_values=model._tt_kv_cache)
+```
+
+`make_kv_cache` failures are warnings, not hard errors — non-cached
+recipes (most non-LM-style models) just leave `model._tt_kv_cache` unset.
+
+### Top-level registration (HF-style side effect)
+
+`src/tt_symbiote/__init__.py` now imports `tt_symbiote.models`, which in
+turn imports every recipe-bearing model subpackage (currently just
+`bailing_moe_v2`). The `@register_recipe` decorator inside each
+`modeling_<model>.py` runs and populates `TT_MODEL_REGISTRY` at top-level
+import time — so by the time a user calls `AutoModelForCausalLM.from_pretrained`
+the registry is already populated. This mirrors how
+`transformers/models/__init__.py` registers Auto-class mappings.
+
+Each per-model import is wrapped in `try/except` so a broken model file
+warns loudly but does not poison the whole `tt_symbiote` import.
+
+### Structural fix: `next_power_of_2` moved out of the bailing modeling file
+
+The Phase 2 mechanical merge dropped `_next_power_of_2` inside
+`models/bailing_moe_v2/modeling_bailing_moe_v2.py`, but the generic
+`integrations/ttnn_embedding.py` was reaching back into that model file
+to import it — a circular import that only surfaced once the top-level
+side-effect import chain in `src/tt_symbiote/__init__.py` started
+exercising the bailing package eagerly. Phase 5 moves the helper to
+[`src/tt_symbiote/utils/math_utils.py`](../src/tt_symbiote/utils/math_utils.py)
+(public name `next_power_of_2`) and keeps `_next_power_of_2` as a
+back-compat alias in the modeling file.
+
+### Hardware acceptance — deferred
+
+The Phase 5 plan tags `v0.0.0` when the on-hardware smoke test passes.
+At the time of the Phase 5 commit, the local `tt-metal` build was out of
+sync with its Python sources (the cached `_ttnncpp.so` predated a new
+`pool.py` that references `ttnn.global_avg_pool2d`), so the hardware run
+was deferred. The smoke test in
+[`tests/models/bailing_moe_v2/test_modeling_bailing_moe_v2.py`](../tests/models/bailing_moe_v2/test_modeling_bailing_moe_v2.py)
+will be re-run and the tag pushed once the tt-metal binding is rebuilt.
+
+### New tests
+
+`tests/auto/test_ling_recipe.py` exercises the recipe shape without
+hardware:
+
+- `test_recipe_registered`: importing `tt_symbiote.models.bailing_moe_v2`
+  populates `TT_MODEL_REGISTRY["BailingMoeV2ForCausalLM"]`.
+- `test_build_module_dict_shape` / `test_build_module_dict_covers_outer_model_and_lm_head`:
+  return value is a single flat dict (Option 1), keys / values are
+  classes, the outer `BailingMoeV2Model` and `nn.Linear` are both
+  present.
+- `test_post_register_patches_device`: `model.device` is rewritten to a
+  property returning CPU after `post_register` runs.
+- `test_make_kv_cache_signature` / `test_make_kv_cache_reads_config`: the
+  hook accepts `(model, device, **kwargs)` and reads the right HF config
+  fields when constructing the paged cache.
+
+These run under the same stubbed-`ttnn` conftest as the Phase 4 tests.

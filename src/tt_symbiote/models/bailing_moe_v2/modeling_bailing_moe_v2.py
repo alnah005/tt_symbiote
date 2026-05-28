@@ -10,17 +10,29 @@
 
 from typing import Optional, List
 import torch
+from torch import nn
 import ttnn
 from transformers.modeling_attn_mask_utils import (
     _prepare_4d_causal_attention_mask,
     _prepare_4d_causal_attention_mask_for_sdpa,
 )
 from transformers.modeling_outputs import MoeModelOutputWithPast
+from tt_symbiote.auto.auto_mappings import register_recipe
 from tt_symbiote.core.module import TTNNModule
 from tt_symbiote.core.run_config import trace_enabled
-from tt_symbiote.integrations.ttnn_attention import TTNNBailingMoEAttention
+from tt_symbiote.integrations.ttnn_attention import (
+    PagedAttentionConfig,
+    TTNNBailingMoEAttention,
+    TTNNPagedAttentionKVCache,
+)
+from tt_symbiote.integrations.ttnn_embedding import (
+    TTNNBailingPaddedEmbedding,
+    TTNNBailingRotaryEmbedding,
+)
+from tt_symbiote.integrations.ttnn_linear import TTNNLinearIColShardedWRowSharded
 from tt_symbiote.integrations.ttnn_moe import TTNNBailingMoE
 from tt_symbiote.integrations.ttnn_normalization import TTNNDistributedRMSNorm
+from tt_symbiote.utils.module_replacement import register_modules
 
 # === content from models/experimental/tt_symbiote/models/bailing_moe_v2.py ===
 """TTNN BailingMoeV2 Model implementation."""
@@ -43,10 +55,32 @@ class TTNNBailingMoeV2Model(TTNNModule):
         config: BailingMoeV2Config
     """
 
-    @staticmethod
-    def from_torch(model):
-        new_model = TTNNBailingMoeV2Model()
-        new_model.model = model
+    @classmethod
+    def from_torch(cls, hf_model):
+        """Wrap a HF ``BailingMoeV2Model`` and convert its subtree to TTNN.
+
+        Phase 5 / Option 1 contract: each TTNN wrapper class owns the
+        conversion of its own subtree. Previously the test harness ran
+        :func:`register_module_replacement_dict` three separate times
+        (decoder/norm/embed/rotary, then nn.Linear/nn.SiLU at the root,
+        then this outer wrapper). With Option 1 the wrapper itself
+        rewrites its children before adopting the HF model, so the recipe
+        can describe the swap as a single dict.
+        """
+        register_modules(
+            hf_model,
+            {
+                type(hf_model.layers[0]): TTNNBailingMoEDecoderLayerPadded,
+                type(hf_model.norm): TTNNDistributedRMSNorm,
+                nn.Embedding: TTNNBailingPaddedEmbedding,
+                type(hf_model.rotary_emb): TTNNBailingRotaryEmbedding,
+            },
+            model_config=None,
+        )
+
+        new_model = cls()
+        new_model._fallback_torch_layer = hf_model
+        new_model.model = hf_model
 
         # Bypass tensor wrapping/unwrapping for decoder layers.
         # These sit under the HF BailingMoeV2Model (nn.Module), so
@@ -54,12 +88,11 @@ class TTNNBailingMoeV2Model(TTNNModule):
         # Bypassing is safe: no PyTorch ops touch hidden_states between
         # layer calls, and each layer's forward already works with raw
         # ttnn.Tensor objects.
-        for layer in model.layers:
+        for layer in hf_model.layers:
             if isinstance(layer, TTNNModule):
                 layer._bypass_tensor_wrapping = True
-        # Also bypass the final norm layer
-        if isinstance(model.norm, TTNNModule):
-            model.norm._bypass_tensor_wrapping = True
+        if isinstance(hf_model.norm, TTNNModule):
+            hf_model.norm._bypass_tensor_wrapping = True
 
         return new_model
 
@@ -440,16 +473,11 @@ class TTNNBailingMoEDecoderLayer(TTNNModule):
         return outputs
 
 
-def _next_power_of_2(n: int, minimum=256) -> int:
-    """Return the smallest power of 2 >= n."""
-    if n <= 1:
-        return 1
-    if n <= minimum:
-        return minimum
-    result = 1 << ((n - 1).bit_length() + 1)  # Shift by one more than the bit length to get the next power of 2
-    if result == n * 4:  # If n is already a power of 2, we want to return n, not the next power of 2
-        result = n
-    return result
+# Re-exported for back-compat with code that imported this helper from
+# the modeling module before Phase 5 moved it to ``utils/math_utils.py``
+# (where it now lives to break the circular import between this file
+# and ``integrations/ttnn_embedding.py``).
+from tt_symbiote.utils.math_utils import next_power_of_2 as _next_power_of_2  # noqa: E402
 
 
 class TTNNBailingMoEDecoderLayerPadded(TTNNModule):
@@ -553,4 +581,54 @@ class TTNNBailingMoEDecoderLayerPadded(TTNNModule):
                 outputs = [hs] + list(outputs[1:])
 
         return outputs
+
+
+# ---------------------------------------------------------------------------
+# Recipe (Phase 5 / Option 1)
+# ---------------------------------------------------------------------------
+#
+# Single-dict module-replacement recipe for ``BailingMoeV2ForCausalLM``.
+# Per the Option 1 contract:
+#
+#   * ``build_module_dict`` returns one flat ``{torch_class: ttnn_class}``
+#     dict that the auto factory hands to ``register_modules`` in a single
+#     pass.
+#   * Each TTNN wrapper class is responsible for converting its own
+#     subtree in ``from_torch``. ``TTNNBailingMoeV2Model.from_torch`` (above)
+#     internally swaps decoder layers, the final norm, ``nn.Embedding``,
+#     and the rotary embedding, so the recipe only needs to describe the
+#     two top-level swaps: the outer model wrapper and the bare
+#     ``lm_head`` linear.
+#   * ``post_register`` patches ``model.device`` to ``cpu`` so HF's
+#     generation loop has a valid device for the token tensor it places
+#     itself (after replacement, no ``nn.Module`` params remain and HF's
+#     default implementation would call ``next(self.parameters())`` and
+#     raise ``StopIteration``).
+#   * ``make_kv_cache`` allocates the paged-attention KV cache; it is
+#     invoked by ``set_device`` once a device is bound and the result is
+#     attached as ``model._tt_kv_cache`` (resolves PROJECT_PROPOSAL.md Q9).
+@register_recipe(hf_class_name="BailingMoeV2ForCausalLM")
+class BailingMoEV2Recipe:
+    def build_module_dict(self, model):
+        return {
+            type(model.model): TTNNBailingMoeV2Model,
+            nn.Linear: TTNNLinearIColShardedWRowSharded,
+        }
+
+    def post_register(self, model):
+        type(model).device = property(lambda self: torch.device("cpu"))
+
+    def make_kv_cache(self, model, device, batch_size: int = 1, **kwargs):
+        config = PagedAttentionConfig(
+            block_size=kwargs.get("block_size", 64),
+            max_num_blocks=kwargs.get("max_num_blocks", 32),
+            batch_size=batch_size,
+        )
+        return TTNNPagedAttentionKVCache(
+            num_layers=model.config.num_hidden_layers,
+            num_kv_heads=model.config.num_key_value_heads,
+            head_dim=model.config.head_dim,
+            config=config,
+            device=None,
+        ).to_device(device)
 

@@ -12,7 +12,7 @@ from tt_symbiote.core.run_config import (
     DistributedTensorConfig,
     trace_enabled,
 )
-from tt_symbiote.models.bailing_moe_v2.modeling_bailing_moe_v2 import _next_power_of_2
+from tt_symbiote.utils.math_utils import next_power_of_2 as _next_power_of_2
 
 
 @trace_enabled

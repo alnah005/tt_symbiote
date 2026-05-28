@@ -6,7 +6,7 @@
 
 The single public entry point is :func:`set_device`. It is the mandatory
 final step of the ``tt_symbiote`` loading flow (per ``PROJECT_PROPOSAL.md``
-§4.4) and does five things in order:
+§4.4) and does six things in order:
 
 1. Walks the model graph.
 2. For every ``TTNNModule``, reads ``forward.__tt_allowed_archs__``. If the
@@ -18,7 +18,10 @@ final step of the ``tt_symbiote`` loading flow (per ``PROJECT_PROPOSAL.md``
 4. Calls ``preprocess_weights()`` then ``move_weights_to_device()`` on every
    visited TTNN module (subsumes the explicit per-test loop that callers
    previously wrote by hand).
-5. Sets ``_tt_symbiote_device_set = True`` on the root object and on every
+5. If a recipe is registered for ``type(obj).__name__`` and exposes
+   ``make_kv_cache``, builds the model-specific KV cache and attaches it as
+   ``obj._tt_kv_cache`` (resolves ``PROJECT_PROPOSAL.md`` Q9 — see Phase 5).
+6. Sets ``_tt_symbiote_device_set = True`` on the root object and on every
    visited TTNN module.
 
 Hard-error enforcement: ``run_config.module_run`` asserts
@@ -345,6 +348,29 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs) -> None:
             warnings.warn(
                 f"set_device: failed to (preprocess|move) weights for "
                 f"{module.module_name}: {e!r}",
+                stacklevel=2,
+            )
+
+    # Phase 5 (Q9): if a recipe is registered for this model, give it a
+    # chance to allocate model-specific state that requires a live device,
+    # most notably the paged-attention KV cache. Mirrors the
+    # ``tt_transformers`` "model owns its KV cache" pattern but delayed to
+    # set_device time (since HF builds the model on CPU first). The cache
+    # is attached as ``model._tt_kv_cache`` and the test/demo code passes
+    # it back in as ``past_key_values=`` for ``model.generate``.
+    try:
+        from tt_symbiote.auto.auto_mappings import TT_MODEL_REGISTRY
+    except Exception:
+        TT_MODEL_REGISTRY = {}
+    recipe = TT_MODEL_REGISTRY.get(type(obj).__name__)
+    if recipe is not None and hasattr(recipe, "make_kv_cache"):
+        try:
+            kv = recipe.make_kv_cache(obj, device, **kwargs.get("kv_cache_kwargs", {}))
+            if kv is not None:
+                obj._tt_kv_cache = kv
+        except Exception as e:
+            warnings.warn(
+                f"set_device: make_kv_cache failed for {type(obj).__name__}: {e!r}",
                 stacklevel=2,
             )
 

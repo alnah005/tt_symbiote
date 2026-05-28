@@ -30,10 +30,21 @@ class Recipe(Protocol):
     Recipe instances expose ``build_module_dict(model)`` which returns a
     ``{torch_class: ttnn_class}`` mapping suitable for
     :func:`tt_symbiote.utils.module_replacement.register_modules`. They may
-    optionally implement ``post_register(model)`` to perform any
-    model-specific post-replacement patches. :func:`register_recipe`
-    installs a no-op ``post_register`` if the recipe class does not provide
-    one.
+    optionally implement:
+
+    - ``post_register(model)``: any model-specific post-replacement patches
+      (runs immediately after ``register_modules`` inside
+      :class:`~tt_symbiote.auto.auto_factory._BaseAutoModelClass.from_pretrained`).
+    - ``make_kv_cache(model, device, **kwargs)``: build and return the
+      model-specific KV cache object (e.g. a paged attention cache). Called
+      by :func:`tt_symbiote.utils.device_management.set_device` once every
+      module has been bound to ``device`` and weights have been moved.
+      Resolves Q9 from ``PROJECT_PROPOSAL.md`` (the model owns its KV
+      cache, mirroring the ``tt_transformers`` constructor pattern but
+      delayed to ``set_device`` time so the device is known).
+
+    :func:`register_recipe` installs a no-op default for any optional hook
+    the recipe class does not provide.
     """
 
     def build_module_dict(self, model: Any) -> Dict[type, type]:  # pragma: no cover - protocol
@@ -41,6 +52,13 @@ class Recipe(Protocol):
 
     def post_register(self, model: Any) -> None:  # pragma: no cover - protocol
         ...
+
+    # ``make_kv_cache`` is intentionally *not* part of the Protocol body so
+    # that the ``runtime_checkable`` ``isinstance`` check stays permissive
+    # for the (common) case of a recipe that has no KV cache. The decorator
+    # installs a no-op default when the recipe class doesn't define it; the
+    # actual call site in :func:`tt_symbiote.utils.device_management.set_device`
+    # uses ``hasattr`` rather than ``isinstance`` for the same reason.
 
 
 TT_MODEL_REGISTRY: Dict[str, Recipe] = {}
@@ -55,12 +73,14 @@ def register_recipe(hf_class_name: str) -> Callable[[type], type]:
         @register_recipe(hf_class_name="BailingMoeV2ForCausalLM")
         class BailingMoEV2Recipe:
             def build_module_dict(self, model): ...
-            def post_register(self, model): ...   # optional
+            def post_register(self, model): ...                       # optional
+            def make_kv_cache(self, model, device, **kwargs): ...     # optional
 
     The decorator instantiates the class (with no arguments), ensures it
-    has a ``post_register`` attribute (installing a no-op if missing),
-    and inserts the instance into :data:`TT_MODEL_REGISTRY`. Re-registering
-    the same name emits a ``UserWarning`` and overrides the previous entry.
+    has both ``post_register`` and ``make_kv_cache`` attributes
+    (installing no-op defaults if missing), and inserts the instance into
+    :data:`TT_MODEL_REGISTRY`. Re-registering the same name emits a
+    ``UserWarning`` and overrides the previous entry.
     """
 
     if not isinstance(hf_class_name, str) or not hf_class_name:
@@ -74,6 +94,8 @@ def register_recipe(hf_class_name: str) -> Callable[[type], type]:
             )
         if not hasattr(instance, "post_register"):
             instance.post_register = lambda model: None  # noqa: E731
+        if not hasattr(instance, "make_kv_cache"):
+            instance.make_kv_cache = lambda model, device, **kwargs: None  # noqa: E731
         if hf_class_name in TT_MODEL_REGISTRY:
             warnings.warn(
                 f"Overriding existing tt_symbiote recipe for {hf_class_name!r}",
