@@ -1,0 +1,18 @@
+{
+  "status": "previously verified on T3K; not re-run during the e2e-reorg commit",
+  "model_class": "BailingMoeV2ForCausalLM",
+  "model_id": "inclusionAI/Ling-mini-2.0",
+  "hardware_target": "T3K (1x8)",
+  "design_time": {
+    "tt_implemented": [],
+    "cpu_fallback": [],
+    "out_of_scope": []
+  },
+  "summary": {
+    "tt_implemented_count": 0,
+    "cpu_fallback_count": 0,
+    "out_of_scope_count": 0,
+    "note": "The Ling recipe predates the Phase 7 design-time list convention. Runtime coverage was clean at Phase 5 acceptance (zero TTNN fallbacks; see docs/ling_mini_2_0_guide.md). Re-running examples/e2e/run_ling_mini_2_0.py will overwrite this file with a real runtime ledger."
+  },
+  "how_to_regenerate": "python examples/e2e/run_ling_mini_2_0.py"
+}

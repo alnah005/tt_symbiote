@@ -1,0 +1,57 @@
+{
+  "model_class": "Gemma4ForConditionalGeneration",
+  "design_time": {
+    "tt_implemented": [],
+    "cpu_fallback": [
+      "Gemma4ClippableLinear",
+      "Gemma4RMSNorm",
+      "Gemma4VisionPatchEmbedder",
+      "Gemma4VisionRotaryEmbedding",
+      "Gemma4VisionAttention",
+      "Gemma4VisionMLP",
+      "Gemma4VisionEncoderLayer",
+      "Gemma4VisionEncoder",
+      "Gemma4VisionPooler",
+      "Gemma4VisionModel",
+      "Gemma4MultimodalEmbedder",
+      "Gemma4TextScaledWordEmbedding",
+      "Gemma4TextRotaryEmbedding",
+      "Gemma4TextAttention",
+      "Gemma4TextMLP",
+      "Gemma4TextExperts",
+      "Gemma4TextRouter",
+      "Gemma4TextDecoderLayer",
+      "Gemma4TextModel",
+      "Gemma4Model",
+      "Gemma4ForConditionalGeneration"
+    ],
+    "out_of_scope": [
+      "Gemma4ModelOutputWithPast",
+      "Gemma4CausalLMOutputWithPast",
+      "Gemma4TextModelOutputWithPast",
+      "Gemma4AudioModelOutput",
+      "Gemma4AudioRelPositionalEncoding",
+      "Gemma4AudioAttention",
+      "Gemma4AudioSubSampleConvProjectionLayer",
+      "Gemma4AudioSubSampleConvProjection",
+      "Gemma4AudioFeedForward",
+      "Gemma4AudioCausalConv1d",
+      "Gemma4AudioLightConv1d",
+      "Gemma4AudioLayer",
+      "Gemma4AudioModel",
+      "Gemma4ForCausalLM"
+    ]
+  },
+  "runtime_observed": {
+    "by_class": {},
+    "by_module": {},
+    "unexpected": []
+  },
+  "summary": {
+    "tt_implemented_count": 0,
+    "cpu_fallback_count": 21,
+    "out_of_scope_count": 14,
+    "runtime_fallback_count": 0,
+    "runtime_unexpected_count": 0
+  }
+}

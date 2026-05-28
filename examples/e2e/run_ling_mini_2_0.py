@@ -14,14 +14,17 @@ Usage::
     python examples/e2e/run_ling_mini_2_0.py
 """
 
+import json
 import os
+from pathlib import Path
+
 os.environ.setdefault("MESH_DEVICE", "T3K")
 
 import torch
 import ttnn
 from transformers import AutoTokenizer
 
-from tt_symbiote import AutoModelForCausalLM, set_device
+from tt_symbiote import AutoModelForCausalLM, compatibility, set_device
 
 # Fabric config must be set BEFORE open_mesh_device in current tt-metal HEAD;
 # `fabric_config=` is no longer a kwarg to `open_mesh_device` (it was removed
@@ -74,6 +77,17 @@ out = model.generate(
     past_key_values=model._tt_kv_cache,
 )
 print(tokenizer.decode(out[0][inputs["input_ids"].shape[-1]:]))
+
+# Persist compatibility.report next to the script so the aggregated
+# docs/cpu_vs_device_coverage.md page has a deterministic artefact.
+# Ling-mini-2.0 is a full TTNN port — the runtime_observed ledger
+# should stay empty (no fallbacks fired).
+report = compatibility.report(model)
+print("\n=== tt_symbiote.compatibility.report(model) ===")
+print(json.dumps(report, indent=2))
+coverage_path = Path(__file__).with_name(f"{Path(__file__).stem}_coverage.json")
+coverage_path.write_text(json.dumps(report, indent=2) + "\n")
+print(f"Wrote coverage report to {coverage_path}")
 
 # Match tt-metal's pytest `mesh_device` fixture teardown: close mesh, then
 # disable fabric. Without this, the next process that calls

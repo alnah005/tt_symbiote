@@ -27,7 +27,7 @@ submodules are still on CPU.
 Usage::
 
     source .venv/bin/activate        # see scripts/bootstrap_venv.sh
-    python examples/e2e/run_qwen3_vl_2b.py
+    python examples/e2e/qwen3_vl/run_qwen3_vl_2b.py
 """
 
 from __future__ import annotations
@@ -49,8 +49,8 @@ MODEL_ID = "Qwen/Qwen3-VL-2B-Instruct"
 
 # The repo-anchored path keeps the script runnable from any CWD: the
 # image lives at ``tests/images/test-dog.png`` and this script lives at
-# ``examples/e2e/`` (one level deeper).
-IMAGE_PATH = Path(__file__).resolve().parents[2] / "tests" / "images" / "test-dog.png"
+# ``examples/e2e/qwen3_vl/`` (two levels deeper, hence ``parents[3]``).
+IMAGE_PATH = Path(__file__).resolve().parents[3] / "tests" / "images" / "test-dog.png"
 PROMPT = "What is this animal in the photo?"
 
 ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
@@ -114,11 +114,16 @@ answer = processor.batch_decode(out[:, prompt_len:], skip_special_tokens=True)[0
 print(f"Qwen3-VL-2B-Instruct answer: {answer!r}")
 
 # Compatibility report drives the docs/supported_models.md "TT-implemented vs
-# CPU" status column. Printing it after every demo run keeps the table honest:
-# any new fallback that shows up under ``runtime_observed.unexpected`` is an
+# CPU" status column and the per-script row in docs/cpu_vs_device_coverage.md.
+# Any new fallback that shows up under ``runtime_observed.unexpected`` is an
 # actionable signal for the next-phase TTNN port.
+report = compatibility.report(model)
 print("\n=== tt_symbiote.compatibility.report(model) ===")
-print(json.dumps(compatibility.report(model), indent=2))
+print(json.dumps(report, indent=2))
+
+coverage_path = Path(__file__).with_name(f"{Path(__file__).stem}_coverage.json")
+coverage_path.write_text(json.dumps(report, indent=2) + "\n")
+print(f"Wrote coverage report to {coverage_path}")
 
 ttnn.close_mesh_device(mesh_device)
 

@@ -48,6 +48,13 @@ in `compatibility.report(...)["runtime_observed"]` flags any
 fallback that fired during the demo *and* was not declared (a sign
 the recipe drifted relative to the HF source).
 
+For the *full* CPU-vs-device split per demo (which exact classes run
+where, and on what hardware), see
+[`docs/cpu_vs_device_coverage.md`](cpu_vs_device_coverage.md). Each
+demo script also writes a `<script>_coverage.json` next to itself
+after every run; those JSON files are the source of truth that the
+coverage doc aggregates.
+
 ## Causal LM
 
 | Checkpoint | HF class | Status | TT / CPU / OOS | Hardware target | Reproducer | Walkthrough |
@@ -58,14 +65,14 @@ the recipe drifted relative to the HF source).
 
 | Checkpoint | HF class | Status | TT / CPU / OOS | Hardware target | Reproducer | Walkthrough |
 |---|---|---|---|---|---|---|
-| `microsoft/resnet-18` | `ResNetForImageClassification` | ⏳ structurally supported | full TTNN | N150 (1×1) | (see resnet-50) | — |
-| `microsoft/resnet-34` | `ResNetForImageClassification` | ⏳ structurally supported | full TTNN | N150 (1×1) | (see resnet-50) | — |
-| `microsoft/resnet-50` | `ResNetForImageClassification` | ✅ verified | full TTNN | N150 (1×1), T3K (1×1) | [`run_resnet50.py`](../examples/e2e/run_resnet50.py) | — |
-| `microsoft/resnet-101` | `ResNetForImageClassification` | ⏳ structurally supported | full TTNN | N150 (1×1) | (see resnet-50) | — |
-| `microsoft/resnet-152` | `ResNetForImageClassification` | ⏳ structurally supported | full TTNN | N150 (1×1) | (see resnet-50) | — |
+| `microsoft/resnet-18` | `ResNetForImageClassification` | ⏳ structurally supported | full TTNN | N150 (1×1) | [`resnet/run_resnet18.py`](../examples/e2e/resnet/run_resnet18.py) | — |
+| `microsoft/resnet-34` | `ResNetForImageClassification` | ⏳ structurally supported | full TTNN | N150 (1×1) | [`resnet/run_resnet34.py`](../examples/e2e/resnet/run_resnet34.py) | — |
+| `microsoft/resnet-50` | `ResNetForImageClassification` | ✅ verified | full TTNN | N150 (1×1), T3K (1×1) | [`resnet/run_resnet50.py`](../examples/e2e/resnet/run_resnet50.py) | — |
+| `microsoft/resnet-101` | `ResNetForImageClassification` | ⏳ structurally supported | full TTNN | N150 (1×1) | [`resnet/run_resnet101.py`](../examples/e2e/resnet/run_resnet101.py) | — |
+| `microsoft/resnet-152` | `ResNetForImageClassification` | ⏳ structurally supported | full TTNN | N150 (1×1) | [`resnet/run_resnet152.py`](../examples/e2e/resnet/run_resnet152.py) | — |
 
 The four non-50 ResNet variants share the same recipe; flipping each to
-✅ is a one-line model-id swap in `run_resnet50.py` plus updating the
+✅ requires running the per-variant script and updating the
 `hw_verified` flag in
 [`RESNET_TTNN_TUNING`](../src/tt_symbiote/models/resnet/configuration_resnet.py).
 
@@ -73,14 +80,14 @@ The four non-50 ResNet variants share the same recipe; flipping each to
 
 | Checkpoint | HF class | Status | TT / CPU / OOS | Hardware target | Reproducer | Walkthrough |
 |---|---|---|---|---|---|---|
-| `google/gemma-4-E2B-it` | `Gemma4ForConditionalGeneration` | ✅ verified (CPU-first) | 0 / 21 / 14 | N150 (1×1) | [`run_gemma4_e2b.py`](../examples/e2e/run_gemma4_e2b.py) | — |
-| `google/gemma-4-E4B-it` | `Gemma4ForConditionalGeneration` | ⏳ structurally supported | 0 / 21 / 14 | N150 (1×1) | (see E2B) | — |
-| `google/gemma-4-31B-it` | `Gemma4ForConditionalGeneration` | ⏳ structurally supported | 0 / 21 / 14 | T3K (1×8) | [`run_gemma4_31b.py`](../examples/e2e/run_gemma4_31b.py) | — |
-| `google/gemma-4-26B-A4B-it` | `Gemma4ForConditionalGeneration` | ⏳ structurally supported | 0 / 21 / 14 | T3K (1×8) | (see 31B) | — |
-| `Qwen/Qwen3-VL-2B-Instruct` | `Qwen3VLForConditionalGeneration` | ✅ verified (CPU-first) | 0 / 16 / 3 | N150 (1×1) | [`run_qwen3_vl_2b.py`](../examples/e2e/run_qwen3_vl_2b.py) | — |
-| `Qwen/Qwen3-VL-4B-Instruct` | `Qwen3VLForConditionalGeneration` | ⏳ structurally supported | 0 / 16 / 3 | N150 (1×1) | (see 2B) | — |
-| `Qwen/Qwen3-VL-8B-Instruct` | `Qwen3VLForConditionalGeneration` | ⏳ structurally supported | 0 / 16 / 3 | N150 (1×1) | (see 2B) | — |
-| `Qwen/Qwen3-VL-32B-Instruct` | `Qwen3VLForConditionalGeneration` | ⏳ structurally supported | 0 / 16 / 3 | T3K (1×8) | (see 2B) | — |
+| `google/gemma-4-E2B-it` | `Gemma4ForConditionalGeneration` | ✅ verified (CPU-first) | 0 / 21 / 14 | N150 (1×1) | [`gemma4/run_gemma4_e2b.py`](../examples/e2e/gemma4/run_gemma4_e2b.py) | — |
+| `google/gemma-4-E4B-it` | `Gemma4ForConditionalGeneration` | ⏳ structurally supported | 0 / 21 / 14 | N150 (1×1) | [`gemma4/run_gemma4_e4b.py`](../examples/e2e/gemma4/run_gemma4_e4b.py) | — |
+| `google/gemma-4-31B-it` | `Gemma4ForConditionalGeneration` | ⏳ structurally supported | 0 / 21 / 14 | T3K (1×8) | [`gemma4/run_gemma4_31b.py`](../examples/e2e/gemma4/run_gemma4_31b.py) | — |
+| `google/gemma-4-26B-A4B-it` | `Gemma4ForConditionalGeneration` | ⏳ structurally supported | 0 / 21 / 14 | T3K (1×8) | [`gemma4/run_gemma4_26b_a4b.py`](../examples/e2e/gemma4/run_gemma4_26b_a4b.py) | — |
+| `Qwen/Qwen3-VL-2B-Instruct` | `Qwen3VLForConditionalGeneration` | ✅ verified (CPU-first) | 0 / 16 / 3 | N150 (1×1) | [`qwen3_vl/run_qwen3_vl_2b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_2b.py) | — |
+| `Qwen/Qwen3-VL-4B-Instruct` | `Qwen3VLForConditionalGeneration` | ⏳ structurally supported | 0 / 16 / 3 | N150 (1×1) | [`qwen3_vl/run_qwen3_vl_4b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_4b.py) | — |
+| `Qwen/Qwen3-VL-8B-Instruct` | `Qwen3VLForConditionalGeneration` | ⏳ structurally supported | 0 / 16 / 3 | N150 (1×1) | [`qwen3_vl/run_qwen3_vl_8b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_8b.py) | — |
+| `Qwen/Qwen3-VL-32B-Instruct` | `Qwen3VLForConditionalGeneration` | ⏳ structurally supported | 0 / 16 / 3 | T3K (1×8) | [`qwen3_vl/run_qwen3_vl_32b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_32b.py) | — |
 
 All four Gemma-4 variants share the same recipe
 ([`Gemma4Recipe`](../src/tt_symbiote/models/gemma4/modeling_gemma4.py)),

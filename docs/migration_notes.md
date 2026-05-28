@@ -964,3 +964,79 @@ bring the full HW-free suite to 109 tests in `tests/auto/` plus 3 new
 smoke tests. All green on the first run after scaffolding (zero
 iterations on the test files, also a load-bearing claim about the
 skill's correctness).
+
+## Pre-Phase-8: per-variant `examples/e2e/` reorg + CPU/device coverage audit
+
+Two pre-Phase-8 cleanups landed together in a single commit. Both are
+mechanical (no recipe changes, no Auto-class changes) but visible to
+every user reading the example catalogue or the docs.
+
+### Per-variant e2e scripts
+
+Before this commit the e2e folder was flat with a single script per
+*verified* checkpoint, and the variant siblings shared by model-id
+swap. After: one folder per multi-variant family, one script per
+HF-published variant. Scripts that have not yet been hardware-verified
+ship as `hw_verified=False` in the matching `*_TTNN_TUNING` table.
+
+| Family | Before | After |
+|---|---|---|
+| Ling | 1 script (Ling-mini-2.0) at folder root | unchanged (stays at root until a sibling variant lands) |
+| ResNet | 1 script (resnet-50) at folder root | 5 scripts under `examples/e2e/resnet/` (18, 34, 50, 101, 152) |
+| Gemma-4 | 2 scripts (E2B, 31B) at folder root | 4 scripts under `examples/e2e/gemma4/` (E2B, E4B, 31B, 26B-A4B) |
+| Qwen3-VL | 1 script (2B-Instruct) at folder root | 4 scripts under `examples/e2e/qwen3_vl/` (2B, 4B, 8B, 32B) |
+
+Each family folder gains a `README.md` with the shared license / weight
+footprint / RAM-requirement notes that were previously duplicated
+across script docstrings. The `git mv` of the four existing scripts
+preserves blame.
+
+The `port-hf-model-to-tt-symbiote` skill was updated in lockstep:
+`SKILL.md` scaffolds into `examples/e2e/<NAME>/run_<MODEL>.py` (and
+creates the family folder + README if missing), the VLM template uses
+`parents[3]` for `IMAGE_PATH`, and the acceptance gates require a
+matching `<MODEL>_coverage.json` next to every script.
+
+### CPU/device coverage audit
+
+Every demo now ends with a 5-line block:
+
+```python
+report = compatibility.report(model)
+coverage_path = Path(__file__).with_name(f"{Path(__file__).stem}_coverage.json")
+coverage_path.write_text(json.dumps(report, indent=2) + "\n")
+```
+
+The 14 resulting JSON artefacts (one per script, committed alongside)
+are the source of truth for the new
+[`docs/cpu_vs_device_coverage.md`](cpu_vs_device_coverage.md) page,
+which aggregates them into per-family CPU/device tables. The two
+already-verified VLM demos (`run_gemma4_e2b.py`,
+`run_qwen3_vl_2b.py`) and ResNet-50 were re-run on N150 to capture
+real artefacts (`runtime_observed.unexpected == []` on all three); the
+remaining 11 ship as design-time-only stubs that the next demo run
+overwrites automatically.
+
+The audit confirms the headline fact about the Phase 7 state: **all
+Gemma-4 and all Qwen3-VL submodules currently run on CPU** (21 CPU
+classes for Gemma-4 E2B, 16 for Qwen3-VL-2B), with the Tenstorrent
+mesh opened only to satisfy the `set_device` contract and stash
+`_tt_runtime_config` for downstream TTNN wrappers. ResNet and Ling
+still run their actual model computation on device (full TTNN ports
+from Phase 5/6).
+
+### Follow-ups (deferred)
+
+- **Backfill design-time lists** for the Ling and ResNet recipes
+  (`tt_implemented` / `cpu_fallback` / `out_of_scope`). Currently
+  empty for both because those recipes predate the Phase 7 list
+  convention; the runtime ledger is the only authoritative source for
+  their CPU/device split.
+- **Hardware verification of the new scripts** — each is an
+  independent run-and-flip-the-flag step:
+  `gemma4/run_gemma4_e4b.py`, `gemma4/run_gemma4_26b_a4b.py`,
+  `gemma4/run_gemma4_31b.py`, `qwen3_vl/run_qwen3_vl_{4,8,32}b.py`,
+  `resnet/run_resnet{18,34,101,152}.py` (9 scripts total).
+- **CI gate** that fails if any committed `*_coverage.json` has
+  `runtime_observed.unexpected != []`. Trivial follow-up — the file
+  format is already JSON-friendly.

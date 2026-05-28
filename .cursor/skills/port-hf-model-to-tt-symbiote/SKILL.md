@@ -107,8 +107,13 @@ tests/auto/test_<NAME>_recipe.py      <- from templates/recipe_test_template.py
 tests/models/<NAME>/test_modeling_<NAME>.py
                                       <- from templates/smoke_test_template.py
 
-examples/e2e/run_<MODEL>.py           <- from templates/e2e_demo_<TASK>_template.py
+examples/e2e/<NAME>/run_<MODEL>.py     <- from templates/e2e_demo_<TASK>_template.py
                                          (TASK in {llm, vision, vlm})
+                                         (create the <NAME>/ folder + README.md if missing)
+examples/e2e/<NAME>/<MODEL>_coverage.json
+                                       <- written by the demo at the end of every run
+                                         (commit a design-time-only stub if the demo
+                                          hasn't been run on hardware yet)
 ```
 
 **Do not edit the templates** — they are the source of truth. Substitute placeholders, write the substituted files into the target paths, then run the post-scaffold checks below.
@@ -136,7 +141,7 @@ All three commands must succeed before moving to Phase D.
 Run the e2e demo on the listed hardware target:
 
 ```bash
-python examples/e2e/run_<MODEL>.py
+python examples/e2e/<NAME>/run_<MODEL>.py
 ```
 
 Expect:
@@ -183,9 +188,11 @@ All must pass; do not commit otherwise:
 [ ] ReadLints on every file the skill touched -> 0 errors.
 [ ] python -m pytest tests/auto/ -q              -> full HW-free suite green
 [ ] python -m pytest tests/models/<NAME>/ -v     -> new model's HW-free tests green
-[ ] python examples/e2e/run_<MODEL>.py            -> exit 0 + semantic assert ok
+[ ] python examples/e2e/<NAME>/run_<MODEL>.py            -> exit 0 + semantic assert ok
 [ ] compatibility.report(model)["runtime_observed"]["unexpected"] == []
+[ ] examples/e2e/<NAME>/<MODEL>_coverage.json exists (real if run on HW; design-time stub otherwise)
 [ ] docs/supported_models.md row exists with the right status flag
+[ ] docs/cpu_vs_device_coverage.md has a section for the new model
 [ ] docs/migration_notes.md Phase 7 section exists and cites this skill
 [ ] git status (after staging) lists every artefact; no surprise files
 ```

@@ -1,18 +1,31 @@
-"""End-to-end "what is this animal?" demo for ``<MODEL_ID>``.
+"""End-to-end "what is this animal?" demo for ``google/gemma-4-E4B-it`` on N150.
 
-Loads <MODEL_HUMAN_NAME> through ``tt_symbiote.<AUTO_CLASS>``, binds a
-TTNN mesh via :func:`set_device`, runs a single ``model.generate`` call
-against an image + text prompt, and asserts the decoded answer contains
-``"dog"``.
+Sibling of :mod:`examples.e2e.gemma4.run_gemma4_e2b` for the next-size-up
+Gemma-4 variant. Same recipe (:class:`Gemma4Recipe`), same chat template,
+same image + prompt, same semantic check.
 
-Mirrors :mod:`examples.e2e.run_gemma4_e2b` (the CPU-first VLM reference)
-in one file per model so successfully-running models can be tracked
-verbatim in ``examples/e2e/README.md``.
+Resource notes
+--------------
+
+* Weights are ~18 GB in BF16 (E4B is approximately 2x the E2B parameter
+  count). ``from_pretrained`` downloads on first run. Allocate **at
+  least 24 GB free RAM** before running.
+* CPU forward of the 4B-effective-params transformer is slower than
+  E2B but still tractable on a typical workstation (~minutes for the
+  full 64-token decode).
+* Mesh shape is still ``(1, 1)`` — E4B fits a single N150 chip in
+  Phase 7's CPU-first port; the recipe walker just attaches the
+  device handle and ``_tt_runtime_config``.
+
+This file is the Phase 7 reference reproducer for the E4B variant. The
+smaller E2B variant (:mod:`run_gemma4_e2b`) is the recommended first
+run; this script validates that the same recipe scales without
+modification.
 
 Usage::
 
     source .venv/bin/activate        # see scripts/bootstrap_venv.sh
-    python examples/e2e/<NAME>/run_<MODEL_FILENAME>.py
+    python examples/e2e/gemma4/run_gemma4_e4b.py
 """
 
 from __future__ import annotations
@@ -21,37 +34,37 @@ import json
 import os
 from pathlib import Path
 
-os.environ.setdefault("MESH_DEVICE", "<MESH_ENV>")
+os.environ.setdefault("MESH_DEVICE", "N150")
 
 import torch  # noqa: E402
 import ttnn  # noqa: E402
 from PIL import Image  # noqa: E402
 from transformers import AutoProcessor  # noqa: E402
 
-from tt_symbiote import <AUTO_CLASS>, compatibility, set_device  # noqa: E402
+from tt_symbiote import AutoModelForImageTextToText, compatibility, set_device  # noqa: E402
 
-MODEL_ID = "<MODEL_ID>"
+MODEL_ID = "google/gemma-4-E4B-it"
 
 IMAGE_PATH = Path(__file__).resolve().parents[3] / "tests" / "images" / "test-dog.png"
 PROMPT = "What is this animal in the photo?"
 
-ttnn.set_fabric_config(ttnn.FabricConfig.<FABRIC_CONFIG>)
+ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 mesh_device = ttnn.open_mesh_device(
-    mesh_shape=ttnn.MeshShape<MESH_SHAPE>,
+    mesh_shape=ttnn.MeshShape(1, 1),
     trace_region_size=200_000_000,
     num_command_queues=1,
     l1_small_size=245760,
 )
 
 processor = AutoProcessor.from_pretrained(MODEL_ID)
-model = <AUTO_CLASS>.from_pretrained(
+model = AutoModelForImageTextToText.from_pretrained(
     MODEL_ID,
     dtype=torch.bfloat16,
 )
 
 set_device(model, mesh_device, dump_visualization=False)
 assert hasattr(model, "_tt_runtime_config"), (
-    "<CLASS_NAME_PASCAL>.post_register should have attached _tt_runtime_config"
+    "Gemma4Recipe.post_register should have attached _tt_runtime_config"
 )
 
 model.eval()
@@ -85,31 +98,28 @@ out = model.generate(
 
 prompt_len = inputs["input_ids"].shape[-1]
 answer = processor.batch_decode(out[:, prompt_len:], skip_special_tokens=True)[0].strip()
-print(f"<MODEL_HUMAN_NAME> answer: {answer!r}")
+print(f"Gemma-4 E4B answer: {answer!r}")
 
+# Compatibility report drives docs/cpu_vs_device_coverage.md.
 report = compatibility.report(model)
 print("\n=== tt_symbiote.compatibility.report(model) ===")
 print(json.dumps(report, indent=2))
 
-# Persist next to the script so docs/cpu_vs_device_coverage.md always
-# has a deterministic, checked-in artefact to read from.
+# Persist the report next to the script so the aggregated docs page
+# always has a deterministic, checked-in artefact to read from.
 coverage_path = Path(__file__).with_name(f"{Path(__file__).stem}_coverage.json")
 coverage_path.write_text(json.dumps(report, indent=2) + "\n")
 print(f"Wrote coverage report to {coverage_path}")
 
 ttnn.close_mesh_device(mesh_device)
 
-# Permissive dog/breed list — see reference-vlm.md "Semantic check".
-# Some VLMs skip the generic word "dog" and identify the breed
-# directly; that's a correct answer, not a failure.
 _DOG_EQUIVALENTS = (
     "dog", "puppy", "retriever", "labrador", "poodle",
     "terrier", "spaniel", "shepherd", "husky", "bulldog",
 )
 _lower = answer.lower()
 assert any(term in _lower for term in _DOG_EQUIVALENTS), (
-    f"Expected the answer to mention a dog or a dog breed (the photo "
-    f"shows a dog). Got: {answer!r}. Re-check the image path "
-    f"({IMAGE_PATH}) and the chat-template formatting."
+    f"Expected the answer to mention a dog or a dog breed. "
+    f"Got: {answer!r}."
 )
 print("\nOK: answer correctly identifies the animal as a dog.")

@@ -1,0 +1,38 @@
+{
+  "status": "not yet recorded",
+  "model_class": "Qwen3VLForConditionalGeneration",
+  "model_id": "Qwen/Qwen3-VL-4B-Instruct",
+  "hardware_target": "N150 (1x1)",
+  "design_time": {
+    "tt_implemented": [],
+    "cpu_fallback": [
+      "Qwen3VLVisionMLP",
+      "Qwen3VLVisionPatchEmbed",
+      "Qwen3VLVisionRotaryEmbedding",
+      "Qwen3VLVisionPatchMerger",
+      "Qwen3VLVisionAttention",
+      "Qwen3VLVisionBlock",
+      "Qwen3VLVisionModel",
+      "Qwen3VLTextRotaryEmbedding",
+      "Qwen3VLTextRMSNorm",
+      "Qwen3VLTextAttention",
+      "Qwen3VLTextMLP",
+      "Qwen3VLTextDecoderLayer",
+      "Qwen3VLTextModel",
+      "Qwen3VLPreTrainedModel",
+      "Qwen3VLModel",
+      "Qwen3VLForConditionalGeneration"
+    ],
+    "out_of_scope": [
+      "BaseModelOutputWithDeepstackFeatures",
+      "Qwen3VLModelOutputWithPast",
+      "Qwen3VLCausalLMOutputWithPast"
+    ]
+  },
+  "summary": {
+    "tt_implemented_count": 0,
+    "cpu_fallback_count": 16,
+    "out_of_scope_count": 3
+  },
+  "how_to_regenerate": "python examples/e2e/qwen3_vl/run_qwen3_vl_4b.py"
+}

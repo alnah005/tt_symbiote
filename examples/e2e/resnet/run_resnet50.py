@@ -16,15 +16,19 @@ tracking table at ``examples/e2e/README.md``.
 Usage::
 
     source .venv/bin/activate        # see scripts/bootstrap_venv.sh
-    python examples/e2e/run_resnet50.py
+    python examples/e2e/resnet/run_resnet50.py
 """
 
+import json
 import os
+from pathlib import Path
+
 os.environ.setdefault("MESH_DEVICE", "N150")  # single-chip; works on T3K too
 
 import torch
 import ttnn
-from tt_symbiote import AutoModelForImageClassification, set_device
+
+from tt_symbiote import AutoModelForImageClassification, compatibility, set_device
 
 
 # Fabric config must be set BEFORE open_mesh_device in current tt-metal HEAD;
@@ -70,6 +74,17 @@ logits = outputs.logits
 predicted_class_idx = int(logits.argmax(dim=-1).item())
 label = model.config.id2label.get(predicted_class_idx, f"<class {predicted_class_idx}>")
 print(f"ResNet-50 top-1: class {predicted_class_idx} = {label!r}")
+
+# Persist compatibility.report next to the script so the aggregated
+# docs/cpu_vs_device_coverage.md page has a deterministic artefact.
+# ResNet-50 is a full TTNN port — the runtime_observed ledger should
+# stay empty (no fallbacks fired).
+report = compatibility.report(model)
+print("\n=== tt_symbiote.compatibility.report(model) ===")
+print(json.dumps(report, indent=2))
+coverage_path = Path(__file__).with_name(f"{Path(__file__).stem}_coverage.json")
+coverage_path.write_text(json.dumps(report, indent=2) + "\n")
+print(f"Wrote coverage report to {coverage_path}")
 
 # Match tt-metal's pytest `mesh_device` fixture teardown.
 ttnn.close_mesh_device(mesh_device)

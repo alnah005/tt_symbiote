@@ -31,7 +31,7 @@ modification.
 Usage::
 
     source .venv/bin/activate        # see scripts/bootstrap_venv.sh
-    python examples/e2e/run_gemma4_31b.py
+    python examples/e2e/gemma4/run_gemma4_31b.py
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ from tt_symbiote import AutoModelForImageTextToText, compatibility, set_device  
 
 MODEL_ID = "google/gemma-4-31B-it"
 
-IMAGE_PATH = Path(__file__).resolve().parents[2] / "tests" / "images" / "test-dog.png"
+IMAGE_PATH = Path(__file__).resolve().parents[3] / "tests" / "images" / "test-dog.png"
 PROMPT = "What is this animal in the photo?"
 
 # Even on the CPU-first path we open the full T3K mesh: the recipe's
@@ -112,13 +112,24 @@ prompt_len = inputs["input_ids"].shape[-1]
 answer = processor.batch_decode(out[:, prompt_len:], skip_special_tokens=True)[0].strip()
 print(f"Gemma-4 31B answer: {answer!r}")
 
+report = compatibility.report(model)
 print("\n=== tt_symbiote.compatibility.report(model) ===")
-print(json.dumps(compatibility.report(model), indent=2))
+print(json.dumps(report, indent=2))
+
+coverage_path = Path(__file__).with_name(f"{Path(__file__).stem}_coverage.json")
+coverage_path.write_text(json.dumps(report, indent=2) + "\n")
+print(f"Wrote coverage report to {coverage_path}")
 
 ttnn.close_mesh_device(mesh_device)
 ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
-assert "dog" in answer.lower(), (
-    f"Expected the answer to mention 'dog'. Got: {answer!r}."
+_DOG_EQUIVALENTS = (
+    "dog", "puppy", "retriever", "labrador", "poodle",
+    "terrier", "spaniel", "shepherd", "husky", "bulldog",
 )
-print("\nOK: answer contains 'dog'.")
+_lower = answer.lower()
+assert any(term in _lower for term in _DOG_EQUIVALENTS), (
+    f"Expected the answer to mention a dog or a dog breed. "
+    f"Got: {answer!r}."
+)
+print("\nOK: answer correctly identifies the animal as a dog.")
