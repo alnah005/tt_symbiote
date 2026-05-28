@@ -1177,3 +1177,83 @@ is a small follow-up.
 - **Wave B (Qwen3-VL)**: same pattern as Wave A — RMSNorm, text MLP,
   vision MLP, patch merger, multimodal embedder via existing TTNN
   integrations. Deferred to a follow-up session.
+
+# Phase 8 Wave B — Qwen3-VL first on-device wrappers (N150)
+
+Same pattern as Wave A (Gemma-4), applied to
+`Qwen/Qwen3-VL-2B-Instruct`. Four HF classes moved from `cpu_fallback`
+to `tt_implemented`:
+
+| HF class | TTNN wrapper | Reuses |
+|---|---|---|
+| `Qwen3VLTextRMSNorm` | `TTNNQwen3VLTextRMSNorm` | `ttnn.rms_norm` with a learnable scale weight buffer. |
+| `Qwen3VLTextMLP` | `TTNNQwen3VLTextMLP` | `TTNNLinear` × 3 + `ttnn.silu` + `ttnn.multiply` (SwiGLU). |
+| `Qwen3VLVisionMLP` | `TTNNQwen3VLVisionMLP` | `TTNNLinear` × 2 + `ttnn.gelu` (biased two-layer FFN). |
+| `Qwen3VLVisionPatchMerger` | `TTNNQwen3VLVisionPatchMerger` | `TTNNLinear` × 2 + `ttnn.gelu`. The LN at the front of the merger is kept on host (same approach as Gemma-4's `TTNNGemma4MultimodalEmbedder`) — the existing single-device `TTNNLayerNorm` trips on the Qwen3-VL merged-dim shape and falls back at runtime, which is more friction than keeping the LN host-resident. |
+
+Implementations live in:
+
+- `src/tt_symbiote/models/qwen3_vl/modeling_qwen3_vl_text.py` (text-side).
+- `src/tt_symbiote/models/qwen3_vl/modeling_qwen3_vl_vision.py` (vision-side).
+
+The Qwen3-VL recipe (`modeling_qwen3_vl.py`) wires up the four swaps,
+declares `Qwen3VLPreTrainedModel`, `Qwen3VLModel`, and
+`Qwen3VLForConditionalGeneration` as `host_glue`, and keeps the
+bespoke pieces (M-RoPE precompute, Q/K head-norm-aware text attention,
+varlen-packed vision SDPA, DeepStack injection at sparse layers,
+Conv3d patch embed) in `cpu_fallback`.
+
+## Acceptance result
+
+`python examples/e2e/qwen3_vl/run_qwen3_vl_2b.py` on N150:
+
+- `tt_implemented`: 4. `cpu_fallback`: 9. `host_glue`: 3.
+  `out_of_scope`: 3.
+- `runtime_observed.unexpected`: `[]`.
+- Generated answer: dog-equivalents check passed; the model identifies
+  the photo as a (Golden Retriever) puppy.
+
+Four PatchMerger modules show up in the runtime ledger
+(`model.visual.merger` plus the three deep-stack merger entries) —
+their class is `Qwen3VLVisionPatchMerger`, which is in
+`tt_implemented`, so the report does not flag them as `unexpected`.
+The fallback is triggered by the boundary conversion between
+torch-host LN and on-device linears (same root cause as Gemma-4's
+embedding fallbacks); surfacing "tt_implemented but observed
+fallback" into the report is the same small follow-up listed under
+Wave A.
+
+## Files touched (Wave B)
+
+- `src/tt_symbiote/models/qwen3_vl/modeling_qwen3_vl.py` — recipe
+  wired up with four swaps; design-time lists updated; `host_glue`
+  added.
+- `src/tt_symbiote/models/qwen3_vl/modeling_qwen3_vl_text.py` (NEW).
+- `src/tt_symbiote/models/qwen3_vl/modeling_qwen3_vl_vision.py` (NEW).
+- `src/tt_symbiote/models/qwen3_vl/__init__.py` — docstring updated.
+- `examples/e2e/qwen3_vl/*_coverage.json` — all four refreshed to the
+  4-bucket shape (2B has runtime data; 4B/8B/32B are design-time stubs).
+- `docs/cpu_vs_device_coverage.md`, `docs/supported_models.md` —
+  Qwen3-VL rows updated.
+
+## What's deferred (Wave B+1)
+
+The Qwen3-VL text decoder cannot move to device until the bespoke
+text attention is implemented. The bespoke parts are:
+
+- **M-RoPE precompute** — 3-axis (temporal, height, width) inv_freq
+  precompute and interleaved cos/sin assembly per token. Distinct from
+  Gemma-4's dual-axis text RoPE.
+- **Q/K head-norm-aware text attention** — `q_norm` / `k_norm`
+  RMSNorms are applied *per head*, post-projection, before the
+  scaled-dot-product matmul.
+- **Varlen-packed vision SDPA** — Qwen3-VL packs all image patches
+  from a batch into one sequence with `cu_seqlens` boundaries instead
+  of using a padded batch dim.
+- **DeepStack injection** — at specific layers, the visual encoder's
+  intermediate features are added (with their own `Qwen3VLVisionPatchMerger`)
+  into the text decoder's hidden state. Requires the decoder to know
+  *which* layer index it's at, which interacts with the cache.
+
+None of these fit the existing single-device attention modules
+without bespoke work — same deferral rationale as Gemma-4 Wave A+1.

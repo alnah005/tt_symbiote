@@ -151,30 +151,32 @@ Source: [`run_gemma4_26b_a4b.py`](../examples/e2e/gemma4/run_gemma4_26b_a4b.py)
 Same class layout; the `Gemma4TextExperts` / `Gemma4TextRouter` MoE
 pair *is* exercised here (unlike on E2B).
 
-#### Qwen3-VL-2B-Instruct — N150 (1×1), CPU-first (✅ verified)
+#### Qwen3-VL-2B-Instruct — N150 (1×1), Wave B (✅ verified)
 
 Source: [`examples/e2e/qwen3_vl/run_qwen3_vl_2b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_2b.py)
 + [`examples/e2e/qwen3_vl/run_qwen3_vl_2b_coverage.json`](../examples/e2e/qwen3_vl/run_qwen3_vl_2b_coverage.json)
 
-Counts: **0 TT / 16 CPU / 3 OOS**. `runtime_observed.unexpected == []`.
+Counts: **4 TT / 9 CPU / 3 host_glue / 3 OOS**.
+`runtime_observed.unexpected == []`.
 
 | Stage | Component class | Where | Hardware |
 |---|---|---|---|
 | TTNN runtime | `set_fabric_config(DISABLED)` + `open_mesh_device((1,1))` | N150 (mgmt) | init/alloc |
 | Loader | `AutoProcessor.from_pretrained` (→ `Qwen3VLProcessor`) | CPU | — |
 | Loader | `AutoModelForImageTextToText.from_pretrained` | CPU | — |
-| Walker | `tt_symbiote.set_device` | CPU + N150 handle | no compute |
+| Walker | `tt_symbiote.set_device` | CPU + N150 handle | swaps 4 classes |
 | Tokenisation | `processor.apply_chat_template` | CPU | — |
-| Forward (vision) | `Qwen3VLVisionPatchEmbed`, `Qwen3VLVisionRotaryEmbedding`, `Qwen3VLVisionPatchMerger`, `Qwen3VLVisionAttention`, `Qwen3VLVisionMLP`, `Qwen3VLVisionBlock`, `Qwen3VLVisionModel` | CPU | — |
-| Forward (text) | `Qwen3VLTextRotaryEmbedding`, `Qwen3VLTextRMSNorm`, `Qwen3VLTextAttention`, `Qwen3VLTextMLP`, `Qwen3VLTextDecoderLayer`, `Qwen3VLTextModel` | CPU | — |
-| Forward (top-level) | `Qwen3VLPreTrainedModel`, `Qwen3VLModel`, `Qwen3VLForConditionalGeneration` | CPU | — |
+| Forward (Wave B TTNN) | `Qwen3VLTextRMSNorm`, `Qwen3VLTextMLP`, `Qwen3VLVisionMLP`, `Qwen3VLVisionPatchMerger` | **N150** | matmuls + SiLU/GELU |
+| Forward (vision) | `Qwen3VLVisionPatchEmbed` (Conv3d), `Qwen3VLVisionRotaryEmbedding` (2-D), `Qwen3VLVisionAttention` (varlen-packed), `Qwen3VLVisionBlock`, `Qwen3VLVisionModel` | CPU | bespoke 2-D RoPE / varlen SDPA not yet ported |
+| Forward (text) | `Qwen3VLTextRotaryEmbedding` (M-RoPE), `Qwen3VLTextAttention` (Q/K head-norms), `Qwen3VLTextDecoderLayer`, `Qwen3VLTextModel` (DeepStack injection) | CPU | bespoke M-RoPE + Q/K head-norms not yet ported |
+| Forward (host_glue) | `Qwen3VLPreTrainedModel`, `Qwen3VLModel`, `Qwen3VLForConditionalGeneration` | CPU (policy) | masked_scatter + cu_seqlens build + DeepStack dispatch |
 | De-tokenisation | `processor.batch_decode` | CPU | — |
 | Out of scope | `BaseModelOutputWithDeepstackFeatures`, `Qwen3VLModelOutputWithPast`, `Qwen3VLCausalLMOutputWithPast` | — | — |
 
 Qwen3-VL has no audio tower, which is why the OOS count is 3 (just
 the output dataclasses) vs. Gemma-4's 14.
 
-#### Qwen3-VL-4B / 8B / 32B Instruct — CPU-first (⏳ structurally supported)
+#### Qwen3-VL-4B / 8B / 32B Instruct — Wave B (⏳ structurally supported)
 
 Same class layout as 2B (same recipe). Per-variant sources:
 [`run_qwen3_vl_4b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_4b.py)
@@ -200,17 +202,17 @@ Aggregating the JSON files into a single overview:
 | `gemma4/run_gemma4_e4b.py` | N150 (1×1) | ⏳ stub | 5 | 14 | 2 | 14 | n/a |
 | `gemma4/run_gemma4_31b.py` | T3K (1×8) | ⏳ stub | 5 | 14 | 2 | 14 | n/a |
 | `gemma4/run_gemma4_26b_a4b.py` | T3K (1×8) | ⏳ stub | 5 | 14 | 2 | 14 | n/a |
-| `qwen3_vl/run_qwen3_vl_2b.py` | N150 (1×1) | ✅ verified (re-run in reorg) | 0 | 16 | 0 | 3 | 0 |
-| `qwen3_vl/run_qwen3_vl_4b.py` | N150 (1×1) | ⏳ stub | 0 | 16 | 0 | 3 | n/a |
-| `qwen3_vl/run_qwen3_vl_8b.py` | N150 (1×1) | ⏳ stub | 0 | 16 | 0 | 3 | n/a |
-| `qwen3_vl/run_qwen3_vl_32b.py` | T3K (1×8) | ⏳ stub | 0 | 16 | 0 | 3 | n/a |
+| `qwen3_vl/run_qwen3_vl_2b.py` | N150 (1×1) | ✅ verified (Phase 8 Wave B) | **4** | 9 | 3 | 3 | 0 |
+| `qwen3_vl/run_qwen3_vl_4b.py` | N150 (1×1) | ⏳ stub | 4 | 9 | 3 | 3 | n/a |
+| `qwen3_vl/run_qwen3_vl_8b.py` | N150 (1×1) | ⏳ stub | 4 | 9 | 3 | 3 | n/a |
+| `qwen3_vl/run_qwen3_vl_32b.py` | T3K (1×8) | ⏳ stub | 4 | 9 | 3 | 3 | n/a |
 
 **Net Tenstorrent coverage today:** ResNet-50 (full TTNN on N150) and
 Ling-mini-2.0 (full TTNN on T3K) remain the only models with the
-attention/MoE/decoder loop on device. Gemma-4 E2B now has *partial*
-on-device execution (5 simple compute classes accelerated; the
-attention + decoder loop still run on host pending the bespoke
-KV-sharing / dual-RoPE / PLE wrappers).
+attention/MoE/decoder loop on device. Gemma-4 E2B and Qwen3-VL-2B
+now have *partial* on-device execution (5 and 4 simple compute classes
+respectively; their attention + decoder loops still run on host
+pending the bespoke text-attention / RoPE wrappers).
 
 ## Open follow-ups
 
@@ -218,12 +220,12 @@ KV-sharing / dual-RoPE / PLE wrappers).
   `out_of_scope` lists in the **Ling** and **ResNet** recipes so
   their JSON artefacts have populated design-time sections (currently
   empty for both because those recipes predate the list convention).
-- Land Wave B (Qwen3-VL): same pattern as Gemma-4 Wave A — RMSNorm,
-  text MLP, vision MLP, patch merger, multimodal embedder via the
-  existing TTNN integrations.
 - Land Wave A+1 for Gemma-4: the bespoke text attention (KV-sharing
   + dual RoPE + per-head norms) and PLE. This is what unblocks moving
   the decoder loop to device.
+- Land Wave B+1 for Qwen3-VL: the bespoke M-RoPE precompute,
+  Q/K head-norm-aware attention, varlen-packed vision SDPA, and
+  DeepStack-aware decoder loop.
 - CI gate that fails if any committed `*_coverage.json` has
   `runtime_observed.unexpected != []`. Trivial follow-up; the file
   format is already JSON-friendly.

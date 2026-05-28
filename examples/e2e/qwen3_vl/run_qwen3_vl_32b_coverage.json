@@ -4,21 +4,24 @@
   "model_id": "Qwen/Qwen3-VL-32B-Instruct",
   "hardware_target": "T3K (1x8)",
   "design_time": {
-    "tt_implemented": [],
-    "cpu_fallback": [
+    "tt_implemented": [
       "Qwen3VLVisionMLP",
+      "Qwen3VLVisionPatchMerger",
+      "Qwen3VLTextRMSNorm",
+      "Qwen3VLTextMLP"
+    ],
+    "cpu_fallback": [
       "Qwen3VLVisionPatchEmbed",
       "Qwen3VLVisionRotaryEmbedding",
-      "Qwen3VLVisionPatchMerger",
       "Qwen3VLVisionAttention",
       "Qwen3VLVisionBlock",
       "Qwen3VLVisionModel",
       "Qwen3VLTextRotaryEmbedding",
-      "Qwen3VLTextRMSNorm",
       "Qwen3VLTextAttention",
-      "Qwen3VLTextMLP",
       "Qwen3VLTextDecoderLayer",
-      "Qwen3VLTextModel",
+      "Qwen3VLTextModel"
+    ],
+    "host_glue": [
       "Qwen3VLPreTrainedModel",
       "Qwen3VLModel",
       "Qwen3VLForConditionalGeneration"
@@ -30,8 +33,9 @@
     ]
   },
   "summary": {
-    "tt_implemented_count": 0,
-    "cpu_fallback_count": 16,
+    "tt_implemented_count": 4,
+    "cpu_fallback_count": 9,
+    "host_glue_count": 3,
     "out_of_scope_count": 3
   },
   "how_to_regenerate": "python examples/e2e/qwen3_vl/run_qwen3_vl_32b.py"

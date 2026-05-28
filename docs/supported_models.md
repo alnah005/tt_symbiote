@@ -90,10 +90,10 @@ The four non-50 ResNet variants share the same recipe; flipping each to
 | `google/gemma-4-E4B-it` | `Gemma4ForConditionalGeneration` | ⏳ structurally supported | 5 / 14 / 2 / 14 | N150 (1×1) | [`gemma4/run_gemma4_e4b.py`](../examples/e2e/gemma4/run_gemma4_e4b.py) | — |
 | `google/gemma-4-31B-it` | `Gemma4ForConditionalGeneration` | ⏳ structurally supported | 5 / 14 / 2 / 14 | T3K (1×8) | [`gemma4/run_gemma4_31b.py`](../examples/e2e/gemma4/run_gemma4_31b.py) | — |
 | `google/gemma-4-26B-A4B-it` | `Gemma4ForConditionalGeneration` | ⏳ structurally supported | 5 / 14 / 2 / 14 | T3K (1×8) | [`gemma4/run_gemma4_26b_a4b.py`](../examples/e2e/gemma4/run_gemma4_26b_a4b.py) | — |
-| `Qwen/Qwen3-VL-2B-Instruct` | `Qwen3VLForConditionalGeneration` | ✅ verified (CPU-first) | 0 / 16 / 0 / 3 | N150 (1×1) | [`qwen3_vl/run_qwen3_vl_2b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_2b.py) | — |
-| `Qwen/Qwen3-VL-4B-Instruct` | `Qwen3VLForConditionalGeneration` | ⏳ structurally supported | 0 / 16 / 0 / 3 | N150 (1×1) | [`qwen3_vl/run_qwen3_vl_4b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_4b.py) | — |
-| `Qwen/Qwen3-VL-8B-Instruct` | `Qwen3VLForConditionalGeneration` | ⏳ structurally supported | 0 / 16 / 0 / 3 | N150 (1×1) | [`qwen3_vl/run_qwen3_vl_8b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_8b.py) | — |
-| `Qwen/Qwen3-VL-32B-Instruct` | `Qwen3VLForConditionalGeneration` | ⏳ structurally supported | 0 / 16 / 0 / 3 | T3K (1×8) | [`qwen3_vl/run_qwen3_vl_32b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_32b.py) | — |
+| `Qwen/Qwen3-VL-2B-Instruct` | `Qwen3VLForConditionalGeneration` | ✅ verified (Phase 8 Wave B) | 4 / 9 / 3 / 3 | N150 (1×1) | [`qwen3_vl/run_qwen3_vl_2b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_2b.py) | — |
+| `Qwen/Qwen3-VL-4B-Instruct` | `Qwen3VLForConditionalGeneration` | ⏳ structurally supported | 4 / 9 / 3 / 3 | N150 (1×1) | [`qwen3_vl/run_qwen3_vl_4b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_4b.py) | — |
+| `Qwen/Qwen3-VL-8B-Instruct` | `Qwen3VLForConditionalGeneration` | ⏳ structurally supported | 4 / 9 / 3 / 3 | N150 (1×1) | [`qwen3_vl/run_qwen3_vl_8b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_8b.py) | — |
+| `Qwen/Qwen3-VL-32B-Instruct` | `Qwen3VLForConditionalGeneration` | ⏳ structurally supported | 4 / 9 / 3 / 3 | T3K (1×8) | [`qwen3_vl/run_qwen3_vl_32b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_32b.py) | — |
 
 All four Gemma-4 variants share the same recipe
 ([`Gemma4Recipe`](../src/tt_symbiote/models/gemma4/modeling_gemma4.py)).
@@ -121,16 +121,22 @@ against [`tests/images/test-dog.png`](../tests/images/test-dog.png)
 and the prompt `"What is this animal in the photo?"`.
 
 All four dense Qwen3-VL variants share the same recipe
-([`Qwen3VLRecipe`](../src/tt_symbiote/models/qwen3_vl/modeling_qwen3_vl.py)),
-also a **CPU-first port** — the first model landed through the
+([`Qwen3VLRecipe`](../src/tt_symbiote/models/qwen3_vl/modeling_qwen3_vl.py)).
+**Phase 8 Wave B** turned the structurally simple compute
+(`Qwen3VLTextRMSNorm`, `Qwen3VLTextMLP`, `Qwen3VLVisionMLP`,
+`Qwen3VLVisionPatchMerger`) into on-device wrappers via the existing
+TTNN integrations. Bespoke compute (M-RoPE, Q/K head-norm-aware text
+attention, varlen-packed vision SDPA, DeepStack injection at sparse
+layers) stays declared `cpu_fallback` and is the Wave B+1 backlog.
+Top-level fusion (`Qwen3VLPreTrainedModel`, `Qwen3VLModel`,
+`Qwen3VLForConditionalGeneration`) is declared `host_glue`. The first
+model in this family was landed via the
 [`port-hf-model-to-tt-symbiote`](../.cursor/skills/port-hf-model-to-tt-symbiote/SKILL.md)
-Cursor skill rather than hand-written. The recipe was produced by
-mechanical substitution into the skill's templates and verified end-to-end on
-N150 without manual edits. The two MoE variants
-(`Qwen/Qwen3-VL-30B-A3B`, `Qwen/Qwen3-VL-235B-A22B`) route to a
-distinct top-level HF class (`Qwen3VLMoeForConditionalGeneration`) and
-will be ported under a separate `qwen3_vl_moe` recipe in a follow-up
-commit.
+Cursor skill; Wave B's TTNN swaps were added by hand on top of that
+foundation. The two MoE variants (`Qwen/Qwen3-VL-30B-A3B`,
+`Qwen/Qwen3-VL-235B-A22B`) route to a distinct top-level HF class
+(`Qwen3VLMoeForConditionalGeneration`) and will be ported under a
+separate `qwen3_vl_moe` recipe in a follow-up commit.
 
 Verified semantic answer for Qwen3-VL-2B-Instruct (verbatim, truncated
 at 64 tokens):

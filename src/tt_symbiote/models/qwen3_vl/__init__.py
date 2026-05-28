@@ -10,12 +10,19 @@ Importing this package runs the ``@register_recipe`` decorator in
 :data:`tt_symbiote.auto.auto_mappings.TT_MODEL_REGISTRY` under the key
 ``"Qwen3VLForConditionalGeneration"``.
 
-First Qwen3-VL commit ships a CPU-first port: the recipe leaves the
-HuggingFace reference modeling untouched (empty ``build_module_dict``)
-and uses the three declared class-name lists (``tt_implemented``,
-``cpu_fallback``, ``out_of_scope``) to drive
-:func:`tt_symbiote.compatibility.report`. This is the first model
-landed via the ``port-hf-model-to-tt-symbiote`` Cursor skill.
+Phase 8 Wave B moves the structurally simple compute classes
+(``Qwen3VLTextRMSNorm``, ``Qwen3VLTextMLP``, ``Qwen3VLVisionMLP``,
+``Qwen3VLVisionPatchMerger``) to on-device wrappers built on existing
+TTNN integrations. Bespoke pieces (M-RoPE, varlen-packed vision SDPA,
+DeepStack injection) stay declared ``cpu_fallback``; the top-level
+fusion (``Qwen3VLPreTrainedModel``, ``Qwen3VLModel``,
+``Qwen3VLForConditionalGeneration``) is declared ``host_glue``
+(orchestration only — no FLOPs to accelerate). The four declared
+class-name lists (``tt_implemented``, ``cpu_fallback``, ``host_glue``,
+``out_of_scope``) drive :func:`tt_symbiote.compatibility.report`.
+
+This model was first landed via the ``port-hf-model-to-tt-symbiote``
+Cursor skill.
 
 See :mod:`.configuration_qwen3_vl` for the per-variant TTNN tuning
 table (2B / 4B / 8B / 32B dense; MoE variants noted for
