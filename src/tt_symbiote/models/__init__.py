@@ -24,6 +24,7 @@ import warnings
 # Recipe-bearing subpackages. Add an entry here when a new model lands.
 _RECIPE_BEARING_SUBPACKAGES = (
     "bailing_moe_v2",
+    "resnet",
 )
 
 

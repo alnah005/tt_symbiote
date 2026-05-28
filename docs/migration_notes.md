@@ -454,3 +454,193 @@ hardware:
   fields when constructing the paged cache.
 
 These run under the same stubbed-`ttnn` conftest as the Phase 4 tests.
+
+---
+
+## Phase 6 — ResNet vision reference port
+
+Phase 6 was originally scoped to GLM + Gemma4 LLM ports; we redirected
+it at user request to a **vision** reference port instead, because the
+Phase 5 single-dict recipe contract had only been exercised against an
+LLM and we wanted a second axis (NHWC convs, no KV cache, image input)
+before committing to it. The port covers all five canonical Microsoft
+ResNet variants (`microsoft/resnet-{18,34,50,101,152}`) and is hardware-
+verified end-to-end on `resnet-50`.
+
+### Pivot rationale: vision first, GLM/Gemma4 deferred
+
+Two pieces of confidence we wanted to earn before doing another LLM:
+
+1. **Recipe shape works for non-LM tasks.** Vision models have no
+   `make_kv_cache`, no `lm_head`, no causal mask. The
+   `@register_recipe` no-op installer for `make_kv_cache` (added in
+   Phase 5) is the part of the API contract that handles "this
+   architecture doesn't need a KV cache" — Phase 6 is its first real
+   user.
+2. **NHWC convs through `set_device`.** The Phase 5 reference exercised
+   tile-layout linear / attention. Convs use the NHWC integration
+   (`integrations/ttnn_conv.py`) and have their own quirks (sliding-
+   window L1 small-region scratch, fused BN). We wanted to confirm
+   that the same `from_pretrained` → `set_device` → `forward(...)`
+   surface composes with that integration stack.
+
+GLM and Gemma4 land in a future phase. They're both LLM-shaped so they'll
+reuse Phase 5 plumbing directly.
+
+### `configuration_<model>.py` precedent
+
+HuggingFace splits each model into `configuration_<model>.py` (the
+`PretrainedConfig` subclass + per-model defaults) and
+`modeling_<model>.py` (the `PreTrainedModel` subclass). We started
+Phase 5 with everything in one file because Ling's TTNN-side knobs are
+all attention / KV-cache shapes that the recipe pulls from
+`model.config` directly. Phase 6 introduces the first model where the
+TTNN side needs *its own* per-variant knobs that are **not** HF
+hyperparameters — the `l1_small_size` value for the heavy 7x7 stem conv
+is determined by the hardware footprint of the conv, not by the model.
+
+Rather than smuggle those knobs into `ResNetConfig` (where they don't
+belong — HF would refuse them on a round-trip through
+`config.to_json_string()`) we kept them in a separate
+[`configuration_resnet.py`](../src/tt_symbiote/models/resnet/configuration_resnet.py)
+that re-exports the HF `ResNetConfig` *and* holds a
+`RESNET_TTNN_TUNING` lookup table keyed by checkpoint id, plus a
+shape-based fallback (`(tuple(depths), layer_type) → canonical id`) for
+community fine-tunes. The recipe's `post_register` resolves the entry
+and stashes it as `model._tt_runtime_config`.
+
+This is the recommended layout for every future model that needs
+TTNN-only tuning: a sibling `configuration_<model>.py` next to
+`modeling_<model>.py`, both inside `src/tt_symbiote/models/<model>/`.
+
+### `TTNNResNetBottleNeckLayer` lives in `modeling_resnet.py`, not in `integrations/`
+
+There is already a `TTNNBottleneck` in
+[`integrations/ttnn_conv.py`](../src/tt_symbiote/integrations/ttnn_conv.py)
+that walks torchvision's flat `conv1/bn1/conv2/bn2/conv3/bn3` shape.
+HF's `ResNetBottleNeckLayer` is structurally identical (same three
+convs, same residual add) but its weight tree is nested:
+`layer.layer[0].convolution`, `layer.layer[0].normalization`, ... — the
+torchvision-shaped wrapper can't be reused.
+
+Two ways to handle this:
+
+1. **Add a second wrapper next to the model** (what we did). The
+   HF-shaped `TTNNResNetBottleNeckLayer` lives in `modeling_resnet.py`
+   alongside the recipe. Same precedent as
+   `TTNNBailingMoEDecoderLayer` from Phase 5 (block-shape wrappers live
+   next to their model).
+2. **Generalize the existing `TTNNBottleneck`** to accept both shapes.
+   Tempting but pollutes the integration with model-specific tree
+   walking. We chose against it; the legacy torchvision-shaped class
+   stays in `integrations/` for any future torchvision-shaped caller
+   without changes.
+
+Same call applied to `TTNNResNetBasicLayer` (resnet-18/34, 2-conv) and
+`TTNNResNetAdaptiveAvgPool2dNHWC` (the NHWC-aware pooler; see next
+section): these are model-specific wrappers, kept in
+`modeling_resnet.py`.
+
+### NHWC pooling: hardware bring-up surprise
+
+The flow inside the TTNN ResNet is NCHW only at the boundaries — HF
+hands us NCHW pixel values, `TTNNResNetEmbeddings` permutes to NHWC,
+and the entire encoder runs NHWC. The exit point is HF's
+`ResNetModel.pooler` (`nn.AdaptiveAvgPool2d(output_size=(1, 1))`)
+followed by `nn.Sequential(nn.Flatten(), nn.Linear(...))`.
+
+The naive plan was to leave the pooler on host. That broke during
+bring-up: the pooler is `AdaptiveAvgPool2d`, which expects **NCHW**
+input and reduces over axes [2, 3]. Feeding it an NHWC tensor
+`(B, 7, 7, 2048)` made it pool the wrong axes, producing
+`(B, 7, 1, 1)` instead of `(B, 2048, 1, 1)`. Flatten then gave a
+7-element vector, which fed a 2048-input Linear, and the underlying
+TTNN matmul rejected the shape with `width=7 height=2048`.
+
+Fix: a small wrapper `TTNNResNetAdaptiveAvgPool2dNHWC` reduces over
+the NHWC spatial axes `[1, 2]` with `keepdim=True` and then permutes
+back to NCHW so the downstream Flatten + Linear see exactly what they
+expect. Added as a seventh entry to the recipe's module-replacement
+dict.
+
+Open question implied by this: are there other places where HF expects
+NCHW after our NHWC encoder? The answer for ResNet is "no — the pooler
+is the only one". Future vision models (ViT, ConvNeXt) may need a
+similar bridge; the pattern is documented here and the wrapper can be
+ported nearly verbatim.
+
+### `l1_small_size` is a hardware budget knob the user must pass
+
+The 7x7 stride-2 stem conv on a 224x224 input needs the L1 *small*
+region for sliding-window halo metadata. The default
+`ttnn.open_mesh_device(...)` ships with `l1_small_size=0`, which
+produces an OOM at first forward (`Out of Memory: Not enough space to
+allocate 1792 B L1_SMALL buffer across 56 banks`).
+
+We considered three remedies:
+
+1. Make `set_device` introspect `model._tt_runtime_config` and re-open
+   the mesh device with the right budget. Rejected — `set_device`
+   should not own device lifecycle.
+2. Document the user-visible setting on the reproducer. Chosen. The
+   value (`245760`) is now in `RESNET_TTNN_TUNING`, in
+   `examples/e2e/run_resnet50.py`'s `open_mesh_device` call, and in
+   this note.
+3. Add a `device_params` helper that returns the budget for a given
+   recipe. Deferred (it's a thin convenience over (2)).
+
+### Hardware acceptance — green on N150 (and T3K with single chip)
+
+End-to-end smoke pass on a single Tenstorrent chip. Loading
+`microsoft/resnet-50` through `tt_symbiote.AutoModelForImageClassification.from_pretrained`,
+binding via `set_device(model, mesh_device)` (with
+`l1_small_size=245760` on `open_mesh_device`), and running
+`model(pixel_values=...)` returns logits whose top-1 prediction is
+`'tiger cat'` on the canonical COCO val cat image
+(`images.cocodataset.org/val2017/000000039769.jpg`). Top-2 is
+`'tabby, tabby cat'`. Zero TTNN-forward-fallback warnings; every conv,
+shortcut, residual add, pool, and the classifier head executes on
+device.
+
+### Variant status
+
+| Checkpoint | Recipe / `set_device` | Forward through TTNN | Hardware verified |
+|---|---|---|---|
+| `microsoft/resnet-18` | ✅ | ✅ (path covered) | ⏳ (basic-layer needs hw smoke) |
+| `microsoft/resnet-34` | ✅ | ✅ (path covered) | ⏳ (basic-layer needs hw smoke) |
+| `microsoft/resnet-50` | ✅ | ✅ | ✅ (N150, T3K 1×1) |
+| `microsoft/resnet-101` | ✅ | ✅ (path covered) | ⏳ (depth tuning may need a larger trace region) |
+| `microsoft/resnet-152` | ✅ | ✅ (path covered) | ⏳ (depth tuning may need a larger trace region) |
+
+The recipe is variant-agnostic; verifying the other four is a one-line
+swap of the model id in `examples/e2e/run_resnet50.py` plus flipping
+the `hw_verified` flag in `RESNET_TTNN_TUNING`. Tracked in the open
+todo as a follow-up rather than gating Phase 6.
+
+### New tests
+
+`tests/auto/test_resnet_recipe.py` exercises the recipe shape without
+hardware (89/89 unit tests green under the same stubbed-`ttnn`
+conftest used by Phase 4 / Phase 5):
+
+- `test_recipe_registered` — importing `tt_symbiote.models.resnet`
+  populates `TT_MODEL_REGISTRY["ResNetForImageClassification"]`.
+- `test_build_module_dict_shape` / `test_build_module_dict_covers_required_swaps`
+  — return value is a single flat dict (Option 1), keys / values are
+  classes, all seven required HF building blocks are present
+  (`ResNetConvLayer`, `ResNetShortCut`, `ResNetBasicLayer`,
+  `ResNetBottleNeckLayer`, `ResNetEmbeddings`, `nn.AdaptiveAvgPool2d`,
+  `nn.Linear`).
+- `test_post_register_patches_device` /
+  `test_post_register_attaches_runtime_config` — both expected side
+  effects happen on a freshly loaded model.
+- `test_make_kv_cache_is_noop` — confirms the `@register_recipe`
+  no-op installer covers vision recipes that don't need a cache.
+- `test_lookup_ttnn_tuning_fallbacks` — the checkpoint → shape →
+  default ladder behaves as documented.
+
+The hardware-bound smoke at
+`tests/models/resnet/test_modeling_resnet.py` was rewritten from its
+old torchvision shape to the new `AutoModelForImageClassification +
+set_device + forward` flow, parametrized over a `mesh_device` fixture
+just like the Phase 5 Ling smoke.

@@ -1,9 +1,11 @@
 # End-to-end run scripts
 
 This directory tracks **standalone reproducers that exercise `tt_symbiote`
-from `AutoModelForCausalLM.from_pretrained` through `set_device` to
-`model.generate`**, with one script per model that has been verified to
-produce coherent output on real Tenstorrent hardware.
+from `AutoModel*.from_pretrained` through `set_device` to a single
+forward (or `model.generate`)**, with one script per model that has been
+verified to produce sensible output on real Tenstorrent hardware. Both
+LLM-shaped (`AutoModelForCausalLM` + `generate`) and vision-shaped
+(`AutoModelForImageClassification` + forward) flows live here.
 
 Each script is intended to be:
 
@@ -25,9 +27,10 @@ files here are deliberately **one-shot, non-interactive smoke runs**.
 
 ## Index
 
-| Model | Script | Hardware verified on | Walkthrough |
-|---|---|---|---|
-| `inclusionAI/Ling-mini-2.0` | [`run_ling_mini_2_0.py`](run_ling_mini_2_0.py) | T3K (1x8) | [`docs/ling_mini_2_0_guide.md`](../../docs/ling_mini_2_0_guide.md) |
+| Model | Script | Task | Hardware verified on | Walkthrough |
+|---|---|---|---|---|
+| `inclusionAI/Ling-mini-2.0` | [`run_ling_mini_2_0.py`](run_ling_mini_2_0.py) | causal LM | T3K (1x8) | [`docs/ling_mini_2_0_guide.md`](../../docs/ling_mini_2_0_guide.md) |
+| `microsoft/resnet-50` | [`run_resnet50.py`](run_resnet50.py) | image classification | N150 / T3K (1x1) | (none yet) |
 
 ## Adding a new model
 
@@ -35,10 +38,19 @@ files here are deliberately **one-shot, non-interactive smoke runs**.
    pytest-based hardware smoke under `tests/models/<name>/` (per
    [`PROJECT_PROPOSAL.md`](../../PROJECT_PROPOSAL.md) §6).
 2. Copy an existing script in this folder as a starting point.
-3. Swap the HF model ID, mesh geometry (`MeshShape(...)`), and the
-   per-model KV-cache budget (`kv_cache_kwargs={"max_num_blocks": N}`).
+   - LLM (causal LM): start from `run_ling_mini_2_0.py`.
+   - Vision (image classification): start from `run_resnet50.py`.
+3. Swap the HF model ID, mesh geometry (`MeshShape(...)`), and any
+   per-model knobs:
+   - LLM: `kv_cache_kwargs={"max_num_blocks": N}` for the paged KV
+     cache budget.
+   - Vision: `l1_small_size=...` if the first/heaviest conv needs more
+     scratch (see `RESNET_TTNN_TUNING` in
+     `src/tt_symbiote/models/resnet/configuration_resnet.py`).
 4. Run it end-to-end on the target hardware. Only land a script that
-   has been observed to emit a coherent, EOS-terminated response.
+   has been observed to emit a coherent response (LLM: EOS-terminated
+   token sequence; vision: a sensible top-1 ImageNet label for a known
+   image).
 5. Add a row to the table above with the hardware target it was
    verified on, and link a walkthrough (`docs/<model>_guide.md`) if one
    exists.
@@ -52,6 +64,7 @@ already built and activated:
 ```bash
 source /home/<you>/tt_symbiote/.venv/bin/activate
 python examples/e2e/run_ling_mini_2_0.py
+python examples/e2e/run_resnet50.py
 ```
 
 No `tt-metal` source checkout is required.
