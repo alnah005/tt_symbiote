@@ -644,3 +644,203 @@ The hardware-bound smoke at
 old torchvision shape to the new `AutoModelForImageClassification +
 set_device + forward` flow, parametrized over a `mesh_device` fixture
 just like the Phase 5 Ling smoke.
+
+## Phase 7 — Gemma-4 VLM port (CPU-first; E2B verified on N150)
+
+Phase 7 ports `google/gemma-4-*-it` (multimodal: vision + text +
+audio) to `tt_symbiote`. The first commit ships a **CPU-first port**
+that exercises the full image-text-to-text demo
+(`tests/images/test-dog.png` + `"What is this animal in the photo?"`
+→ `"...a dog..."`) and introduces the compatibility-tracking surface
+that later TTNN-port commits will incrementally fill in.
+
+### Why CPU-first
+
+Gemma-4 is the largest model the project has touched and the first
+one with a non-trivial vision tower. The existing `tt_symbiote`
+integrations cover only a subset of the ops the full VLM forward
+needs:
+
+- **Text decoder.** The Phase 2 mechanical migration produced a
+  1743-line `models/gemma4/modeling_gemma4.py` targeting the 31B
+  *dense* variant on T3K. It hard-codes the dense MLP shape
+  (`5376/21504`), uses `TTNNLinearIColShardedWAllReduced` /
+  `TTNNLinearIReplicatedWColSharded` (which only work on a sharded
+  multi-device mesh), and references `BailingRotarySetup`. It is
+  unusable for E2B (different dims, likely MoE), and rewiring it to
+  the new Phase 4 recipe API plus retargeting it to E2B is a
+  multi-day undertaking by itself.
+- **Vision tower.** None of the Gemma-4 vision ops have TTNN
+  wrappers: the 2-D rotary embedding (variable-aspect-ratio
+  patches), the patch embedder, the encoder layers, and the pooler
+  all need fresh ports. Ditto the multimodal embedder that projects
+  vision features into the text token space.
+
+We considered three scopes for Phase 7 (`text-only TTNN on 31B`,
+`text TTNN on E2B`, `CPU-first`). The user picked **CPU-first** for
+the first commit: it produces a working VLM demo end-to-end, sets
+up the API contracts and the tracking surface that subsequent TTNN
+work will plug into, and avoids weeks of rewriting in the dark. The
+legacy 1743-line scaffolding is preserved verbatim at
+[`legacy_modeling_gemma4.py.bak`](../src/tt_symbiote/models/gemma4/legacy_modeling_gemma4.py.bak)
+so the next-phase TTNN port has a known starting point.
+
+### What ships in this commit
+
+A `Gemma4Recipe` registered under `Gemma4ForConditionalGeneration`,
+with:
+
+- `build_module_dict(model) -> {}`. Empty; no PyTorch submodule is
+  replaced. The full HF reference modeling runs on the CPU.
+- `post_register(model)`. Patches `type(model).device` to a constant
+  `cpu` property (Phase 5 / Phase 6 convention) and attaches
+  `model._tt_runtime_config = lookup_ttnn_tuning(model)`. The latter
+  resolves the per-checkpoint mesh shape, `l1_small_size`, dtype,
+  and `hw_verified` flag — i.e. the data that the next-phase TTNN
+  wrappers will need but that doesn't belong in HF's
+  `Gemma4Config`.
+- `make_kv_cache(model, device, **kwargs) -> None` (the
+  `@register_recipe` no-op). HF's `DynamicCache` is sufficient for
+  short generation; we'll swap in a paged cache when the TTNN text
+  decoder lands.
+
+Three class-name lists drive `compatibility.report`:
+
+- `tt_implemented = []` — Phase 7 ships zero TTNN wrappers.
+- `cpu_fallback = [21 entries]` — every HF class on the
+  image-text-to-text path: text decoder
+  (`Gemma4TextScaledWordEmbedding`, `Gemma4TextAttention`,
+  `Gemma4TextMLP`, `Gemma4TextRotaryEmbedding`,
+  `Gemma4TextExperts`, `Gemma4TextRouter`,
+  `Gemma4TextDecoderLayer`, `Gemma4TextModel`), vision tower
+  (`Gemma4VisionPatchEmbedder`, `Gemma4VisionRotaryEmbedding`,
+  `Gemma4VisionAttention`, `Gemma4VisionMLP`,
+  `Gemma4VisionEncoderLayer`, `Gemma4VisionEncoder`,
+  `Gemma4VisionPooler`, `Gemma4VisionModel`), shared building
+  blocks (`Gemma4RMSNorm`, `Gemma4ClippableLinear`), the
+  multimodal projection (`Gemma4MultimodalEmbedder`), and the
+  top-level composites (`Gemma4Model`,
+  `Gemma4ForConditionalGeneration`).
+- `out_of_scope = [14 entries]` — the entire audio tower
+  (`Gemma4AudioModel`, `Gemma4AudioLayer`, etc.) plus
+  `Gemma4ForCausalLM` (the text-only top-level head not exercised
+  by the image-text demo) and four output dataclasses that aren't
+  modules at all.
+
+### New compatibility-reporting surface
+
+`tt_symbiote/utils/compatibility.py` adds three public symbols:
+
+- `tt_symbiote.compatibility.report(model)` — returns a
+  JSON-friendly dict with `design_time` (the three recipe lists)
+  and `runtime_observed` (a process-global ledger of every module
+  that actually hit the torch fallback path during execution).
+- `tt_symbiote.compatibility.record_runtime_fallback(...)` — the
+  internal entry point that the four `warnings.warn("TTNN forward
+  failed for ...")` sites in `tt_symbiote/core/run_config.py` now
+  call. The hook is import-lazy and exception-swallowing so
+  observability never breaks inference.
+- `tt_symbiote.compatibility.reset_runtime_observations()` —
+  clears the ledger between demos / tests.
+
+The intent of the two-track design is to make the *gap* between
+intent and runtime visible: an entry that shows up in the runtime
+ledger but not in the recipe's `cpu_fallback` list is an actionable
+signal (a TTNN op silently regressed, or the recipe drifted relative
+to the HF source). The Phase 7 E2B demo run reports zero unexpected
+fallbacks — the desired baseline state.
+
+### Per-variant TTNN tuning
+
+`models/gemma4/configuration_gemma4.py` mirrors the Phase 6 ResNet
+pattern: a re-export of `transformers.Gemma4Config` (plus its three
+sub-configs) and a per-checkpoint tuning table
+`GEMMA4_TTNN_TUNING`:
+
+| Checkpoint | mesh_shape | `l1_small_size` | dtype | hw_verified |
+|---|---|---|---|---|
+| `google/gemma-4-E2B-it` | (1, 1) | 245760 | bfloat16 | ✅ |
+| `google/gemma-4-E4B-it` | (1, 1) | 245760 | bfloat16 | ⏳ |
+| `google/gemma-4-31B-it` | (1, 8) | 245760 | bfloat16 | ⏳ |
+| `google/gemma-4-26B-A4B-it` | (1, 8) | 245760 | bfloat16 | ⏳ |
+
+`lookup_ttnn_tuning(model)` resolves the entry via the same
+checkpoint → shape (number of text layers, has-vision, has-audio) →
+default ladder used by ResNet.
+
+### Hardware acceptance — green on N150
+
+End-to-end smoke pass on a single Wormhole chip:
+
+```text
+Gemma-4 E2B answer: 'The animal in the photo is a **dog**. It
+appears to be a light-colored, fluffy breed, possibly a Golden
+Retriever puppy or a similar breed.'
+```
+
+`compatibility.report(model)` after that run:
+
+```text
+summary: {
+  tt_implemented_count: 0,
+  cpu_fallback_count: 21,
+  out_of_scope_count: 14,
+  runtime_fallback_count: 0,
+  runtime_unexpected_count: 0,
+}
+```
+
+Wall-clock: ~45 s (TTNN device init + cached weight load + a 35-token
+generation, all on the host CPU). Reproducer:
+[`examples/e2e/run_gemma4_e2b.py`](../examples/e2e/run_gemma4_e2b.py).
+
+### 31B on T3K (structural only)
+
+[`examples/e2e/run_gemma4_31b.py`](../examples/e2e/run_gemma4_31b.py)
+mirrors the E2B reproducer but opens the full T3K mesh and loads
+`google/gemma-4-31B-it`. The script is the same shape (recipe + set_device +
+generate + assert "dog"); the differences are resource-bound (~58 GB
+of weights to download + load on the host, CPU forward will be slow).
+It was not run as part of Phase 7 hardware acceptance — the recipe
+is variant-agnostic so it works by construction, but the practical
+verification waits until either the TTNN port lands or a user with a
+beefy disk + RAM budget kicks off the demo.
+
+### Follow-ups (explicit, not gating Phase 7)
+
+1. **Vision tower TTNN wrappers**: `Gemma4VisionPatchEmbedder`,
+   `Gemma4VisionRotaryEmbedding` (2-D, variable aspect ratio),
+   `Gemma4VisionAttention`, `Gemma4VisionMLP`,
+   `Gemma4VisionEncoderLayer`, `Gemma4VisionPooler`. Each moves
+   from `cpu_fallback` to `tt_implemented` in the recipe.
+2. **Text decoder TTNN port**: pick a target (E2B / 31B) and either
+   refactor `legacy_modeling_gemma4.py.bak` or write fresh
+   wrappers. The 31B legacy code presumes a sharded multi-device
+   mesh (T3K minimum); E2B fits on a single chip and may need a
+   different sharding strategy.
+3. **Multimodal projection TTNN wrapper**: `Gemma4MultimodalEmbedder`
+   is a thin `Linear + RMSNorm` projection; the easiest first
+   target once `TTNNLinear` + `TTNNRMSNorm` are wired into the
+   recipe.
+4. **Audio support**: out of scope for Phase 7. The audio tower
+   classes are catalogued in `Gemma4Recipe.out_of_scope` so a
+   future audio commit just moves them out of that list.
+5. **Paged KV cache** for Gemma-4 text decoder: HF `DynamicCache` is
+   fine for the short demo prompt but won't scale. The Phase 5
+   Ling paged-cache pattern (`Gemma4Recipe.make_kv_cache`) is the
+   intended landing spot.
+
+### New tests
+
+`tests/auto/test_gemma4_recipe.py` (10 tests, HW-free) exercises the
+recipe shape, the disjointness of the three coverage lists, the
+device patch / runtime-config side effects of `post_register`, the
+`lookup_ttnn_tuning` ladder for all four canonical Gemma-4 variants,
+and the round-trip through `compatibility.report` for both a
+registered and an unregistered class. The hardware-bound smoke at
+`tests/models/gemma4/test_modeling_gemma4.py` was rewritten from the
+legacy 31B TTNN test to a small set of recipe-shape checks plus a
+compatibility-report shape check — it does not require live
+hardware or multi-GB downloads. The real e2e demo (with hardware +
+weights) lives in `examples/e2e/run_gemma4_e2b.py` per the Phase 6
+"e2e scripts in `examples/`, not `pytest`" convention.

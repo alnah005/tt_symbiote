@@ -82,6 +82,7 @@ from tt_symbiote.auto import (
     register_recipe,
 )
 from tt_symbiote.core.run_config import DispatchManager, TracedRun
+from tt_symbiote.utils import compatibility
 from tt_symbiote.utils.device_management import set_device
 from tt_symbiote.utils.module_replacement import register_modules
 
@@ -160,6 +161,7 @@ __all__ = [
     "Recipe",
     "TT_MODEL_REGISTRY",
     "TracedRun",
+    "compatibility",
     "register_modules",
     "register_recipe",
     "set_device",

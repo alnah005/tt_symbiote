@@ -23,6 +23,25 @@ from tt_symbiote.core.utils import (
 from tt_symbiote.core.ccl import TT_CCL
 
 
+def _record_runtime_fallback(module: Any) -> None:
+    """Best-effort runtime hook for :mod:`tt_symbiote.utils.compatibility`.
+
+    Called from every site that issues a "running torch fallback" warning.
+    The import is lazy and exceptions are swallowed so observability never
+    interferes with the actual fallback path: a broken ledger must not be
+    able to bring down inference.
+    """
+    try:
+        from tt_symbiote.utils.compatibility import record_runtime_fallback
+
+        record_runtime_fallback(
+            getattr(module, "module_name", type(module).__name__),
+            type(module).__name__,
+        )
+    except Exception:
+        pass
+
+
 @dataclass
 class CCLManagerConfig:
     """Configuration for CCLManager."""
@@ -570,6 +589,7 @@ class NormalRun:
                 f"TTNN forward failed for {self.module_name}: {e!r}; running torch fallback",
                 stacklevel=2,
             )
+            _record_runtime_fallback(self)
             result = self._fallback_torch_layer(*args, **kwds)
         end = time.time()
         DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
@@ -609,6 +629,7 @@ class NormalRunWithFallback(NormalRun):
                 f"Call `tt_symbiote.set_device(model, device)` to enable TTNN execution.",
                 stacklevel=2,
             )
+            _record_runtime_fallback(self)
             return self._fallback_torch_layer(*args, **kwds)
         bypass = getattr(self, "_bypass_tensor_wrapping", False)
         if bypass:
@@ -632,6 +653,7 @@ class NormalRunWithFallback(NormalRun):
                 f"TTNN forward failed for {self.module_name}: {e!r}; running torch fallback",
                 stacklevel=2,
             )
+            _record_runtime_fallback(self)
             result = self._fallback_torch_layer(*args, **kwds)
         return result
 
