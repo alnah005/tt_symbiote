@@ -10,10 +10,16 @@ Importing this package runs the ``@register_recipe`` decorator in
 :data:`tt_symbiote.auto.auto_mappings.TT_MODEL_REGISTRY` under the key
 ``"Gemma4ForConditionalGeneration"``.
 
-Phase 7 ships a CPU-first port: the recipe leaves the HuggingFace
-reference modeling untouched (empty ``build_module_dict``) and uses the
-three declared class-name lists (``tt_implemented``, ``cpu_fallback``,
-``out_of_scope``) to drive :func:`tt_symbiote.compatibility.report`.
+Phase 8 Wave A moves the structurally simple classes (``Gemma4RMSNorm``,
+``Gemma4TextScaledWordEmbedding``, ``Gemma4TextMLP``, ``Gemma4VisionMLP``,
+``Gemma4MultimodalEmbedder``) to on-device wrappers built on existing
+TTNN integrations. Bespoke pieces (KV-shared attention, PLE, dual RoPE,
+2-D vision RoPE, position-aware pooler) stay declared ``cpu_fallback``;
+the top-level fusion (``Gemma4Model`` + ``Gemma4ForConditionalGeneration``)
+is declared ``host_glue`` (orchestration only — no FLOPs to accelerate).
+The four declared class-name lists (``tt_implemented``, ``cpu_fallback``,
+``host_glue``, ``out_of_scope``) drive
+:func:`tt_symbiote.compatibility.report`.
 
 See :mod:`.configuration_gemma4` for the per-variant TTNN tuning table
 (``google/gemma-4-E2B-it`` on N150, ``google/gemma-4-31B-it`` on T3K).

@@ -1,27 +1,30 @@
 {
   "model_class": "Gemma4ForConditionalGeneration",
   "design_time": {
-    "tt_implemented": [],
+    "tt_implemented": [
+      "Gemma4RMSNorm",
+      "Gemma4TextScaledWordEmbedding",
+      "Gemma4TextMLP",
+      "Gemma4VisionMLP",
+      "Gemma4MultimodalEmbedder"
+    ],
     "cpu_fallback": [
       "Gemma4ClippableLinear",
-      "Gemma4RMSNorm",
       "Gemma4VisionPatchEmbedder",
       "Gemma4VisionRotaryEmbedding",
       "Gemma4VisionAttention",
-      "Gemma4VisionMLP",
       "Gemma4VisionEncoderLayer",
       "Gemma4VisionEncoder",
       "Gemma4VisionPooler",
       "Gemma4VisionModel",
-      "Gemma4MultimodalEmbedder",
-      "Gemma4TextScaledWordEmbedding",
       "Gemma4TextRotaryEmbedding",
       "Gemma4TextAttention",
-      "Gemma4TextMLP",
       "Gemma4TextExperts",
       "Gemma4TextRouter",
       "Gemma4TextDecoderLayer",
-      "Gemma4TextModel",
+      "Gemma4TextModel"
+    ],
+    "host_glue": [
       "Gemma4Model",
       "Gemma4ForConditionalGeneration"
     ],
@@ -43,15 +46,23 @@
     ]
   },
   "runtime_observed": {
-    "by_class": {},
-    "by_module": {},
+    "by_class": {
+      "Gemma4TextScaledWordEmbedding": 2,
+      "Gemma4MultimodalEmbedder": 1
+    },
+    "by_module": {
+      "model.language_model.embed_tokens": "Gemma4TextScaledWordEmbedding",
+      "model.language_model.embed_tokens_per_layer": "Gemma4TextScaledWordEmbedding",
+      "model.embed_vision": "Gemma4MultimodalEmbedder"
+    },
     "unexpected": []
   },
   "summary": {
-    "tt_implemented_count": 0,
-    "cpu_fallback_count": 21,
+    "tt_implemented_count": 5,
+    "cpu_fallback_count": 14,
+    "host_glue_count": 2,
     "out_of_scope_count": 14,
-    "runtime_fallback_count": 0,
+    "runtime_fallback_count": 3,
     "runtime_unexpected_count": 0
   }
 }

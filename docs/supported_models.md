@@ -27,26 +27,32 @@ listed hardware.
 
 ## TT-implemented vs. CPU coverage
 
-Every recipe declares three class-name lists that drive
+Every recipe declares four class-name lists that drive
 [`tt_symbiote.compatibility.report(model)`](../src/tt_symbiote/utils/compatibility.py):
 
 - **`tt_implemented`** — HF classes for which the recipe ships a TTNN
   wrapper (i.e. it is in `build_module_dict`). These run on
   Tenstorrent silicon.
 - **`cpu_fallback`** — HF classes that are *exercised* by the
-  documented demos but stay as PyTorch in this recipe. These run on
-  the host CPU. Entries here are intentional — they're the queue of
-  modules awaiting a TTNN port.
+  documented demos but stay as PyTorch in this recipe *for now*. These
+  run on the host CPU. Entries here are the actionable backlog — they
+  represent ops with FLOPs to move onto the device.
+- **`host_glue`** — HF classes that are intentionally CPU-only by
+  policy (orchestration, mask building, masked-scatter fusion, output
+  dataclasses, index walks). These have no FLOPs to accelerate;
+  flagging them separately from `cpu_fallback` keeps the backlog
+  focused on compute, not glue. Added in Phase 8 alongside the first
+  Gemma-4 TTNN swaps.
 - **`out_of_scope`** — HF classes that exist in the upstream
   modeling file but aren't touched by the documented demos (e.g. the
   Gemma-4 audio tower under the image-text path, or output
   dataclasses that aren't modules at all).
 
-Per-model the "TT impl / CPU fallback / out of scope" counts in the
-tables below are read directly from the recipes; the runtime ledger
-in `compatibility.report(...)["runtime_observed"]` flags any
-fallback that fired during the demo *and* was not declared (a sign
-the recipe drifted relative to the HF source).
+Per-model the "TT / CPU / host_glue / OOS" counts in the tables below
+are read directly from the recipes; the runtime ledger in
+`compatibility.report(...)["runtime_observed"]` flags any fallback
+that fired during the demo *and* was not declared (a sign the recipe
+drifted relative to the HF source).
 
 For the *full* CPU-vs-device split per demo (which exact classes run
 where, and on what hardware), see
@@ -78,34 +84,38 @@ The four non-50 ResNet variants share the same recipe; flipping each to
 
 ## Image-text-to-text (VLM)
 
-| Checkpoint | HF class | Status | TT / CPU / OOS | Hardware target | Reproducer | Walkthrough |
+| Checkpoint | HF class | Status | TT / CPU / glue / OOS | Hardware target | Reproducer | Walkthrough |
 |---|---|---|---|---|---|---|
-| `google/gemma-4-E2B-it` | `Gemma4ForConditionalGeneration` | ✅ verified (CPU-first) | 0 / 21 / 14 | N150 (1×1) | [`gemma4/run_gemma4_e2b.py`](../examples/e2e/gemma4/run_gemma4_e2b.py) | — |
-| `google/gemma-4-E4B-it` | `Gemma4ForConditionalGeneration` | ⏳ structurally supported | 0 / 21 / 14 | N150 (1×1) | [`gemma4/run_gemma4_e4b.py`](../examples/e2e/gemma4/run_gemma4_e4b.py) | — |
-| `google/gemma-4-31B-it` | `Gemma4ForConditionalGeneration` | ⏳ structurally supported | 0 / 21 / 14 | T3K (1×8) | [`gemma4/run_gemma4_31b.py`](../examples/e2e/gemma4/run_gemma4_31b.py) | — |
-| `google/gemma-4-26B-A4B-it` | `Gemma4ForConditionalGeneration` | ⏳ structurally supported | 0 / 21 / 14 | T3K (1×8) | [`gemma4/run_gemma4_26b_a4b.py`](../examples/e2e/gemma4/run_gemma4_26b_a4b.py) | — |
-| `Qwen/Qwen3-VL-2B-Instruct` | `Qwen3VLForConditionalGeneration` | ✅ verified (CPU-first) | 0 / 16 / 3 | N150 (1×1) | [`qwen3_vl/run_qwen3_vl_2b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_2b.py) | — |
-| `Qwen/Qwen3-VL-4B-Instruct` | `Qwen3VLForConditionalGeneration` | ⏳ structurally supported | 0 / 16 / 3 | N150 (1×1) | [`qwen3_vl/run_qwen3_vl_4b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_4b.py) | — |
-| `Qwen/Qwen3-VL-8B-Instruct` | `Qwen3VLForConditionalGeneration` | ⏳ structurally supported | 0 / 16 / 3 | N150 (1×1) | [`qwen3_vl/run_qwen3_vl_8b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_8b.py) | — |
-| `Qwen/Qwen3-VL-32B-Instruct` | `Qwen3VLForConditionalGeneration` | ⏳ structurally supported | 0 / 16 / 3 | T3K (1×8) | [`qwen3_vl/run_qwen3_vl_32b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_32b.py) | — |
+| `google/gemma-4-E2B-it` | `Gemma4ForConditionalGeneration` | ✅ verified (Phase 8 Wave A) | 5 / 14 / 2 / 14 | N150 (1×1) | [`gemma4/run_gemma4_e2b.py`](../examples/e2e/gemma4/run_gemma4_e2b.py) | — |
+| `google/gemma-4-E4B-it` | `Gemma4ForConditionalGeneration` | ⏳ structurally supported | 5 / 14 / 2 / 14 | N150 (1×1) | [`gemma4/run_gemma4_e4b.py`](../examples/e2e/gemma4/run_gemma4_e4b.py) | — |
+| `google/gemma-4-31B-it` | `Gemma4ForConditionalGeneration` | ⏳ structurally supported | 5 / 14 / 2 / 14 | T3K (1×8) | [`gemma4/run_gemma4_31b.py`](../examples/e2e/gemma4/run_gemma4_31b.py) | — |
+| `google/gemma-4-26B-A4B-it` | `Gemma4ForConditionalGeneration` | ⏳ structurally supported | 5 / 14 / 2 / 14 | T3K (1×8) | [`gemma4/run_gemma4_26b_a4b.py`](../examples/e2e/gemma4/run_gemma4_26b_a4b.py) | — |
+| `Qwen/Qwen3-VL-2B-Instruct` | `Qwen3VLForConditionalGeneration` | ✅ verified (CPU-first) | 0 / 16 / 0 / 3 | N150 (1×1) | [`qwen3_vl/run_qwen3_vl_2b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_2b.py) | — |
+| `Qwen/Qwen3-VL-4B-Instruct` | `Qwen3VLForConditionalGeneration` | ⏳ structurally supported | 0 / 16 / 0 / 3 | N150 (1×1) | [`qwen3_vl/run_qwen3_vl_4b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_4b.py) | — |
+| `Qwen/Qwen3-VL-8B-Instruct` | `Qwen3VLForConditionalGeneration` | ⏳ structurally supported | 0 / 16 / 0 / 3 | N150 (1×1) | [`qwen3_vl/run_qwen3_vl_8b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_8b.py) | — |
+| `Qwen/Qwen3-VL-32B-Instruct` | `Qwen3VLForConditionalGeneration` | ⏳ structurally supported | 0 / 16 / 0 / 3 | T3K (1×8) | [`qwen3_vl/run_qwen3_vl_32b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_32b.py) | — |
 
 All four Gemma-4 variants share the same recipe
-([`Gemma4Recipe`](../src/tt_symbiote/models/gemma4/modeling_gemma4.py)),
-which is a **Phase 7 CPU-first port**: every Gemma-4 submodule
-(vision tower, multimodal projection, text decoder) runs on the host
-PyTorch backend. The recipe still drives the documented
-`AutoModelForImageTextToText.from_pretrained` →
-`set_device(model, device)` → `model.generate(...)` flow, and TTNN
-wrappers will swap submodules from `cpu_fallback` to `tt_implemented`
-incrementally in subsequent commits. Confirm with
+([`Gemma4Recipe`](../src/tt_symbiote/models/gemma4/modeling_gemma4.py)).
+**Phase 8 Wave A** turned the structurally simple compute (`Gemma4RMSNorm`,
+`Gemma4TextScaledWordEmbedding`, `Gemma4TextMLP`, `Gemma4VisionMLP`,
+`Gemma4MultimodalEmbedder`) into on-device wrappers via the existing
+TTNN integrations. The bespoke text-side compute (KV-shared attention,
+dual RoPE tables, Per-Layer Embeddings, dual sliding/full mask) and
+the bespoke vision-side compute (2-D RoPE, position-aware pooler,
+non-causal SDPA) stay declared `cpu_fallback` and are the Wave A+1
+backlog. Top-level fusion (`Gemma4Model`,
+`Gemma4ForConditionalGeneration`) is declared `host_glue` — it owns
+the `masked_scatter` of vision tokens into the text embedding stream,
+the sliding/full causal mask construction, and the optional final
+logit softcap, none of which have FLOPs worth moving. Confirm with
 `tt_symbiote.compatibility.report(model)` after any demo run — the
 ``runtime_observed.unexpected`` field must stay empty.
 
-Verified semantic answer for E2B (verbatim):
+Verified semantic answer for E2B (verbatim, Phase 8 Wave A run):
 
-> *"The animal in the photo is a **dog**. It appears to be a
-> light-colored, fluffy breed, possibly a Golden Retriever puppy or
-> a similar breed."*
+> *"The animal in the photo is a **dog**. It appears to be a young
+> Golden Retriever or a similar light-colored breed."*
 
 against [`tests/images/test-dog.png`](../tests/images/test-dog.png)
 and the prompt `"What is this animal in the photo?"`.

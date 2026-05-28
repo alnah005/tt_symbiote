@@ -30,13 +30,26 @@ def _record_runtime_fallback(module: Any) -> None:
     The import is lazy and exceptions are swallowed so observability never
     interferes with the actual fallback path: a broken ledger must not be
     able to bring down inference.
+
+    The recorded class name is the *source HF class* (read off the
+    preserved ``_fallback_torch_layer``) when available, so the ledger
+    can be cross-referenced with the recipe's ``tt_implemented`` /
+    ``cpu_fallback`` / ``host_glue`` / ``out_of_scope`` lists (all of
+    which use HF names). When no fallback layer is attached we record
+    the TTNN wrapper's own class name -- the surrounding warning will
+    still point the contributor at the right module.
     """
     try:
         from tt_symbiote.utils.compatibility import record_runtime_fallback
 
+        fallback_layer = getattr(module, "_fallback_torch_layer", None)
+        if fallback_layer is not None:
+            source_class_name = type(fallback_layer).__name__
+        else:
+            source_class_name = type(module).__name__
         record_runtime_fallback(
             getattr(module, "module_name", type(module).__name__),
-            type(module).__name__,
+            source_class_name,
         )
     except Exception:
         pass

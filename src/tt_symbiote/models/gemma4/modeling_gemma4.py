@@ -2,70 +2,74 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Gemma-4 VLM TTNN recipe — Phase 7 CPU-first port.
+"""Gemma-4 VLM TTNN recipe — Phase 8 Wave A incremental port.
 
 Targets :class:`transformers.Gemma4ForConditionalGeneration` (the
 image-text-to-text head over the audio + vision + text backbones).
 
-What this commit ships
-----------------------
+Phase-8 Wave A scope (high-value-first, N150)
+---------------------------------------------
 
-A *CPU-first* recipe:
+We move the *structurally simple* classes from ``cpu_fallback`` to
+``tt_implemented`` by wrapping them onto existing TTNN integrations
+(``TTNNLinear``, ``TTNNEmbedding``, ``TTNNLocalRMSNorm``). The
+architecturally bespoke parts — text attention with KV-sharing, dual
+RoPE tables, Per-Layer Embeddings (PLE), vision 2-D RoPE,
+position-aware pooler — stay declared ``cpu_fallback`` (correct,
+*expected* runtime behaviour; the runtime ledger only flags
+undeclared CPU paths).
 
-* :meth:`Gemma4Recipe.build_module_dict` returns an empty dict; no
-  PyTorch submodule is replaced. Execution runs entirely through the
-  HuggingFace reference modeling on the CPU.
-* :meth:`Gemma4Recipe.post_register` patches ``model.device`` to
-  ``cpu`` (matches the Phase 5 / Phase 6 convention so other
-  ``tt_symbiote`` plumbing — graph viz, weight introspection — does not
-  trip over a missing device attribute) and stashes the per-variant
-  TTNN runtime config under ``_tt_runtime_config`` for downstream
-  wrappers to consult.
-* :meth:`Gemma4Recipe.make_kv_cache` returns ``None``; HF's
-  :class:`DynamicCache` handles short generation just fine. The hook is
-  kept so the next-phase TTNN port can swap in a paged cache without
-  touching ``set_device``.
+What moves to ``tt_implemented`` this commit:
 
-The three class-level lists — ``tt_implemented``, ``cpu_fallback``,
-``out_of_scope`` — declare *design-time* coverage and feed
-:func:`tt_symbiote.compatibility.report`. They are deliberately
-exhaustive so a contributor can ``grep -F Gemma4`` against
-:mod:`transformers.models.gemma4.modeling_gemma4` and see every class
-accounted for. The runtime ledger maintained by
-:mod:`tt_symbiote.utils.compatibility` will stay empty during a
-CPU-first Gemma-4 run, and that absence is the correctness signal
-(nothing tried to use TTNN and silently fell back).
+* ``Gemma4RMSNorm`` -> :class:`TTNNLocalRMSNorm` (handles
+  ``with_scale=True/False`` via existing logic; ``eps`` is read off
+  the source layer).
+* ``Gemma4TextScaledWordEmbedding`` ->
+  :class:`TTNNGemma4ScaledWordEmbedding` (reuses
+  :class:`TTNNEmbedding` with ``scale_factor=sqrt(embed_dim)``).
+* ``Gemma4TextMLP`` -> :class:`TTNNGemma4TextMLP` (TTNNLinear x3 +
+  ``ttnn.gelu`` + ``ttnn.multiply``).
+* ``Gemma4VisionMLP`` -> :class:`TTNNGemma4VisionMLP` (same shape;
+  reaches inside ``Gemma4ClippableLinear`` to pluck the inner
+  ``nn.Linear``).
+* ``Gemma4MultimodalEmbedder`` ->
+  :class:`TTNNGemma4MultimodalEmbedder` (weightless RMSNorm +
+  unbiased :class:`TTNNLinear`).
 
-What this commit does **not** ship (tracked as follow-ups)
-----------------------------------------------------------
+What stays ``cpu_fallback``:
 
-* TTNN wrappers for the **vision tower** (~6 modules + 2-D RoPE work).
-* TTNN wrappers for the **text decoder**. The Phase 2 mechanical
-  migration of the 31B dense text-side is preserved verbatim in
-  :file:`legacy_modeling_gemma4.py.bak` (not imported) so the next
-  iteration starts from a known scaffold.
-* **Audio** support. Gemma-4 E2B/E4B natively process audio, but the
-  Phase 7 demos only exercise the image+text path; the audio classes
-  are catalogued under ``out_of_scope``.
+* Text decoder: ``Gemma4TextAttention``, ``Gemma4TextRotaryEmbedding``,
+  ``Gemma4TextDecoderLayer``, ``Gemma4TextModel``,
+  ``Gemma4TextExperts``, ``Gemma4TextRouter``.
+* Vision tower: every class except the MLP and the multimodal
+  embedder above. The 2-D rotary embedding and the bespoke pooler
+  block silent reuse of the existing single-device integrations.
+* Shared: ``Gemma4ClippableLinear`` (when its parent MLP gets
+  swapped, the inner ``nn.Linear`` is wrapped; otherwise it stays on
+  host as a thin clamp orchestrator).
 
-Compatibility surface
----------------------
+What's declared ``host_glue`` (added in Phase 8 alongside ``host_glue``
+support in :mod:`tt_symbiote.utils.compatibility`):
 
-Run the dog demo (``examples/e2e/run_gemma4_e2b.py``) and call
-:func:`tt_symbiote.compatibility.report` to see this layout:
+* ``Gemma4Model``: the top-level fusion of vision + text. Owns
+  ``masked_scatter`` to splice vision tokens into the text-embedding
+  stream and the dual sliding/full attention mask construction.
+  No compute beyond glue.
+* ``Gemma4ForConditionalGeneration``: thin head over ``Gemma4Model``
+  + ``lm_head`` + optional logit softcap.
 
-.. code-block:: python
+A model with no registered recipe gets a placeholder shape so callers
+that pipe :func:`compatibility.report` to JSON don't need a special
+case.
 
-    {
-      "model_class": "Gemma4ForConditionalGeneration",
-      "design_time": {
-        "tt_implemented": [],
-        "cpu_fallback":   [... 19 entries: text + vision + multimodal ...],
-        "out_of_scope":   [... 9 entries: audio + LM-only top-level + output dataclasses ...],
-      },
-      "runtime_observed": {"by_class": {}, "by_module": {}, "unexpected": []},
-      ...
-    }
+Phase 7 -> Phase 8 migration notes
+----------------------------------
+
+Phase 7 shipped a *CPU-first* recipe (``build_module_dict`` returned
+an empty dict). Phase 8 keeps that file shape and only adds the swaps
+where existing TTNN integrations cleanly apply. The legacy 31B-dense
+mechanical migration is still parked in
+:file:`legacy_modeling_gemma4.py.bak`; nothing imports it.
 """
 
 from __future__ import annotations
@@ -74,6 +78,15 @@ import torch
 
 from tt_symbiote.auto.auto_mappings import register_recipe
 from tt_symbiote.models.gemma4.configuration_gemma4 import lookup_ttnn_tuning
+from tt_symbiote.models.gemma4.modeling_gemma4_text import (
+    TTNNGemma4RMSNorm,
+    TTNNGemma4ScaledWordEmbedding,
+    TTNNGemma4TextMLP,
+)
+from tt_symbiote.models.gemma4.modeling_gemma4_vision import (
+    TTNNGemma4MultimodalEmbedder,
+    TTNNGemma4VisionMLP,
+)
 
 __all__ = ["Gemma4Recipe"]
 
@@ -90,46 +103,63 @@ __all__ = ["Gemma4Recipe"]
 #
 # Membership rules:
 #   * ``tt_implemented``: this commit ships a TTNN wrapper that
-#     ``build_module_dict`` swaps in. Empty in Phase 7.
+#     ``build_module_dict`` swaps in.
 #   * ``cpu_fallback``: HF class is *exercised* by the image-text-to-text
 #     demo but stays as PyTorch in this commit. The runtime hook in
 #     :mod:`tt_symbiote.core.run_config` will flag every entry here as
 #     "expected" (not "unexpected") in :func:`compatibility.report`.
+#   * ``host_glue``: HF class is intentionally host-only by policy
+#     (orchestration, output dataclasses, mask building, scatter
+#     fusion, index walks). Glue has no FLOPs to accelerate.
 #   * ``out_of_scope``: HF class exists in the model file but is *not
-#     touched* by the documented Phase 7 demos (audio tower, the
-#     text-only ``Gemma4ForCausalLM`` head, output dataclasses).
+#     touched* by the documented demos (audio tower, the text-only
+#     ``Gemma4ForCausalLM`` head, output dataclasses).
 
 
-_TT_IMPLEMENTED: list[str] = []
+_TT_IMPLEMENTED: list[str] = [
+    "Gemma4RMSNorm",
+    "Gemma4TextScaledWordEmbedding",
+    "Gemma4TextMLP",
+    "Gemma4VisionMLP",
+    "Gemma4MultimodalEmbedder",
+]
 
 
 _CPU_FALLBACK: list[str] = [
     # ----- Shared building blocks (text + vision share these) -----
-    "Gemma4ClippableLinear",
-    "Gemma4RMSNorm",
+    "Gemma4ClippableLinear",  # Inner nn.Linear is on-device when its
+                               # parent MLP gets swapped; otherwise this
+                               # is a thin host clamp wrapper.
     # ----- Vision tower (Gemma4VisionModel) -----
     "Gemma4VisionPatchEmbedder",
-    "Gemma4VisionRotaryEmbedding",
-    "Gemma4VisionAttention",
-    "Gemma4VisionMLP",
+    "Gemma4VisionRotaryEmbedding",  # 2-D RoPE precompute — deferred.
+    "Gemma4VisionAttention",        # Non-causal SDPA with 2-D RoPE — deferred.
     "Gemma4VisionEncoderLayer",
     "Gemma4VisionEncoder",
     "Gemma4VisionPooler",
     "Gemma4VisionModel",
-    # ----- Multimodal projection -----
-    "Gemma4MultimodalEmbedder",
     # ----- Text decoder (Gemma4TextModel) -----
-    "Gemma4TextScaledWordEmbedding",
-    "Gemma4TextRotaryEmbedding",
-    "Gemma4TextAttention",
-    "Gemma4TextMLP",
+    "Gemma4TextRotaryEmbedding",   # Dual rope tables per layer-type — deferred.
+    "Gemma4TextAttention",         # KV-sharing + dual RoPE + per-head norms — deferred.
     # MoE pair only used by the 26B-A4B variant; harmless for dense models
     "Gemma4TextExperts",
     "Gemma4TextRouter",
-    "Gemma4TextDecoderLayer",
-    "Gemma4TextModel",
-    # ----- Top-level composites -----
+    "Gemma4TextDecoderLayer",      # PLE residual + 4-norm sandwich — deferred.
+    "Gemma4TextModel",             # PLE orchestration + dual mask — deferred.
+]
+
+
+_HOST_GLUE: list[str] = [
+    # ----- Top-level composites: orchestration only -----
+    # ``Gemma4Model`` performs ``masked_scatter`` to splice vision tokens
+    # into the text embedding stream and builds the sliding/full causal
+    # masks. No FLOPs beyond glue once its children accelerate.
     "Gemma4Model",
+    # ``Gemma4ForConditionalGeneration`` is the HF generation head; the
+    # forward pass is delegate-to-Gemma4Model + lm_head + optional logit
+    # softcap. The softcap is a single ``tanh`` on the logits — kept
+    # host because it's the very last step before sampling, and the
+    # rest of ``GenerationMixin`` (top-k, top-p, beam, etc.) is host.
     "Gemma4ForConditionalGeneration",
 ]
 
@@ -140,7 +170,7 @@ _OUT_OF_SCOPE: list[str] = [
     "Gemma4CausalLMOutputWithPast",
     "Gemma4TextModelOutputWithPast",
     "Gemma4AudioModelOutput",
-    # ----- Audio tower (Phase 7 demos are image+text only) -----
+    # ----- Audio tower (Phase 7/8 demos are image+text only) -----
     "Gemma4AudioRelPositionalEncoding",
     "Gemma4AudioAttention",
     "Gemma4AudioSubSampleConvProjectionLayer",
@@ -150,7 +180,7 @@ _OUT_OF_SCOPE: list[str] = [
     "Gemma4AudioLightConv1d",
     "Gemma4AudioLayer",
     "Gemma4AudioModel",
-    # ----- Alternative top-level head not exercised in Phase 7 -----
+    # ----- Alternative top-level head not exercised in Phase 7/8 -----
     "Gemma4ForCausalLM",
 ]
 
@@ -162,21 +192,41 @@ _OUT_OF_SCOPE: list[str] = [
 
 @register_recipe(hf_class_name="Gemma4ForConditionalGeneration")
 class Gemma4Recipe:
-    """CPU-first TTNN recipe for HuggingFace ``Gemma4ForConditionalGeneration``."""
+    """Incremental TTNN recipe for HuggingFace ``Gemma4ForConditionalGeneration``.
+
+    Wraps the simple sub-classes onto existing TTNN integrations while
+    keeping the architecturally bespoke pieces (attention, PLE, dual
+    RoPE, 2-D vision RoPE) on host. Top-level orchestration (vision/text
+    fusion, sliding/full mask build) is declared ``host_glue``.
+    """
 
     tt_implemented: list[str] = _TT_IMPLEMENTED
     cpu_fallback: list[str] = _CPU_FALLBACK
+    host_glue: list[str] = _HOST_GLUE
     out_of_scope: list[str] = _OUT_OF_SCOPE
 
     def build_module_dict(self, model):
-        """Return the (currently empty) PyTorch -> TTNN replacement map.
+        """Return the flat ``{torch_class: ttnn_class}`` replacement map.
 
-        Phase 7 ships no wrappers; the full HF reference modeling runs
-        on the CPU. As wrappers are added in subsequent commits each
-        entry moves from :data:`_CPU_FALLBACK` to :data:`_TT_IMPLEMENTED`
-        and is registered in this dict.
+        Imports the HF source classes lazily so this module is cheap to
+        import even when ``transformers`` isn't installed (matches the
+        ResNet recipe convention).
         """
-        return {}
+        from transformers.models.gemma4.modeling_gemma4 import (
+            Gemma4MultimodalEmbedder,
+            Gemma4RMSNorm,
+            Gemma4TextMLP,
+            Gemma4TextScaledWordEmbedding,
+            Gemma4VisionMLP,
+        )
+
+        return {
+            Gemma4RMSNorm: TTNNGemma4RMSNorm,
+            Gemma4TextScaledWordEmbedding: TTNNGemma4ScaledWordEmbedding,
+            Gemma4TextMLP: TTNNGemma4TextMLP,
+            Gemma4VisionMLP: TTNNGemma4VisionMLP,
+            Gemma4MultimodalEmbedder: TTNNGemma4MultimodalEmbedder,
+        }
 
     def post_register(self, model):
         """Patch ``model.device`` to ``cpu`` and stash the TTNN tuning.
@@ -196,5 +246,6 @@ class Gemma4Recipe:
 
     # ``make_kv_cache`` is intentionally not implemented. The
     # ``register_recipe`` decorator installs a no-op default which
-    # leaves HF's ``DynamicCache`` in place — sufficient for the Phase 7
-    # short-generation demos.
+    # leaves HF's ``DynamicCache`` in place — sufficient for the Phase 7/8
+    # short-generation demos. A bespoke paged dual-cache lands with the
+    # text-attention port in a follow-up commit.

@@ -11,7 +11,7 @@ ones are running on the CPU via the PyTorch fallback path?"*
 Two complementary information sources feed the report:
 
 1. **Design-time intent**, read from the registered recipe. Each recipe may
-   declare three class-name lists describing how it *intends* to map the
+   declare four class-name lists describing how it *intends* to map the
    upstream HF model:
 
    - ``tt_implemented``: HF class names for which the recipe ships a TTNN
@@ -19,6 +19,11 @@ Two complementary information sources feed the report:
    - ``cpu_fallback``: HF class names that are deliberately left as
      PyTorch modules (either because no TTNN equivalent exists yet or
      because the op is cheap enough to ignore).
+   - ``host_glue``: HF class names that are *intentionally* host-only by
+     policy (orchestration, output dataclasses, mask building, scatter
+     fusion, index walks). Distinguishing these from ``cpu_fallback``
+     prevents Phase 8+ ports from being flagged for never moving glue
+     code that has no compute to accelerate.
    - ``out_of_scope``: HF class names that exist in the model file but are
      never exercised by the documented demos (e.g. the Gemma-4 audio
      tower under the image-text-to-text path).
@@ -134,6 +139,7 @@ def report(model: Any) -> Dict[str, Any]:
           "design_time": {
               "tt_implemented": [...],          # from recipe.tt_implemented
               "cpu_fallback":   [...],          # from recipe.cpu_fallback
+              "host_glue":      [...],          # from recipe.host_glue
               "out_of_scope":   [...],          # from recipe.out_of_scope
           },
           "runtime_observed": {
@@ -155,8 +161,9 @@ def report(model: Any) -> Dict[str, Any]:
 
     tt_impl = _list_attr(recipe, "tt_implemented")
     cpu_fb = _list_attr(recipe, "cpu_fallback")
+    host_glue = _list_attr(recipe, "host_glue")
     oos = _list_attr(recipe, "out_of_scope")
-    declared: set = set(tt_impl) | set(cpu_fb) | set(oos)
+    declared: set = set(tt_impl) | set(cpu_fb) | set(host_glue) | set(oos)
 
     runtime = _runtime_observations()
     by_class: Counter = Counter(runtime.values())
@@ -167,6 +174,7 @@ def report(model: Any) -> Dict[str, Any]:
         "design_time": {
             "tt_implemented": list(tt_impl),
             "cpu_fallback": list(cpu_fb),
+            "host_glue": list(host_glue),
             "out_of_scope": list(oos),
         },
         "runtime_observed": {
@@ -177,6 +185,7 @@ def report(model: Any) -> Dict[str, Any]:
         "summary": {
             "tt_implemented_count": len(tt_impl),
             "cpu_fallback_count": len(cpu_fb),
+            "host_glue_count": len(host_glue),
             "out_of_scope_count": len(oos),
             "runtime_fallback_count": len(runtime),
             "runtime_unexpected_count": len(unexpected),

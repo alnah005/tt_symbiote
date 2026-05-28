@@ -1040,3 +1040,140 @@ from Phase 5/6).
 - **CI gate** that fails if any committed `*_coverage.json` has
   `runtime_observed.unexpected != []`. Trivial follow-up — the file
   format is already JSON-friendly.
+
+# Phase 8 Wave A — Gemma-4 first on-device wrappers (high-value-first, N150)
+
+Phase 7 had landed `google/gemma-4-E2B-it` as a CPU-first port (empty
+`build_module_dict`) with the full design-time class manifest. Phase 8
+Wave A turns the cheapest portion of that manifest into actual on-device
+execution while leaving the architecturally bespoke pieces declared
+`cpu_fallback`.
+
+## What landed
+
+Five HF classes moved from `cpu_fallback` to `tt_implemented`:
+
+| HF class | TTNN wrapper | Reuses |
+|---|---|---|
+| `Gemma4RMSNorm` (`with_scale=True`) | `TTNNGemma4RMSNorm` | `ttnn.rms_norm` directly. For `with_scale=False` (Q/K/V per-head norms, multimodal pre-projection norm) `from_torch` returns the original layer so it stays on host. |
+| `Gemma4TextScaledWordEmbedding` | `TTNNGemma4ScaledWordEmbedding` | `TTNNEmbedding` with `scale_factor=sqrt(embed_dim)`. Exposes `.weight` as a property so HF code that touches `model.embed_tokens.weight[pad_token_id, :]` keeps working post-swap. |
+| `Gemma4TextMLP` | `TTNNGemma4TextMLP` | `TTNNLinear` × 3 + `ttnn.gelu` + `ttnn.multiply`. |
+| `Gemma4VisionMLP` | `TTNNGemma4VisionMLP` | Same shape as text MLP; reaches inside each `Gemma4ClippableLinear` to pluck the inner `nn.Linear` when clipping is disabled (E2B image-path default). When clipping is enabled, `from_torch` returns the original layer so the audio-path corner case stays bit-exact. |
+| `Gemma4MultimodalEmbedder` | `TTNNGemma4MultimodalEmbedder` | Wraps the bridge projection (vision_hidden → text_hidden) as `TTNNLinear`. The weightless RMSNorm stays on host inside the wrapper's forward (intentional — no `dim` is stored on `Gemma4RMSNorm(with_scale=False)`, so synthesising a unit-ones device buffer would add more friction than it saves). |
+
+The implementations live in:
+
+- `src/tt_symbiote/models/gemma4/modeling_gemma4_text.py` (text-side).
+- `src/tt_symbiote/models/gemma4/modeling_gemma4_vision.py` (vision-side).
+
+The Phase-7 recipe file (`modeling_gemma4.py`) keeps its shape but its
+`build_module_dict` now wires up the five swaps above.
+
+## What stays on CPU
+
+Declared `cpu_fallback` (intentional — every entry needs bespoke
+multi-week porting work):
+
+- Text: `Gemma4TextAttention` (KV sharing + dual RoPE + Q/K/V per-head
+  norms), `Gemma4TextRotaryEmbedding` (dual rope tables — proportional
+  partial RoPE on global layers), `Gemma4TextDecoderLayer` (4-norm
+  sandwich + PLE residual), `Gemma4TextModel` (PLE orchestration + dual
+  sliding/full mask), `Gemma4TextExperts` / `Gemma4TextRouter`
+  (26B-A4B-only MoE pair).
+- Vision: `Gemma4VisionAttention` (non-causal SDPA + 2-D RoPE),
+  `Gemma4VisionRotaryEmbedding` (2-D position encoding precompute),
+  `Gemma4VisionPatchEmbedder`, `Gemma4VisionEncoderLayer`,
+  `Gemma4VisionEncoder`, `Gemma4VisionPooler` (position-aware), and the
+  top-level `Gemma4VisionModel`.
+- Shared: `Gemma4ClippableLinear` (the wrapper itself stays on host as
+  a thin clamp orchestrator; the inner `nn.Linear` runs on device when
+  its parent MLP is one of the swapped wrappers).
+
+Declared `host_glue` (intentionally CPU-only by policy — these classes
+own orchestration with effectively zero FLOPs):
+
+- `Gemma4Model` (masked_scatter of vision tokens into text embedding
+  stream, sliding/full causal mask construction).
+- `Gemma4ForConditionalGeneration` (lm_head delegate + optional logit
+  softcap; final `tanh` before sampling, kept host to live next to the
+  rest of `GenerationMixin`).
+
+## Compatibility tracker fix
+
+The runtime observability hook in
+`tt_symbiote.core.run_config._record_runtime_fallback` was recording
+`type(self).__name__` — i.e. the TTNN wrapper's class name — into the
+ledger. That value never matched any of the recipe's declared lists
+(which use *HF source* class names), so any actual runtime fallback
+showed up as `unexpected` even when the recipe declared it.
+
+Fixed by preferring `type(self._fallback_torch_layer).__name__` when a
+fallback layer is attached. The TTNN wrapper's class name is still used
+as a last resort for modules without a preserved fallback.
+
+This was a latent bug in the Phase 7 tracker that the Phase 8 swaps
+made visible — Phase 7 shipped an empty `build_module_dict` so no
+fallback ever fired in the verified e2b run.
+
+## Compatibility surface
+
+Added a fourth design-time list to
+`tt_symbiote.utils.compatibility.report`:
+
+- `host_glue` (HF classes intentionally CPU-only by policy).
+
+Existing recipes that don't declare `host_glue` keep working — the
+report defaults to an empty list and `runtime_observed.unexpected`
+still computes against the union of all four lists.
+
+## Acceptance result
+
+`python examples/e2e/gemma4/run_gemma4_e2b.py` on N150:
+
+- `tt_implemented`: 5 (`Gemma4RMSNorm`, `Gemma4TextScaledWordEmbedding`,
+  `Gemma4TextMLP`, `Gemma4VisionMLP`, `Gemma4MultimodalEmbedder`).
+- `cpu_fallback`: 14. `host_glue`: 2. `out_of_scope`: 14.
+- `runtime_observed.unexpected`: `[]`.
+- Generated answer: `"The animal in the photo is a **dog**. It appears
+  to be a young Golden Retriever or a similar light-colored breed."`
+- Assertion (`_DOG_EQUIVALENTS`) passed.
+
+Three modules in the runtime ledger (`embed_tokens`,
+`embed_tokens_per_layer`, `embed_vision`) silently hit the fallback
+path — their classes are *in* `tt_implemented` so the report does not
+flag them as `unexpected`. The fallbacks happen because some of HF
+Gemma-4's call sites that wrap these modules pass tensors in shapes /
+dtypes the TTNN integration can't yet consume cheaply, and the wrapper
+correctness path (the preserved `_fallback_torch_layer`) carries the
+load. Surfacing "tt_implemented but observed fallback" into the report
+is a small follow-up.
+
+## Files touched
+
+- `src/tt_symbiote/utils/compatibility.py` — added `host_glue` to the
+  declared set and the report shape.
+- `src/tt_symbiote/core/run_config.py` — `_record_runtime_fallback`
+  now records the HF source class name.
+- `src/tt_symbiote/models/gemma4/modeling_gemma4.py` — recipe wired up
+  with five swaps; design-time lists updated; `host_glue` added.
+- `src/tt_symbiote/models/gemma4/modeling_gemma4_text.py` (NEW) —
+  `TTNNGemma4RMSNorm`, `TTNNGemma4ScaledWordEmbedding`,
+  `TTNNGemma4TextMLP`.
+- `src/tt_symbiote/models/gemma4/modeling_gemma4_vision.py` (NEW) —
+  `TTNNGemma4VisionMLP`, `TTNNGemma4MultimodalEmbedder`.
+- `src/tt_symbiote/models/gemma4/__init__.py` — docstring updated.
+- `examples/e2e/gemma4/*_coverage.json` — all four refreshed to the
+  4-bucket shape (E2B has runtime data; the other three are
+  design-time stubs).
+- `docs/cpu_vs_device_coverage.md` — Gemma-4 rows updated.
+
+## What's deferred to Wave A+1 / Wave B
+
+- **Wave A+1 (Gemma-4)**: text attention, dual RoPE, PLE,
+  decoder/text-model orchestration. This is what unblocks the
+  decoder loop running on device. ~1-2 weeks of bespoke engineering
+  (KV sharing + per-head norms + dual rope tables + sliding/full
+  pattern).
+- **Wave B (Qwen3-VL)**: same pattern as Wave A — RMSNorm, text MLP,
+  vision MLP, patch merger, multimodal embedder via existing TTNN
+  integrations. Deferred to a follow-up session.
