@@ -131,25 +131,59 @@ Counts (design + runtime): **5 TT / 14 CPU / 2 host_glue / 14 OOS**.
 | De-tokenisation | `processor.batch_decode` | CPU | — |
 | Out of scope | 9× `Gemma4Audio*`, `Gemma4ForCausalLM`, 4× output dataclass | — | — |
 
-#### Gemma-4 E4B-it — N150 (1×1), Wave A (⏳ structurally supported)
+#### Gemma-4 E4B-it — N150 (1×1), Wave A (✅ verified)
 
 Source: [`run_gemma4_e4b.py`](../examples/e2e/gemma4/run_gemma4_e4b.py)
-+ [`coverage stub`](../examples/e2e/gemma4/run_gemma4_e4b_coverage.json).
-Same class layout as E2B (same recipe). Design-time counts: 5 TT /
-14 CPU / 2 host_glue / 14 OOS.
++ [`run_gemma4_e4b_coverage.json`](../examples/e2e/gemma4/run_gemma4_e4b_coverage.json).
+Same class layout as E2B (same recipe). Runtime counts: **5 TT / 14
+CPU / 2 host_glue / 14 OOS**. `runtime_observed.unexpected == []`.
+Three expected fallbacks fire on the embedding / multimodal embedder
+boundaries (`Gemma4TextScaledWordEmbedding`, `Gemma4MultimodalEmbedder`)
+because some HF call sites hand those modules tensors whose dtype /
+shape the TTNN integrations can't yet consume — the preserved
+`_fallback_torch_layer` carries the load. Identical pattern to E2B.
 
-#### Gemma-4 31B-it — T3K (1×8), Wave A (⏳ structurally supported)
+#### Gemma-4 31B-it — T3K (1×8), Wave A budget-gated (✅ verified, CPU-only)
 
 Source: [`run_gemma4_31b.py`](../examples/e2e/gemma4/run_gemma4_31b.py)
-+ [`coverage stub`](../examples/e2e/gemma4/run_gemma4_31b_coverage.json).
-Same class layout as E2B; mesh shape `(1, 8)`.
++ [`run_gemma4_31b_coverage.json`](../examples/e2e/gemma4/run_gemma4_31b_coverage.json).
+Same design-time class layout as E2B (`Gemma4Recipe` is shared); mesh
+shape `(1, 8)`. **At runtime, the recipe's budget gate triggers**: the
+Wave A swap map would replicate ~43.5 GB of weights across each of the
+8 T3K chips (matmul + embedding + multimodal projection), which is
+~3.6× over the 12 GB DRAM ceiling. `_ttnn_swap_is_safe(model)` returns
+`False` with the reason `"replicated weight footprint ~43.5 GB exceeds
+the 9 GB per-chip budget (tensor-parallel sharding not yet wired
+in)"`; `Gemma4Recipe.build_module_dict` short-circuits to `{}` and
+emits a `UserWarning`. Effective runtime counts: **0 TT / 19 CPU / 2
+host_glue / 14 OOS** (every Wave A "tt_implemented" class falls
+through to its HF source layer; the recipe's design-time
+`tt_implemented` list stays unchanged so the JSON artefact remains
+auditable). `runtime_observed.unexpected == []`. The model produces
+the same semantically correct dog identification as E2B / E4B.
+`model._tt_runtime_config["ttnn_swap_skipped"] == True` and
+`ttnn_replicated_footprint_bytes` exposes the actual footprint so the
+gate decision is inspectable.
 
-#### Gemma-4 26B-A4B-it — T3K (1×8), MoE, Wave A (⏳ structurally supported)
+#### Gemma-4 26B-A4B-it — T3K (1×8), MoE-gated (✅ verified, CPU-only)
 
 Source: [`run_gemma4_26b_a4b.py`](../examples/e2e/gemma4/run_gemma4_26b_a4b.py)
-+ [`coverage stub`](../examples/e2e/gemma4/run_gemma4_26b_a4b_coverage.json).
-Same class layout; the `Gemma4TextExperts` / `Gemma4TextRouter` MoE
-pair *is* exercised here (unlike on E2B).
++ [`run_gemma4_26b_a4b_coverage.json`](../examples/e2e/gemma4/run_gemma4_26b_a4b_coverage.json).
+Same design-time layout; the `Gemma4TextExperts` / `Gemma4TextRouter`
+MoE pair is exercised here (unlike on E2B / E4B). **At runtime, the
+recipe's MoE gate triggers**: `text_config.enable_moe_block == True`
+puts the model on a code path where (a) `Gemma4TextExperts` is a
+sparsely-routed expert FFN whose weights are *not* matched by the
+dense `Gemma4TextMLP` Wave A wrapper, and (b) the per-head Q/K
+RMSNorms inside `Gemma4TextDecoderLayer` use `dim ∈ {32, 96}` shapes
+the current TTNN RMSNorm tile geometry rejects. A partial swap would
+fire hundreds of runtime fallbacks; the gate returns the recipe to
+`{}` swaps with the reason `"MoE variant: Gemma4TextExperts + bespoke
+head-dim norms fall outside the Wave A wrapper coverage (Gemma4TextMLP
+wraps only the dense branch); a partial swap produces hundreds of
+shape-validation fallbacks at runtime"`. Effective runtime counts: **0
+TT / 19 CPU / 2 host_glue / 14 OOS**, `runtime_observed.unexpected ==
+[]`, semantically correct answer.
 
 #### Qwen3-VL-2B-Instruct — N150 (1×1), Wave B (✅ verified)
 
@@ -199,9 +233,9 @@ Aggregating the JSON files into a single overview:
 | `resnet/run_resnet101.py` | N150 (1×1) | ⏳ stub | 0 | 0 | 0 | 0 | n/a |
 | `resnet/run_resnet152.py` | N150 (1×1) | ⏳ stub | 0 | 0 | 0 | 0 | n/a |
 | `gemma4/run_gemma4_e2b.py` | N150 (1×1) | ✅ verified (Phase 8 Wave A) | **5** | 14 | 2 | 14 | 0 |
-| `gemma4/run_gemma4_e4b.py` | N150 (1×1) | ⏳ stub | 5 | 14 | 2 | 14 | n/a |
-| `gemma4/run_gemma4_31b.py` | T3K (1×8) | ⏳ stub | 5 | 14 | 2 | 14 | n/a |
-| `gemma4/run_gemma4_26b_a4b.py` | T3K (1×8) | ⏳ stub | 5 | 14 | 2 | 14 | n/a |
+| `gemma4/run_gemma4_e4b.py` | N150 (1×1) | ✅ verified (Phase 8 Wave A) | **5** | 14 | 2 | 14 | 0 |
+| `gemma4/run_gemma4_31b.py` | T3K (1×8) | ✅ verified (CPU-only via budget gate) | 0 effective (5 declared) | 19 effective (14 declared) | 2 | 14 | 0 |
+| `gemma4/run_gemma4_26b_a4b.py` | T3K (1×8) | ✅ verified (CPU-only via MoE gate) | 0 effective (5 declared) | 19 effective (14 declared) | 2 | 14 | 0 |
 | `qwen3_vl/run_qwen3_vl_2b.py` | N150 (1×1) | ✅ verified (Phase 8 Wave B) | **4** | 9 | 3 | 3 | 0 |
 | `qwen3_vl/run_qwen3_vl_4b.py` | N150 (1×1) | ⏳ stub | 4 | 9 | 3 | 3 | n/a |
 | `qwen3_vl/run_qwen3_vl_8b.py` | N150 (1×1) | ⏳ stub | 4 | 9 | 3 | 3 | n/a |
@@ -209,10 +243,42 @@ Aggregating the JSON files into a single overview:
 
 **Net Tenstorrent coverage today:** ResNet-50 (full TTNN on N150) and
 Ling-mini-2.0 (full TTNN on T3K) remain the only models with the
-attention/MoE/decoder loop on device. Gemma-4 E2B and Qwen3-VL-2B
+attention/MoE/decoder loop on device. Gemma-4 E2B / E4B and Qwen3-VL-2B
 now have *partial* on-device execution (5 and 4 simple compute classes
 respectively; their attention + decoder loops still run on host
-pending the bespoke text-attention / RoPE wrappers).
+pending the bespoke text-attention / RoPE wrappers). The Gemma-4 31B
+and 26B-A4B variants run entirely on CPU via the recipe's budget /
+MoE gate — see "Budget and MoE gating" below.
+
+## Budget and MoE gating
+
+The Gemma-4 recipe's `_ttnn_swap_is_safe(model)` predicate is the
+single source of truth for which variants accept the Wave A swaps and
+which fall back to whole-model CPU execution. The decision matrix:
+
+| Variant | Replicated Wave A footprint per chip | MoE? | Gate verdict | Reason exposed via `model._tt_runtime_config["ttnn_swap_skipped_reason"]` |
+|---|---|---|---|---|
+| `gemma-4-E2B-it` | ~0.7 GB | no | **pass** (TTNN swap proceeds) | n/a |
+| `gemma-4-E4B-it` | ~1.4 GB | no | **pass** (TTNN swap proceeds) | n/a |
+| `gemma-4-31B-it` | ~43.5 GB | no | **fail** (CPU-only) | `replicated weight footprint ~43.5 GB exceeds the 9 GB per-chip budget (tensor-parallel sharding not yet wired in)` |
+| `gemma-4-26B-A4B-it` | ~10 GB (dense branch only) | yes | **fail** (CPU-only) | `MoE variant: Gemma4TextExperts + bespoke head-dim norms fall outside the Wave A wrapper coverage (Gemma4TextMLP wraps only the dense branch); a partial swap produces hundreds of shape-validation fallbacks at runtime` |
+
+When the gate fires, three diagnostic fields land on
+`model._tt_runtime_config`:
+
+- `ttnn_swap_skipped: bool` — `True` when the recipe returned `{}`.
+- `ttnn_swap_skipped_reason: str` — human-readable reason from
+  `_ttnn_swap_is_safe`.
+- `ttnn_replicated_footprint_bytes: int` — estimated per-chip footprint
+  if the Wave A swap had proceeded (useful for sizing future sharded
+  configurations).
+
+The gate is *intentionally not* used by Qwen3-VL today: the dense
+Qwen3-VL variants (2B / 4B / 8B / 32B) all have replicated Wave B
+weight footprints well under the budget on their target meshes, and
+Qwen3-VL ships no MoE recipe yet. A sibling gate in `Qwen3VLRecipe`
+becomes the natural follow-up the day a larger or MoE Qwen3-VL
+variant is added to this folder.
 
 ## Open follow-ups
 
@@ -223,6 +289,11 @@ pending the bespoke text-attention / RoPE wrappers).
 - Land Wave A+1 for Gemma-4: the bespoke text attention (KV-sharing
   + dual RoPE + per-head norms) and PLE. This is what unblocks moving
   the decoder loop to device.
+- Land Wave A+2: tensor-parallel sharded `TTNNLinear` /
+  `TTNNEmbedding` so the budget gate releases Gemma-4 31B-it for
+  on-device execution.
+- Land MoE-aware wrappers for Gemma-4 (`Gemma4TextExperts` +
+  head-dim RMSNorm) so the MoE gate releases the 26B-A4B-it variant.
 - Land Wave B+1 for Qwen3-VL: the bespoke M-RoPE precompute,
   Q/K head-norm-aware attention, varlen-packed vision SDPA, and
   DeepStack-aware decoder loop.

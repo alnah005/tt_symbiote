@@ -87,9 +87,9 @@ The four non-50 ResNet variants share the same recipe; flipping each to
 | Checkpoint | HF class | Status | TT / CPU / glue / OOS | Hardware target | Reproducer | Walkthrough |
 |---|---|---|---|---|---|---|
 | `google/gemma-4-E2B-it` | `Gemma4ForConditionalGeneration` | ✅ verified (Phase 8 Wave A) | 5 / 14 / 2 / 14 | N150 (1×1) | [`gemma4/run_gemma4_e2b.py`](../examples/e2e/gemma4/run_gemma4_e2b.py) | — |
-| `google/gemma-4-E4B-it` | `Gemma4ForConditionalGeneration` | ⏳ structurally supported | 5 / 14 / 2 / 14 | N150 (1×1) | [`gemma4/run_gemma4_e4b.py`](../examples/e2e/gemma4/run_gemma4_e4b.py) | — |
-| `google/gemma-4-31B-it` | `Gemma4ForConditionalGeneration` | ⏳ structurally supported | 5 / 14 / 2 / 14 | T3K (1×8) | [`gemma4/run_gemma4_31b.py`](../examples/e2e/gemma4/run_gemma4_31b.py) | — |
-| `google/gemma-4-26B-A4B-it` | `Gemma4ForConditionalGeneration` | ⏳ structurally supported | 5 / 14 / 2 / 14 | T3K (1×8) | [`gemma4/run_gemma4_26b_a4b.py`](../examples/e2e/gemma4/run_gemma4_26b_a4b.py) | — |
+| `google/gemma-4-E4B-it` | `Gemma4ForConditionalGeneration` | ✅ verified (Phase 8 Wave A) | 5 / 14 / 2 / 14 | N150 (1×1) | [`gemma4/run_gemma4_e4b.py`](../examples/e2e/gemma4/run_gemma4_e4b.py) | — |
+| `google/gemma-4-31B-it` | `Gemma4ForConditionalGeneration` | ✅ verified (CPU-only via budget gate) | 0 / 19 / 2 / 14 | T3K (1×8) | [`gemma4/run_gemma4_31b.py`](../examples/e2e/gemma4/run_gemma4_31b.py) | — |
+| `google/gemma-4-26B-A4B-it` | `Gemma4ForConditionalGeneration` | ✅ verified (CPU-only via MoE gate) | 0 / 19 / 2 / 14 | T3K (1×8) | [`gemma4/run_gemma4_26b_a4b.py`](../examples/e2e/gemma4/run_gemma4_26b_a4b.py) | — |
 | `Qwen/Qwen3-VL-2B-Instruct` | `Qwen3VLForConditionalGeneration` | ✅ verified (Phase 8 Wave B) | 4 / 9 / 3 / 3 | N150 (1×1) | [`qwen3_vl/run_qwen3_vl_2b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_2b.py) | — |
 | `Qwen/Qwen3-VL-4B-Instruct` | `Qwen3VLForConditionalGeneration` | ⏳ structurally supported | 4 / 9 / 3 / 3 | N150 (1×1) | [`qwen3_vl/run_qwen3_vl_4b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_4b.py) | — |
 | `Qwen/Qwen3-VL-8B-Instruct` | `Qwen3VLForConditionalGeneration` | ⏳ structurally supported | 4 / 9 / 3 / 3 | N150 (1×1) | [`qwen3_vl/run_qwen3_vl_8b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_8b.py) | — |
@@ -111,6 +111,39 @@ the sliding/full causal mask construction, and the optional final
 logit softcap, none of which have FLOPs worth moving. Confirm with
 `tt_symbiote.compatibility.report(model)` after any demo run — the
 ``runtime_observed.unexpected`` field must stay empty.
+
+### Budget + MoE gating for the larger Gemma-4 variants
+
+`Gemma4Recipe.build_module_dict` runs a `_ttnn_swap_is_safe(model)`
+check before returning the Wave A swap map. Two conditions short-
+circuit it to an empty dict (no swaps, full CPU execution) and emit
+a `UserWarning`:
+
+1. **Replicated weight footprint > 9 GB per chip.** The current
+   `TTNNLinear` / `TTNNEmbedding` integrations replicate weights
+   across every chip in the mesh; tensor-parallel sharding is a
+   Wave A+2 follow-up. The 31B-it variant's Wave A swaps alone
+   would replicate ~43.5 GB across each T3K chip (8× over the
+   12 GB DRAM budget). The gate forces 31B-it onto CPU until the
+   sharding work lands.
+2. **MoE layout (`text_config.enable_moe_block == True`).** The
+   26B-A4B-it variant ships `Gemma4TextExperts` + `Gemma4TextRouter`
+   plus per-head RMSNorms whose `dim` (32 / 96) is incompatible with
+   the current TTNN RMSNorm tile geometry. A partial swap produces
+   hundreds of shape-validation fallbacks at runtime. The gate
+   forces the MoE variant onto CPU until those wrappers are
+   bespoke-ported.
+
+When a variant is gated, `model._tt_runtime_config` carries
+diagnostic flags (`ttnn_swap_skipped`, `ttnn_replicated_footprint_bytes`,
+`ttnn_swap_skipped_reason`) so the user can inspect *why* the swap
+was skipped. The runtime path stays clean — every fallback is
+declared, `runtime_observed.unexpected` stays `[]`, and the model
+produces the same semantically correct answer as the smaller
+variants. See
+[`docs/cpu_vs_device_coverage.md`](cpu_vs_device_coverage.md)
+"Budget and MoE gating" for the data behind the 9 GB threshold and
+the per-variant headline numbers.
 
 Verified semantic answer for E2B (verbatim, Phase 8 Wave A run):
 

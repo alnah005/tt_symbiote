@@ -11,27 +11,39 @@ An interactive chatbot demo that runs the `inclusionAI/Ling-mini-2.0` model acce
 ## Prerequisites
 
 - **Hardware**: Tenstorrent T3K
-- **Software**: A working `tt-metal` environment with `ttnn` and `torch` installed
-- **Python packages**: `transformers`, `tqdm`
-- **Model access**: Internet access to download the model from HuggingFace on first run (or a local cache). The script uses `trust_remote_code=True`, which downloads and executes model code from the HuggingFace repository.
+- **Software**: The standalone `tt_symbiote` venv from
+  [`scripts/bootstrap_venv.sh`](../../scripts/bootstrap_venv.sh). This
+  ships `ttnn` from PyPI plus a `transformers==5.9.0`-pinned editable
+  `tt_symbiote`; no `tt-metal` source checkout is required. See
+  [`docs/ling_mini_2_0_guide.md`](../../docs/ling_mini_2_0_guide.md)
+  §B.1 for the full bootstrap procedure.
+- **Python packages**: `transformers` and `tqdm` (already pulled in by
+  the bootstrap).
+- **Model access**: Internet access to download the model from
+  HuggingFace on first run (or a local cache). The script uses
+  `trust_remote_code=True`, which downloads and executes model code
+  from the HuggingFace repository.
 
 ## How to Run
 
-Ensure your `tt-metal` environment is set up with the following variables configured:
-
-- `TT_METAL_HOME` — path to the `tt-metal` root
-- `PYTHONPATH` — includes `TT_METAL_HOME`
-- `WH_ARCH_YAML` — e.g. `wormhole_b0_80_arch_eth_dispatch.yaml`
-- `ARCH_NAME` — `wormhole_b0`
-- `MESH_DEVICE` — `T3K`
-
-The `tt-metal` Python virtual environment must also be activated.
-
-From the `tt-metal` project root:
-
 ```bash
-python3 models/experimental/tt_symbiote/demos/HF_chat.py
+# One-time bootstrap (skip if already done):
+cd /home/<you>/tt_symbiote
+./scripts/bootstrap_venv.sh
+
+# Activate the standalone venv and run:
+source /home/<you>/tt_symbiote/.venv/bin/activate
+export MESH_DEVICE=T3K
+python examples/chat/HF_chat.py
 ```
+
+The script handles `set_fabric_config`, `open_mesh_device`,
+`AutoModelForCausalLM.from_pretrained`, `set_device`, and
+`make_kv_cache` setup internally. The only environment variable it
+relies on is `MESH_DEVICE` (set to `T3K` for the supported topology).
+You do **not** need to set `TT_METAL_HOME`, `PYTHONPATH`,
+`WH_ARCH_YAML`, or `ARCH_NAME` — the standalone venv carries
+everything `tt_symbiote` needs.
 
 ### Options
 

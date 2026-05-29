@@ -1,13 +1,16 @@
-/# Ling-mini-2.0 in `tt_symbiote`
+# Ling-mini-2.0 in `tt_symbiote`
 
 A complete guide to **(A)** how `inclusionAI/Ling-mini-2.0` is implemented as
 the first reference port in `tt_symbiote`, and **(B)** how to run it on a
 Tenstorrent T3K through the public `from tt_symbiote import
 AutoModelForCausalLM` API.
 
-> Audience: someone who has `tt_symbiote` installed in a `tt-metal` Python
-> environment, has access to T3K hardware, and wants to either run the model
-> or add a new one following the same pattern.
+> Audience: someone who has bootstrapped the standalone `tt_symbiote`
+> venv via [`scripts/bootstrap_venv.sh`](../scripts/bootstrap_venv.sh) (or
+> who develops against tt-metal HEAD per §B.1), has access to T3K
+> hardware, and wants to either run the model or add a new one following
+> the same pattern. No `tt-metal` source checkout is required for the
+> standalone path.
 
 ---
 
@@ -458,8 +461,8 @@ root.
 
 ## B.2 — The runnable script
 
-The canonical runnable example is at
-[`/home/aroberge/scratch/run_ling.py`](../../scratch/run_ling.py):
+The canonical runnable example is in the repo at
+[`examples/e2e/run_ling_mini_2_0.py`](../examples/e2e/run_ling_mini_2_0.py):
 
 ```python
 import os
@@ -514,8 +517,8 @@ ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 Run it (assumes you've already bootstrapped a venv per §B.1):
 
 ```bash
-source /home/aroberge/tt_symbiote/.venv/bin/activate
-python /home/aroberge/scratch/run_ling.py
+source /home/<you>/tt_symbiote/.venv/bin/activate
+python examples/e2e/run_ling_mini_2_0.py
 ```
 
 ## B.3 — Line-by-line walkthrough

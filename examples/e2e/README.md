@@ -64,11 +64,11 @@ examples/e2e/
 | `microsoft/resnet-50` | [`resnet/run_resnet50.py`](resnet/run_resnet50.py) | image classification | N150 (1×1) | ✅ verified (Phase 6) |
 | `microsoft/resnet-101` | [`resnet/run_resnet101.py`](resnet/run_resnet101.py) | image classification | N150 (1×1) | ⏳ structurally supported |
 | `microsoft/resnet-152` | [`resnet/run_resnet152.py`](resnet/run_resnet152.py) | image classification | N150 (1×1) | ⏳ structurally supported |
-| `google/gemma-4-E2B-it` | [`gemma4/run_gemma4_e2b.py`](gemma4/run_gemma4_e2b.py) | VLM | N150 (1×1) | ✅ verified (Phase 7) |
-| `google/gemma-4-E4B-it` | [`gemma4/run_gemma4_e4b.py`](gemma4/run_gemma4_e4b.py) | VLM | N150 (1×1) | ⏳ structurally supported |
-| `google/gemma-4-31B-it` | [`gemma4/run_gemma4_31b.py`](gemma4/run_gemma4_31b.py) | VLM | T3K (1×8) | ⏳ structurally supported |
-| `google/gemma-4-26B-A4B-it` | [`gemma4/run_gemma4_26b_a4b.py`](gemma4/run_gemma4_26b_a4b.py) | VLM (MoE) | T3K (1×8) | ⏳ structurally supported |
-| `Qwen/Qwen3-VL-2B-Instruct` | [`qwen3_vl/run_qwen3_vl_2b.py`](qwen3_vl/run_qwen3_vl_2b.py) | VLM | N150 (1×1) | ✅ verified (Phase 7 — first via skill) |
+| `google/gemma-4-E2B-it` | [`gemma4/run_gemma4_e2b.py`](gemma4/run_gemma4_e2b.py) | VLM | N150 (1×1) | ✅ verified (Phase 8 Wave A) |
+| `google/gemma-4-E4B-it` | [`gemma4/run_gemma4_e4b.py`](gemma4/run_gemma4_e4b.py) | VLM | N150 (1×1) | ✅ verified (Phase 8 Wave A) |
+| `google/gemma-4-31B-it` | [`gemma4/run_gemma4_31b.py`](gemma4/run_gemma4_31b.py) | VLM | T3K (1×8) | ✅ verified (CPU-only via budget gate) |
+| `google/gemma-4-26B-A4B-it` | [`gemma4/run_gemma4_26b_a4b.py`](gemma4/run_gemma4_26b_a4b.py) | VLM (MoE) | T3K (1×8) | ✅ verified (CPU-only via MoE gate) |
+| `Qwen/Qwen3-VL-2B-Instruct` | [`qwen3_vl/run_qwen3_vl_2b.py`](qwen3_vl/run_qwen3_vl_2b.py) | VLM | N150 (1×1) | ✅ verified (Phase 7 — first via skill; Phase 8 Wave B added 4 TTNN swaps) |
 | `Qwen/Qwen3-VL-4B-Instruct` | [`qwen3_vl/run_qwen3_vl_4b.py`](qwen3_vl/run_qwen3_vl_4b.py) | VLM | N150 (1×1) | ⏳ structurally supported |
 | `Qwen/Qwen3-VL-8B-Instruct` | [`qwen3_vl/run_qwen3_vl_8b.py`](qwen3_vl/run_qwen3_vl_8b.py) | VLM | N150 (1×1) | ⏳ structurally supported |
 | `Qwen/Qwen3-VL-32B-Instruct` | [`qwen3_vl/run_qwen3_vl_32b.py`](qwen3_vl/run_qwen3_vl_32b.py) | VLM | T3K (1×8) | ⏳ structurally supported |

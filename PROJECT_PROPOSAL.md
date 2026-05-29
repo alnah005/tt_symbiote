@@ -1,6 +1,17 @@
 # tt_symbiote — Project Proposal
 
-**Status:** Draft v0.1
+**Status:** Approved + executed. Phases 1–8 (Wave B) complete on
+`aroberge/bootstrap`. This document is preserved verbatim as the
+original (frozen) design intent — for live status, see
+[`README.md`](README.md) (top-level), the per-phase rationale in
+[`docs/migration_notes.md`](docs/migration_notes.md), and the
+per-variant verification state in
+[`docs/supported_models.md`](docs/supported_models.md) +
+[`docs/cpu_vs_device_coverage.md`](docs/cpu_vs_device_coverage.md).
+Open questions Q1, Q2, Q3, Q4, Q5, Q9 are resolved in
+`docs/migration_notes.md` Phase 2–8 sections; Q6 (CI runner topology),
+Q7 (auto-sync of vendored ccl.py), Q8 (recursive recipes), and Q10
+(multi-version in one checkout) remain deferred.
 **Owner:** Suhail Alnahari / Adam Roberge 
 **Target first release:** `tt_symbiote 0.1.0` pinned to `transformers v5.9.0`
 **Migration source:** the directory `models/experimental/tt_symbiote/` on the `alnah005/tt_symbiote_v2` branch of the `tt-metal` repo. This is *source material to copy*, not a branch to fork — see §13 for the exact workflow.
@@ -338,17 +349,19 @@ What is retained:
 
 ### 7.1 Priority (locked from the team call)
 
-| Tier | Model | Source today | Notes |
-|---|---|---|---|
-| P0 | Ling-mini-2.0 (`bailing_moe_v2`) | `tests/test_ling_mini_2_0.py`, `modules/decoder_layer.py`, `models/bailing_moe_v2.py` | Reference port. Defines the recipe pattern. |
-| P1 | GLM-4 family (`glm4_moe`) | `tests/test_glm.py`, `test_glm_4_7.py`, `test_glm_5.py`, `test_glm_flash.py`, `modules/moe.py::Glm4MoeConfig` | Shares decoder shape with Ling. Verify shared-module factorization is correct. |
-| P1 | Gemma4 | `tests/test_gemma4.py`, `models/gemma4_text.py`, `modules/gemma4_*` | Clean 3-pass replacement; good template. |
-| P2 | Qwen3 family (`qwen3_moe`, `qwen3_coder_next`) | `tests/test_qwen3_5_35b_a3b.py`, `test_qwen3_coder_next.py`, `modules/qwen_*` | |
-| P2 | GPT-OSS, Olmo3, LLaMA, Molmo2, Qwen-Omni | corresponding `tests/test_*.py` | |
-| P3 | Vision/audio: ViT, OWL-ViT, ResNet50, Whisper3, SpeechT5, HunyuanVideo, OpenVLA, Gr00t | corresponding `tests/test_*.py` | Wire up the right `Auto*` parent (`AutoModelForImageClassification`, `AutoModelForSpeechSeq2Seq`, etc.) |
-| Drop | YuNet | `tests/test_yunet.py` | Not on HF Hub. |
-| Drop | `dots.ocr` | `tests/test_deepseek_ocr.py` | Hit HW limits per team. |
-| Drop | `tests/test_training.py` | n/a | Training is out of scope for v0.1. |
+| Tier | Model | Source today | Status | Notes |
+|---|---|---|---|---|
+| P0 | Ling-mini-2.0 (`bailing_moe_v2`) | `tests/test_ling_mini_2_0.py`, `modules/decoder_layer.py`, `models/bailing_moe_v2.py` | ✅ Phase 5 (full TTNN, T3K) | Reference port. Defines the recipe pattern. |
+| P1 | GLM-4 family (`glm4_moe`) | `tests/test_glm.py`, `test_glm_4_7.py`, `test_glm_5.py`, `test_glm_flash.py`, `modules/moe.py::Glm4MoeConfig` | ⏳ deferred | Shares decoder shape with Ling. Verify shared-module factorization is correct. |
+| P1 | Gemma4 | `tests/test_gemma4.py`, `models/gemma4_text.py`, `modules/gemma4_*` | ✅ Phase 7 (CPU-first) + Phase 8 Wave A (5 on-device wrappers, 4 variants verified — see [`docs/cpu_vs_device_coverage.md`](docs/cpu_vs_device_coverage.md)) | Recipe + budget/MoE gate landed; full text decoder still on CPU pending Wave A+1. |
+| P2 | Qwen3-VL (dense) | `transformers/src/transformers/models/qwen3_vl/` | ✅ Phase 7 follow-up (skill-driven CPU-first port, 2B verified) + Phase 8 Wave B (4 on-device wrappers) | Landed via the [`port-hf-model-to-tt-symbiote`](.cursor/skills/port-hf-model-to-tt-symbiote/SKILL.md) skill. |
+| P2 | Qwen3 family (`qwen3_moe`, `qwen3_coder_next`) | `tests/test_qwen3_5_35b_a3b.py`, `test_qwen3_coder_next.py`, `modules/qwen_*` | ⏳ deferred | |
+| P2 | GPT-OSS, Olmo3, LLaMA, Molmo2, Qwen-Omni | corresponding `tests/test_*.py` | ⏳ deferred | |
+| P3 | ResNet | `tests/test_resnet.py` | ✅ Phase 6 (full TTNN on N150, 5 variants under one recipe; resnet-50 hardware-verified) | First vision reference port. |
+| P3 | Vision/audio: ViT, OWL-ViT, Whisper3, SpeechT5, HunyuanVideo, OpenVLA, Gr00t | corresponding `tests/test_*.py` | ⏳ deferred | Wire up the right `Auto*` parent (`AutoModelForImageClassification`, `AutoModelForSpeechSeq2Seq`, etc.) |
+| Drop | YuNet | `tests/test_yunet.py` | dropped Phase 2.6 | Not on HF Hub. |
+| Drop | `dots.ocr` | `tests/test_deepseek_ocr.py` | dropped Phase 2.6 | Hit HW limits per team. |
+| Drop | `tests/test_training.py` | n/a | dropped Phase 2.6 | Training is out of scope for v0.1. |
 
 ### 7.2 Per-model port checklist
 
@@ -432,21 +445,52 @@ Per §6.
 
 The first end-to-end model port. Validates the recipe shape, the `Auto*` plumbing, and the test layout. **When the Ling-mini-2.0 smoke test passes, tag `v0.0.0`** — this is the first tag on the new repo and marks the point at which one real model demonstrably works through the new API.
 
-### Phase 6 — GLM + Gemma4 ports
+### Phase 6 — ResNet vision reference port (replaced "GLM + Gemma4" per redirect)
 
-Parallelizable. These confirm the shared-module factorization in `integrations/`.
+Originally scoped to "GLM + Gemma4 LLM ports"; redirected mid-flight
+to a vision reference port to exercise the recipe contract along a
+second axis (NHWC convs, no KV cache, image input). Five Microsoft
+ResNet variants share a single recipe; resnet-50 is hardware-verified
+end-to-end on N150 (full TTNN). See
+[`docs/migration_notes.md`](docs/migration_notes.md) Phase 6.
 
-### Phase 7 — Long-tail model ports (rolling)
+### Phase 7 — Gemma-4 VLM (CPU-first) + porting skill + Qwen3-VL (CPU-first)
 
-Driven by the Claude porting skill once Phase 6 is done. Each model is one PR.
+Phase 7 turned into three landings:
 
-### Phase 8 — Documentation + first release
+1. **Gemma-4 VLM port** — CPU-first commit that exercises the full
+   image-text-to-text demo on N150 against `gemma-4-E2B-it` and ships
+   the four-class compatibility tracker (`tt_implemented` /
+   `cpu_fallback` / `out_of_scope`; `host_glue` added later in
+   Phase 8) that downstream TTNN commits plug into.
+2. **`port-hf-model-to-tt-symbiote` Cursor skill** at
+   `.cursor/skills/port-hf-model-to-tt-symbiote/` — encodes the
+   templated workflow used by Gemma-4 and exercises it by porting a
+   new model (Qwen3-VL).
+3. **Qwen3-VL-2B-Instruct port** — produced end-to-end by the skill,
+   first model landed with zero design decisions during execution.
+
+### Phase 8 — Gemma-4 + Qwen3-VL TTNN push (high-value-first)
+
+The first wave of on-device wrappers for the two VLMs, focused on
+"structurally simple high-value compute" via existing TTNN
+integrations. Wave A (Gemma-4) ships 5 swaps (`Gemma4RMSNorm`,
+`Gemma4TextScaledWordEmbedding`, `Gemma4TextMLP`, `Gemma4VisionMLP`,
+`Gemma4MultimodalEmbedder`) plus a budget + MoE gate that forces
+oversize or MoE Gemma-4 variants to whole-model CPU execution
+with a clean compatibility report. Wave B (Qwen3-VL) ships 4 swaps
+(`Qwen3VLTextRMSNorm`, `Qwen3VLTextMLP`, `Qwen3VLVisionMLP`,
+`Qwen3VLVisionPatchMerger`). All four Gemma-4 variants verified
+end-to-end (two via Wave A swaps, two via the gate). See
+[`docs/migration_notes.md`](docs/migration_notes.md) Phase 8 sections.
+
+### Phase 9 — Documentation + first release (was Phase 8 in original draft)
 
 - Fill in `docs/architecture.md`, `docs/porting_a_new_model.md`, `docs/run_modes.md`.
-- Update `README.md` with the HF-style quick start.
-- Tag `v0.1.0` — first *external* release. The branch becomes `transformers-5.9` (the long-lived branch for that HF version per §10). `v0.0.0` (Ling-mini-2.0 working) and any intermediate tags from Phases 6–7 are internal milestones; `v0.1.0` is the first version we'd point an outside user at.
+- Update `README.md` with the HF-style quick start (done).
+- Tag `v0.1.0` — first *external* release. The branch becomes `transformers-5.9` (the long-lived branch for that HF version per §10). `v0.0.0` (Ling-mini-2.0 working) and any intermediate tags from Phases 6–8 are internal milestones; `v0.1.0` is the first version we'd point an outside user at.
 
-### Phase 9 — CI + release automation (rolling)
+### Phase 10 — CI + release automation (rolling; was Phase 9 in original draft)
 
 - Wire up self-hosted runners for N150, T3K, P150 nightly smoke runs.
 - Add a `release-please`-style automation for version bumps.

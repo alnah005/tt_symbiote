@@ -7,8 +7,12 @@ addition to [`SKILL.md`](SKILL.md).
 
 The canonical CPU-first VLM port is
 [`google/gemma-4-E2B-it`](../../src/tt_symbiote/models/gemma4/) (committed
-in [`08e9a7e`](../../docs/migration_notes.md)). Copy its shape exactly;
-only the deltas listed below need attention per model.
+in Phase 7; see [`docs/migration_notes.md`](../../docs/migration_notes.md)).
+Copy its shape exactly; only the deltas listed below need attention per
+model. Phase 8 Wave A added 5 on-device TTNN swaps on top of the
+CPU-first scaffolding (RMSNorm, scaled word embedding, text MLP, vision
+MLP, multimodal embedder) plus a budget/MoE gate; those swaps are a
+follow-up *after* this skill runs, not part of the skill's output.
 
 ## Architecture shape
 
@@ -38,12 +42,20 @@ Use this matrix when populating the recipe's three lists:
 | `<Model>VisionPatchEmbed`, `<Model>VisionRotaryEmbedding`, `<Model>VisionAttention`, `<Model>VisionMLP`, `<Model>VisionBlock` / `EncoderLayer`, `<Model>VisionEncoder`, `<Model>VisionPooler`, `<Model>VisionModel`, `<Model>VisionPatchMerger` | `cpu_fallback` |
 | `<Model>TextRotaryEmbedding`, `<Model>TextRMSNorm`, `<Model>TextAttention`, `<Model>TextMLP`, `<Model>TextDecoderLayer`, `<Model>TextModel`, `<Model>TextScaledWordEmbedding` | `cpu_fallback` |
 | `<Model>MultimodalEmbedder` / `*MultimodalProjector` / `*VisionPatchMerger` | `cpu_fallback` |
-| `<Model>Model`, `<Model>ForConditionalGeneration` | `cpu_fallback` (the top-level composites still execute through the path) |
+| `<Model>Model`, `<Model>ForConditionalGeneration` | `host_glue` (top-level composites that own orchestration with no FLOPs to accelerate — `masked_scatter`, mask building, logit softcap, etc.) |
 | `<Model>RMSNorm`, `<Model>ClippableLinear`, etc. — shared utilities | `cpu_fallback` |
 | `<Model>AudioModel` / any audio class | `out_of_scope` (image-text demo doesn't exercise audio) |
 | `<Model>ForCausalLM` | `out_of_scope` (alternative text-only head, not the VLM path) |
 | Output dataclasses: `*ModelOutputWithPast`, `*CausalLMOutputWithPast`, etc. | `out_of_scope` (not torch modules) |
 | MoE pair `<Model>TextExperts` + `<Model>TextRouter` (when present) | `cpu_fallback` (the dense recipe is shared with MoE variants) |
+
+`host_glue` was added in Phase 8 alongside the first Gemma-4 TTNN
+swaps. The intuition: classes whose forward is `masked_scatter` + mask
+construction + (optional) logit softcap have effectively zero FLOPs;
+flagging them separately from `cpu_fallback` keeps the actionable
+backlog focused on compute, not glue. Recipes that don't declare
+`host_glue` still work — `compatibility.report` defaults to an empty
+list.
 
 The disjointness invariant — checked by the recipe test — is that no
 class name appears in two lists.
@@ -235,3 +247,20 @@ Variables extracted in Phase A, fed into the templates in Phase C:
 
 Note Qwen3-VL has no audio tower (unlike Gemma-4 E2B), so the
 `out_of_scope` list is shorter — just the output dataclasses.
+
+## Follow-on Phase 8 wrappers (post-skill)
+
+Once the skill produces the CPU-first scaffolding, the next commit
+follows the Wave A / Wave B pattern: pick the **structurally simple,
+FLOP-intensive** classes (RMSNorm with scale, scaled embedding, text
+MLP / vision MLP / patch merger / multimodal embedder) and wrap them
+using existing TTNN integrations. The harder bespoke pieces (text
+attention with KV sharing / per-head Q/K norms / M-RoPE,
+position-aware vision pooling, varlen-packed vision SDPA) stay in
+`cpu_fallback` until model-specific TTNN kernels are bespoke-engineered.
+
+For models whose Wave A swap map exceeds the per-chip DRAM budget
+(observed at ~9 GB for the current `TTNNLinear` replicated-weight
+path), copy Gemma-4's `_ttnn_swap_is_safe` gate verbatim. For MoE
+variants whose dense-only Wave A swaps would produce many runtime
+fallbacks, copy the MoE branch of the same gate.

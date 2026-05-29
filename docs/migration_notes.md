@@ -1257,3 +1257,167 @@ text attention is implemented. The bespoke parts are:
 
 None of these fit the existing single-device attention modules
 without bespoke work — same deferral rationale as Gemma-4 Wave A+1.
+
+# Phase 8 follow-up — Gemma-4 multi-variant runs + budget/MoE gating
+
+Wave A landed the five-class Gemma-4 swap map and verified it on N150
+against `google/gemma-4-E2B-it`. The next session pushed the same
+recipe through the other three production variants (`E4B-it` on N150,
+`31B-it` and `26B-A4B-it` on T3K). Two of the four runs surfaced
+deficiencies in how `TTNNLinear` and friends interact with multi-chip
+meshes that needed a recipe-level fix before the runs could be
+declared verified.
+
+## What went wrong on the larger variants (without a gate)
+
+**31B-it (T3K, 1×8):** `set_device` placed the first 12 decoder
+layers' Wave A wrappers onto the mesh device, then ran out of DRAM
+on every chip. The current `TTNNLinear` / `TTNNEmbedding` integrations
+replicate weights across the (1, 8) mesh — they do not yet shard.
+With the Wave A swap map active, the per-chip replicated footprint is
+roughly:
+
+| Component | Per-chip bytes (BF16) |
+|---|---|
+| `Gemma4TextScaledWordEmbedding` (vocab 262144 × 5376) | ~2.7 GB |
+| `Gemma4TextMLP` (gate/up/down per layer × 48 layers) | ~33.5 GB |
+| `Gemma4VisionMLP` (gate/up/down × 27 layers) | ~2.4 GB |
+| `Gemma4RMSNorm` (with_scale=True) instances | ~0.1 GB |
+| `Gemma4MultimodalEmbedder` | small |
+| **Total replicated per chip** | **~43.5 GB** |
+
+The T3K Wormhole chips have 12 GB of DRAM each, so the swap is
+~3.6× over budget before any KV cache, vision activations, or
+intermediate tensors are allocated. The crash manifested as
+`set_device` succeeding but `model.generate` failing to allocate the
+first input tensor on-device.
+
+**26B-A4B-it (T3K, 1×8):** the run did not OOM, but every forward
+pass triggered hundreds of `TTNNModule` torch fallbacks. Two root
+causes:
+
+1. **`Gemma4TextExperts`** — the MoE variant routes each token to a
+   subset of expert FFNs. The expert weights live in
+   `Gemma4TextExperts` (a separate HF class from `Gemma4TextMLP`),
+   which the Wave A swap map does not cover. The dense
+   `Gemma4TextMLP` wrapper only catches the (smaller) shared
+   "always-on" FFN — every per-expert call fell back.
+2. **Per-head `Gemma4RMSNorm` shapes.** The 26B-A4B layout applies
+   `q_norm` / `k_norm` to per-head slices of size 32 / 96, which is
+   below the TTNN RMSNorm tile geometry's minimum. These instances
+   are `with_scale=True` so the Wave A wrapper *did* accept them at
+   `from_torch` time, but `ttnn.rms_norm` rejected the shape at
+   forward time, falling back module-by-module.
+
+The result was a coverage report cluttered with one `unexpected`
+runtime entry (an `nn.Linear` deep inside the experts that the
+recipe never explicitly catalogued) plus 549 declared but firing
+fallbacks. Functionally correct, operationally useless for tracking.
+
+## The fix: `_ttnn_swap_is_safe` gate
+
+`src/tt_symbiote/models/gemma4/modeling_gemma4.py` gained three new
+top-level helpers and a guard in `Gemma4Recipe.build_module_dict`:
+
+- `_TTNN_PER_CHIP_BUDGET_BYTES = 9 * 1024**3` — conservative per-chip
+  ceiling. Set at 9 GB rather than the full 12 GB DRAM so there's
+  headroom for KV cache + activations + scratch when Wave A+2 sharding
+  lands and the gate starts releasing larger variants.
+- `_ttnn_replicated_weight_footprint_bytes(model)` — walks every
+  HF class that would be touched by the Wave A map (`Gemma4TextMLP`,
+  `Gemma4VisionMLP`, `Gemma4MultimodalEmbedder`,
+  `Gemma4TextScaledWordEmbedding`, `Gemma4RMSNorm` with scale) and
+  sums up the BF16 byte cost of their flattened parameters. Strictly a
+  pre-swap estimator — it does not actually instantiate any TTNN
+  buffers.
+- `_ttnn_swap_is_safe(model) -> (bool, str)` — returns `False` plus a
+  human-readable reason when either the footprint exceeds the budget
+  or `text_config.enable_moe_block` is true. Otherwise `True`, `""`.
+
+`Gemma4Recipe.build_module_dict(model)` calls this predicate first
+thing:
+
+```python
+def build_module_dict(self, model):
+    is_safe, reason = _ttnn_swap_is_safe(model)
+    if not is_safe:
+        warnings.warn(
+            f"Gemma4Recipe: skipping TTNN swap for "
+            f"{type(model).__name__} "
+            f"('{getattr(model.config, '_name_or_path', '<unknown>')}'): "
+            f"{reason}. Running on PyTorch/CPU.",
+            stacklevel=2,
+        )
+        return {}
+    return {
+        Gemma4RMSNorm: TTNNGemma4RMSNorm,
+        Gemma4TextScaledWordEmbedding: TTNNGemma4ScaledWordEmbedding,
+        Gemma4TextMLP: TTNNGemma4TextMLP,
+        Gemma4VisionMLP: TTNNGemma4VisionMLP,
+        Gemma4MultimodalEmbedder: TTNNGemma4MultimodalEmbedder,
+    }
+```
+
+`Gemma4Recipe.post_register` was extended to expose the gate decision
+on `model._tt_runtime_config` for inspection:
+
+```python
+config["ttnn_replicated_footprint_bytes"] = _ttnn_replicated_weight_footprint_bytes(model)
+is_safe, reason = _ttnn_swap_is_safe(model)
+config["ttnn_swap_skipped"] = not is_safe
+if not is_safe:
+    config["ttnn_swap_skipped_reason"] = reason
+```
+
+## Why a gate and not a fallback in the wrapper?
+
+The wrappers already fall back to PyTorch when a single forward call
+fails. We considered relying on that path for both 31B-it and
+26B-A4B-it. Two reasons we picked the recipe-level gate instead:
+
+1. **31B-it never gets to a forward call.** The OOM happens at
+   `move_weights_to_device` time. By the time any wrapper could
+   notice and fall back, the device is already wedged. The gate runs
+   *before* any weights are allocated.
+2. **26B-A4B-it does fall back, but at hundreds of sites per token.**
+   The runtime ledger fills with declared-but-firing fallbacks plus
+   one undeclared expert `Linear`. The report becomes unactionable —
+   you can't tell whether anything actually regressed because
+   everything is "firing as expected". Gating the whole swap returns
+   the report to a clean baseline (`runtime_observed.unexpected ==
+   []`, zero declared fallbacks firing) until the MoE wrappers land.
+
+## Acceptance — four variants verified
+
+| Variant | Hardware | TTNN swap proceeded? | `runtime_observed.unexpected` | Semantic answer |
+|---|---|---|---|---|
+| `gemma-4-E2B-it` | N150 (1×1) | yes (5 swaps active) | `[]` | "The animal in the photo is a **dog**…" |
+| `gemma-4-E4B-it` | N150 (1×1) | yes (5 swaps active) | `[]` | dog-equivalent answer |
+| `gemma-4-31B-it` | T3K (1×8) | no (budget gate, ~43.5 GB) | `[]` | dog-equivalent answer |
+| `gemma-4-26B-A4B-it` | T3K (1×8) | no (MoE gate) | `[]` | dog-equivalent answer |
+
+`compatibility.report(model)` JSON artefacts are committed alongside
+each script. The two gated runs still populate the design-time lists
+(so the recipe's stated intent stays auditable) but report zero
+runtime fallbacks because no TTNN module was ever instantiated.
+
+## Side fix: `_record_runtime_fallback` was attributing fallbacks to the wrong class
+
+Phase 8 Wave A had already fixed this for the embedding / multimodal
+embedder fallbacks. The 26B-A4B-it initial run surfaced a corollary:
+without the fix, the MoE expert fallbacks showed up as `unexpected`
+even though `Gemma4TextExperts` is in `cpu_fallback`. The fix is the
+same one Wave A applied — record `type(_fallback_torch_layer).__name__`
+when present — and is already merged.
+
+## Follow-ups (not gating this commit)
+
+- **Tensor-parallel `TTNNLinear` / `TTNNEmbedding`** — would let the
+  budget gate release `gemma-4-31B-it` for on-device execution.
+- **MoE wrappers** (`TTNNGemma4TextExperts`, `TTNNGemma4TextRouter`,
+  per-head `TTNNRMSNorm` for `dim ∈ {32, 96}`) — would let the MoE
+  gate release `gemma-4-26B-A4B-it`.
+- **Sibling gate in `Qwen3VLRecipe`** — once a Qwen3-VL variant lands
+  that exceeds the per-chip budget, mirror the Gemma-4 gate verbatim.
+- **CI gate on `runtime_observed.unexpected != []`** in the
+  committed coverage JSON files — trivial follow-up.

@@ -39,7 +39,21 @@ references. Cite them; do not re-design.
 |---|---|---|
 | Causal LM | `inclusionAI/Ling-mini-2.0` | [`bailing_moe_v2`](../../src/tt_symbiote/models/bailing_moe_v2/) (full TTNN) |
 | Image classification | `microsoft/resnet-50` | [`resnet`](../../src/tt_symbiote/models/resnet/) (full TTNN) |
-| Vision-language (VLM) | `google/gemma-4-E2B-it` | [`gemma4`](../../src/tt_symbiote/models/gemma4/) (CPU-first; the canonical CPU-first template) |
+| Vision-language (VLM) | `google/gemma-4-E2B-it` | [`gemma4`](../../src/tt_symbiote/models/gemma4/) (CPU-first scaffolding from Phase 7; Phase 8 Wave A added 5 on-device wrappers + a budget/MoE gate) |
+| Vision-language (VLM) | `Qwen/Qwen3-VL-2B-Instruct` | [`qwen3_vl`](../../src/tt_symbiote/models/qwen3_vl/) (CPU-first scaffolding produced by *this skill* in Phase 7; Phase 8 Wave B added 4 on-device wrappers) |
+
+The Phase 8 wrappers are **not** part of this skill's output — they're
+a per-model follow-up commit. The skill ships the CPU-first scaffolding
+and the four-bucket compatibility tracker (`tt_implemented` /
+`cpu_fallback` / `host_glue` / `out_of_scope`). Once that lands, the
+follow-up swaps classes from `cpu_fallback` to `tt_implemented` and
+extends `build_module_dict` accordingly — see Wave A
+([`modeling_gemma4_text.py`](../../src/tt_symbiote/models/gemma4/modeling_gemma4_text.py),
+[`modeling_gemma4_vision.py`](../../src/tt_symbiote/models/gemma4/modeling_gemma4_vision.py))
+and Wave B
+([`modeling_qwen3_vl_text.py`](../../src/tt_symbiote/models/qwen3_vl/modeling_qwen3_vl_text.py),
+[`modeling_qwen3_vl_vision.py`](../../src/tt_symbiote/models/qwen3_vl/modeling_qwen3_vl_vision.py))
+for examples.
 
 ## Phase A — Discovery (read-only)
 
