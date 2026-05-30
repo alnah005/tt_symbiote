@@ -146,7 +146,7 @@ tt_symbiote/                           # repo root
 │   │   ├── test_embedding.py
 │   │   └── test_dpl.py                # DPL run-mode contract test
 │   │
-│   └── models/                        # mirrors transformers/tests/models/
+│   └── capabilities/                   # per-model tests (mirrors transformers/tests/models/ naming)
 │       ├── bailing_moe_v2/test_modeling_bailing_moe_v2.py    # smoke test: load → register → set_device → generate(max_new_tokens=8)
 │       ├── gemma4/test_modeling_gemma4.py
 │       ├── glm4_moe/test_modeling_glm4_moe.py
@@ -356,7 +356,7 @@ What is retained:
 2. Move all model-specific TTNN classes from today's `modules/<model>_*.py` and `models/<model>.py` into `modeling_<model>.py`.
 3. Register the recipe via `@register_recipe(hf_class_name="…")`.
 4. If the model's HF class name maps to multiple Auto* tasks (e.g. Gemma4 is `Gemma4ForConditionalGeneration` and routed through `AutoModelForImageTextToText`), add the appropriate entry in `auto/auto_mappings.py`.
-5. Create `tests/models/<model>/test_modeling_<model>.py` with one smoke test: load → `set_device` → `generate(max_new_tokens=8)`.
+5. Create `tests/capabilities/<model>/test_modeling_<model>.py` with one smoke test: load → `set_device` → `generate(max_new_tokens=8)`.
 6. Add the model to `docs/supported_models.md`.
 7. CI must pass on the target device. If the test cannot be made to pass within the porting effort, the model is **dropped from this release branch** (per the call: "whatever can run, add it; if not, remove it").
 
@@ -369,7 +369,7 @@ Create `.cursor/skills/port-hf-model/SKILL.md` inside the new repo. The skill's 
   1. Load the HF model in a sandbox, dump the type tree, identify the decoder/attention/MoE/embedding/norm classes.
   2. Generate a skeleton `modeling_<model>.py` next to its HF analog, importing generic blocks from `tt_symbiote.integrations.*` and only overriding what's model-specific.
   3. Generate the `@register_recipe` decorator with the module dict (analog of the three-pass dict in today's `test_gemma4.py` / `test_ling_mini_2_0.py`).
-  4. Generate a thin smoke test in `tests/models/<model>/`.
+  4. Generate a thin smoke test in `tests/capabilities/<model>/`.
   5. Run the smoke test; iterate on the recipe until it passes or the model is dropped.
 - **Out of scope for the skill (human required):** custom TTNN kernels, paged-attention shape derivations, novel sharding configs. The skill must explicitly bail and report when one of these is needed.
 
@@ -382,7 +382,7 @@ Create `.cursor/skills/port-hf-model/SKILL.md` inside the new repo. The skill's 
 Mirrors `transformers/tests/`:
 
 - `tests/capabilities/` — exercises each `integrations/` building block in isolation against a synthetic input. Catches regressions in TTNN ops without needing a real model checkpoint. Today's flat `tests/test_attention.py`, `test_moe.py`, `test_conv.py`, `test_rope.py`, `test_dpl.py` become these.
-- `tests/models/<model>/test_modeling_<model>.py` — per-model smoke test. Load + register + `set_device` + `generate(max_new_tokens=8)`. Asserts output is non-empty. **Not** a numerical equivalence test — numerical PCC checks live in DPL run mode.
+- `tests/capabilities/<model>/test_modeling_<model>.py` — per-model smoke test. Load + register + `set_device` + `generate(max_new_tokens=8)`. Asserts output is non-empty. **Not** a numerical equivalence test — numerical PCC checks live in DPL run mode.
 - `tests/conftest.py` — pytest fixtures for `mesh_device`, `device_params`. Carried over verbatim from today's `tests/conftest.py`.
 
 CI matrix (placeholder, **TBD**): we will run capability tests on every push, but smoke tests only on a nightly run, gated by which device is connected to the runner. The exact runner topology (which models tested on which device) will be defined during Phase 9 as runners come online.

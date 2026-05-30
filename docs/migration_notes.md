@@ -75,7 +75,7 @@ scratch if a problem is discovered.
 
 Discovered during the codemod that
 `src/tt_symbiote/integrations/ttnn_conv.py` (originally `modules/conv.py`) and
-`tests/models/{vit,resnet}/...` referenced
+`tests/capabilities/{vit,resnet}/...` referenced
 `models.tt_cnn.tt.builder.{Conv2dConfiguration, MaxPool2dConfiguration, TtConv2d, TtMaxPool2d}`.
 `tt_cnn` is another tt-metal-only source tree (3 files, ~1858 LOC,
 self-contained on `ttnn`/`torch`). Same situation as `TT_CCL`, so it was
@@ -99,7 +99,7 @@ exists. See the Phase 3+4 section below for the full removal scope.
 
 `_staging/models/qwen_omni/` existed in v2 but contained only `__pycache__`.
 No content was migrated. The qwen_omni *test* (`test_qwen_omni.py`) is preserved
-under `tests/models/qwen_omni/test_modeling_qwen_omni.py`; the actual modeling
+under `tests/capabilities/qwen3_omni_moe/test_modeling_qwen3_omni_moe.py`; the actual modeling
 code does not exist yet and is part of Phase 7's work.
 
 ## File / move counts (Phase 2)
@@ -116,7 +116,7 @@ code does not exist yet and is part of Phase 7's work.
 | Demo / example files moved | 2 (`HF_chat.py`, `chat README.md`) |
 | Asset moves | 1 (`ARCHITECTURE.svg`) |
 | Tests moved into `tests/capabilities/` | 5 |
-| Tests moved into `tests/models/<model>/` | 21 (across 18 model subdirs) |
+| Tests moved into `tests/capabilities/<model>/` | 21 (across 18 model subdirs) |
 | Tests dropped (per plan §2.6) | 3 (yunet, dots.ocr, training) |
 | Cross-repo imports surviving on purpose | 2 (whisper test, listed in `SKIP_DURING_BOOTSTRAP.md`) |
 

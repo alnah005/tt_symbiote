@@ -18,7 +18,7 @@ from tt_symbiote.utils.device_management import set_device
 from tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
 
-def test_owl_vit(device):
+def test_owlvit(device):
     """Test Owl-ViT model with TTNN acceleration."""
 
     url = "http://images.cocodataset.org/val2017/000000039769.jpg"

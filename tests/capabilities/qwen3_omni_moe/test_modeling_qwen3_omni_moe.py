@@ -20,7 +20,7 @@ from tt_symbiote.utils.module_replacement import register_module_replacement_dic
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 245760}], indirect=True)
-def test_qwen_omni(device):
+def test_qwen3_omni_moe(device):
     """Test Qwen3-Omni model with TTNN acceleration."""
     assert (
         os.environ.get("TT_SYMBIOTE_RUN_MODE") == "CPU"
@@ -96,7 +96,7 @@ def test_qwen_omni(device):
     text_ids, audio = model.generate(
         **inputs, speaker="Ethan", thinker_return_dict_in_generate=True, use_audio_in_video=USE_AUDIO_IN_VIDEO
     )
-    DispatchManager.save_stats_to_file("qwen_omni_timing_stats.csv")
+    DispatchManager.save_stats_to_file("qwen3_omni_moe_timing_stats.csv")
 
     text = processor.batch_decode(
         text_ids[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True, clean_up_tokenization_spaces=False

@@ -523,7 +523,7 @@ python /home/aroberge/scratch/run_ling.py
 1. **`os.environ["MESH_DEVICE"] = "T3K"`** — read by `tt_symbiote`'s
    architecture gate inside `set_device` (`MeshShapeToDeviceArch`) and
    by the pytest fixture in
-   `tests/models/bailing_moe_v2/test_modeling_bailing_moe_v2.py`.
+   `tests/capabilities/bailing_moe_v2/test_modeling_bailing_moe_v2.py`.
    Other accepted values: `N150`, `N300`, `N150x4`, `TG`, `P150`,
    `P300`, `P150x4`, `P150x8`, `BHGLX`.
 
@@ -657,7 +657,7 @@ To add a new model `Foo` (HF class `FooForCausalLM`):
 5. Add a hardware-free test
    `tests/auto/test_foo_recipe.py` along the lines of
    `tests/auto/test_ling_recipe.py`, and a hardware smoke test
-   `tests/models/foo/test_modeling_foo.py`.
+   `tests/capabilities/foo/test_modeling_foo.py`.
 
 ## C.3 — File pointers (the whole story in 7 files)
 

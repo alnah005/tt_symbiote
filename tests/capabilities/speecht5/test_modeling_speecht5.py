@@ -17,7 +17,7 @@ from tt_symbiote.utils.device_management import set_device
 from tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
 
-def test_speech_t5(device):
+def test_speecht5(device):
     """Test SpeechT5 model with TTNN acceleration."""
 
     nn_to_ttnn = {
@@ -45,6 +45,6 @@ def test_speech_t5(device):
     torch.set_grad_enabled(False)  # Disables autograd overhead
     DispatchManager.clear_timings()
     speech = model.generate_speech(**inputs, vocoder=vocoder)
-    DispatchManager.save_stats_to_file("speech_t5_timing_stats.csv")
+    DispatchManager.save_stats_to_file("speecht5_timing_stats.csv")
     sf.write("output.wav", speech.squeeze().detach().numpy(), samplerate=16000)
     print("Speech T5 TTNN test passed, output.wav generated.")

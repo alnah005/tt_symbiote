@@ -39,14 +39,14 @@ concerns; nothing about the test files is intrinsically broken by the migration.
 
 | Test path | Surviving cross-repo imports | Resolve in phase |
 |---|---|---|
-| `tests/models/whisper/test_modeling_whisper.py` | `models.demos.utils.common_demo_utils.get_mesh_mappers`; `models.demos.whisper.tt.ttnn_optimized_functional_whisper.{create_custom_mesh_preprocessor, encoder_layer}` | Whisper port (Phase 7, P3 tier) |
+| `tests/capabilities/whisper/test_modeling_whisper.py` | `models.demos.utils.common_demo_utils.get_mesh_mappers`; `models.demos.whisper.tt.ttnn_optimized_functional_whisper.{create_custom_mesh_preprocessor, encoder_layer}` | Whisper port (Phase 7, P3 tier) |
 
 When running the smoke check, ignore this file:
 
 ```bash
 python -m pytest tests/ --collect-only -q \
     -p scripts._smoke_conftest \
-    --ignore=tests/models/whisper
+    --ignore=tests/capabilities/whisper
 ```
 
 ## Re-running the achievable smoke check

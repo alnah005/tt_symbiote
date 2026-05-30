@@ -32,7 +32,7 @@ files here are deliberately **one-shot, non-interactive smoke runs**.
 ## Adding a new model
 
 1. Land the model's recipe under `src/tt_symbiote/models/<name>/` and a
-   pytest-based hardware smoke under `tests/models/<name>/` (per
+   pytest-based hardware smoke under `tests/capabilities/<name>/` (per
    [`PROJECT_PROPOSAL.md`](../../PROJECT_PROPOSAL.md) §6).
 2. Copy an existing script in this folder as a starting point.
 3. Swap the HF model ID, mesh geometry (`MeshShape(...)`), and the

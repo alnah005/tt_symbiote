@@ -3,7 +3,7 @@
 # committed to the repo; used only when running:
 #
 #   python -m pytest tests/ --collect-only \
-#       -p scripts._smoke_conftest --ignore=tests/models/whisper
+#       -p scripts._smoke_conftest --ignore=tests/capabilities/whisper
 import sys
 import types
 
