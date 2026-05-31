@@ -18,6 +18,10 @@ Generate comprehensive tiered PCC tests for a HuggingFace model's TTNN bring-up.
   - Shared capability tests: `tests/capabilities/` root (e.g., `test_attention.py`)
   - Auto/unit tests: `tests/auto/`
 
+**Pure TTNN forward**: ALL `TTNNModule.forward()` methods must use pure `ttnn.*` ops only.
+  No `torch.*` calls in the compute path. Weight preprocessing may use PyTorch.
+  Reference: `$TT_METAL_HOME/models/tt_transformers/tt/mlp.py` forward().
+
 **Device guards**: ALL new `TTNNModule.forward()` methods MUST have `@run_on_devices`.
   - Import: `from tt_symbiote.core.module import run_on_devices, DeviceArch`
   - Default: `@run_on_devices(DeviceArch.T3K)`
@@ -53,6 +57,86 @@ Generate comprehensive tiered PCC tests for a HuggingFace model's TTNN bring-up.
   Weight dtype is controlled by selecting different TTNNLinear subclasses.
 
 **HuggingFace**: Always pass `trust_remote_code=True` in `AutoConfig.from_pretrained()` and `AutoModelForCausalLM.from_pretrained()`.
+
+**TT_METAL_COMMIT Hash**: When generating or modifying `modeling_<model_name>.py`, include:
+  ```python
+  TT_METAL_COMMIT = '<full 40-char git hash from $TT_METAL_HOME>'
+  ```
+  Capture via: `git -C "$TT_METAL_HOME" rev-parse HEAD`
+
+## Step 0 -- Mandatory Exploration Preamble
+
+**This step is NON-NEGOTIABLE. Complete it IN FULL before proceeding to Step 1.**
+
+### 0a. Read ALL Tech Reports
+
+Read every tech report in `$TT_METAL_HOME/tech_reports/`:
+
+```bash
+TT_METAL_HOME="${TT_METAL_HOME:-/localdev/salnahari/testing_dir/tt-metal}"
+for f in $(find "$TT_METAL_HOME/tech_reports" -name "*.md" | sort); do
+  echo "=== Reading: $f ==="
+  cat "$f"
+done
+```
+
+Key reports for pcc-test-gen (read FIRST):
+1. `ttnn/TTNN-model-bringup.md` -- Unit test structure, PCC methodology
+2. `data_formats/data_formats.md` -- Understanding dtype impact on PCC
+3. `tensor_sharding/tensor_sharding.md` -- How sharding affects output precision
+4. `LLMs/llms.md` -- LLM-specific testing patterns
+5. `FlashAttention/FlashAttention.md` -- SDPA testing considerations
+
+Read ALL remaining reports after these priority ones.
+
+### 0b. Explore $TT_METAL_HOME Reference Implementations
+
+```bash
+TT_METAL_HOME="${TT_METAL_HOME:-/localdev/salnahari/testing_dir/tt-metal}"
+ls "$TT_METAL_HOME/models/tt_transformers/tt/"
+ls "$TT_METAL_HOME/models/tt_dit/" 2>/dev/null
+ls "$TT_METAL_HOME/models/tt_cnn/tt/" 2>/dev/null
+ls "$TT_METAL_HOME/models/demos/" 2>/dev/null
+```
+
+**Extract from tt_transformers**:
+- How forward() methods are structured (pure ttnn)
+- How attention, MLP, decoder, embedding are decomposed (informs tier classification)
+- How model_config.py parameterizes dtypes and memory (informs test shape selection)
+- **Cross-reference with HF model**: Compare module structure against tt_transformers patterns
+  (GQA attention? SwiGLU MLP? MoE? See attention.py, mlp.py, mixtral_moe.py)
+
+### 0c. Capture TT_METAL_COMMIT Hash
+
+```bash
+TT_METAL_HOME="${TT_METAL_HOME:-/localdev/salnahari/testing_dir/tt-metal}"
+TT_METAL_COMMIT=$(git -C "$TT_METAL_HOME" rev-parse HEAD)
+echo "TT_METAL_COMMIT=$TT_METAL_COMMIT"
+```
+
+Store this value -- it will be embedded in any modeling files created or modified.
+
+## Plan-Verify-Execute Loop
+
+This skill follows a mandatory loop structure. If the loop fails 5 times, report failure to the caller.
+
+### PLAN Phase
+1. Collect inputs (model ID, target device, shapes)
+2. Read HuggingFace model source to enumerate all modules across 4 tiers
+3. Map each module to existing tt_symbiote integration classes
+4. Draft test file contents for each tier
+
+### VERIFY Phase (no hardware, no user approval needed)
+1. Verify all imports resolve: `python -c "from tt_symbiote.integrations.ttnn_linear import TTNNLinear; ..."`
+2. Verify shapes are consistent with HuggingFace config dimensions
+3. Verify no `torch.*` calls in any generated `forward()` bodies
+4. Verify `@run_on_devices` decorator is present on all generated `forward()` methods
+5. Verify license headers on all generated files
+6. Verify `assert_pcc()` is used (not `compare_fn_outputs()`) in all test assertions
+7. If ANY verification fails, return to PLAN with the failure details and re-plan
+
+### EXECUTE Phase (only after VERIFY passes)
+Write all files (pcc_utils.py, shapes.json, op_map.json, test files).
 
 ## Step 1 -- Collect Inputs (ASK the user)
 
@@ -115,6 +199,11 @@ Generate comprehensive tiered PCC tests for a HuggingFace model's TTNN bring-up.
    - Attention -> Check `ttnn_attention.py` (TTNNSelfAttention, TTNNFusedQKVSelfAttention, etc.)
    - MoE -> Check `ttnn_moe.py` (TTNNMoE, TTNNExperts, etc.)
    - If no integration exists, flag it to the user
+
+**When to use `from_torch` vs `register_modules`**: Use `from_torch` when an integration class
+provides a complete TTNN replacement for a module (e.g., `TTNNSelfAttention.from_torch(torch_attn)`).
+Use `register_modules` when you need to recursively replace leaf modules within a composite
+(e.g., replacing all `nn.Linear` children inside an MLP with `TTNNLinear`).
 
 ## Step 3 -- Implement assert_pcc Utility
 
@@ -220,6 +309,7 @@ Create `tests/capabilities/<model_name>/shapes.json`:
   "model_name": "<model_name>",
   "model_id": "<hf_model_id>",
   "device_arch": "<T3K|N150|etc>",
+  "tt_metal_commit": "<TT_METAL_COMMIT from Step 0c>",
   "config": {
     "hidden_size": "<from HF config>",
     "num_attention_heads": "<from HF config>",
@@ -270,342 +360,43 @@ touch tests/capabilities/<model_name>/__init__.py
 
 ### 5b. Tier 1 -- Op/Simple Module Tests
 
-Generate `tests/capabilities/<model_name>/test_ops_<model_name>.py`:
-
-```python
-# SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
-# SPDX-License-Identifier: Apache-2.0
-
-"""Tier 1 PCC tests: individual ops and simple modules for <model_name>."""
-
-import json
-import pytest
-import torch
-from pathlib import Path
-
-from tt_symbiote.core.tensor import TorchTTNNTensor
-from tt_symbiote.integrations.ttnn_linear import TTNNLinear
-from tt_symbiote.integrations.ttnn_normalization import TTNNRMSNorm
-from tt_symbiote.utils.device_management import set_device
-from tests.capabilities.pcc_utils import assert_pcc
-
-SHAPES = json.loads((Path(__file__).parent / "shapes.json").read_text())
-
-
-@pytest.mark.parametrize("seq_len", SHAPES["test_shapes"]["seq_lengths"])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 245760}], indirect=True)
-def test_linear_q_proj(device, seq_len):
-    """Q projection linear: PCC against PyTorch reference."""
-    torch.set_grad_enabled(False)
-    hidden_size = SHAPES["config"]["hidden_size"]
-    num_heads = SHAPES["config"]["num_attention_heads"]
-    head_dim = SHAPES["config"].get("head_dim", hidden_size // num_heads)
-
-    torch_linear = torch.nn.Linear(hidden_size, num_heads * head_dim, bias=False)
-    torch_linear = torch_linear.to(torch.bfloat16).eval()
-
-    input_tensor = torch.randn(1, seq_len, hidden_size, dtype=torch.bfloat16)
-    torch_output = torch_linear(input_tensor)
-
-    ttnn_linear = TTNNLinear.from_torch(torch_linear)
-    set_device(ttnn_linear, device)
-
-    ttnn_input = TorchTTNNTensor(input_tensor)
-    ttnn_output = ttnn_linear(ttnn_input)
-
-    assert_pcc(ttnn_output, torch_output, threshold=0.999, msg="q_proj_linear")
-
-
-# Repeat for k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj, rms_norm, etc.
-# Each test follows the same pattern:
-# 1. Create PyTorch module with correct shape from shapes.json
-# 2. torch.set_grad_enabled(False) and .eval()
-# 3. TTNNModule.from_torch(torch_module)
-# 4. set_device(ttnn_module, device)
-# 5. Wrap input in TorchTTNNTensor
-# 6. Run both forward passes
-# 7. assert_pcc(ttnn_output, torch_output, threshold=0.999, msg="<op_name>")
-```
+Generate `tests/capabilities/<model_name>/test_ops_<model_name>.py` following the pattern from the PLAN phase. Each test:
+1. Creates a PyTorch module with correct shape from shapes.json
+2. `torch.set_grad_enabled(False)` and `.eval()`
+3. `TTNNModule.from_torch(torch_module)`
+4. `set_device(ttnn_module, device)`
+5. Wraps input in `TorchTTNNTensor`
+6. Runs both forward passes
+7. `assert_pcc(ttnn_output, torch_output, threshold=0.999, msg="<op_name>")`
 
 ### 5c. Tier 2 -- Composite Module Tests
 
-Generate `tests/capabilities/<model_name>/test_composites_<model_name>.py`:
+Generate `tests/capabilities/<model_name>/test_composites_<model_name>.py`.
 
-```python
-# SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
-# SPDX-License-Identifier: Apache-2.0
-
-"""Tier 2 PCC tests: composite modules (attention, MLP) for <model_name>."""
-
-import copy
-import pytest
-import torch
-from transformers import AutoConfig, AutoModelForCausalLM
-
-from tt_symbiote.core.tensor import TorchTTNNTensor
-from tt_symbiote.integrations.ttnn_linear import TTNNLinear
-from tt_symbiote.utils.device_management import set_device
-from tt_symbiote.utils.module_replacement import register_modules
-from tests.capabilities.pcc_utils import assert_pcc
-
-MODEL_ID = "<hf_model_id>"
-
-
-def _create_minimal_model():
-    """Create a 1-layer model with random weights for testing composites."""
-    config = AutoConfig.from_pretrained(MODEL_ID, trust_remote_code=True)
-    config.num_hidden_layers = 1
-    model = AutoModelForCausalLM.from_config(config).to(torch.bfloat16).eval()
-    torch.set_grad_enabled(False)
-    return model, config
-
-
-def _create_position_embeddings(model, config, seq_len):
-    """Generate rotary position embeddings for attention tests."""
-    hidden = torch.randn(1, seq_len, config.hidden_size, dtype=torch.bfloat16)
-    position_ids = torch.arange(seq_len).unsqueeze(0)
-
-    rotary_emb = getattr(model.model, 'rotary_emb', None)
-    if rotary_emb is None:
-        rotary_emb = getattr(model.model.layers[0].self_attn, 'rotary_emb', None)
-
-    if rotary_emb is not None:
-        cos, sin = rotary_emb(hidden, position_ids)
-        return (cos, sin)
-    return None
-
-
-@pytest.mark.parametrize("seq_len", [32, 128])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 245760}], indirect=True)
-def test_attention(device, seq_len):
-    """Attention block PCC: Q/K/V projections + SDPA + O projection."""
-    model, config = _create_minimal_model()
-    torch_attn = model.model.layers[0].self_attn
-    position_embeddings = _create_position_embeddings(model, config, seq_len)
-
-    hidden = torch.randn(1, seq_len, config.hidden_size, dtype=torch.bfloat16)
-
-    torch_kwargs = {}
-    if position_embeddings is not None:
-        torch_kwargs["position_embeddings"] = position_embeddings
-    torch_out = torch_attn(hidden, **torch_kwargs)
-    torch_attn_out = torch_out[0] if isinstance(torch_out, tuple) else torch_out
-
-    # Map to appropriate TTNN attention class from ttnn_attention.py
-    # Read the source to find the right class for this model's attention pattern
-    from tt_symbiote.integrations.ttnn_attention import TTNNSelfAttention
-    ttnn_attn = TTNNSelfAttention.from_torch(torch_attn)
-    set_device(ttnn_attn, device)
-
-    ttnn_hidden = TorchTTNNTensor(hidden)
-    ttnn_out = ttnn_attn(ttnn_hidden, **torch_kwargs)
-    ttnn_attn_out = ttnn_out[0] if isinstance(ttnn_out, tuple) else ttnn_out
-
-    assert_pcc(ttnn_attn_out, torch_attn_out, threshold=0.999, msg="attention")
-
-
-@pytest.mark.parametrize("seq_len", [32, 128])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 245760}], indirect=True)
-def test_mlp(device, seq_len):
-    """MLP/FFN block PCC: gate + up projections, activation, down projection."""
-    model, config = _create_minimal_model()
-    torch_mlp = model.model.layers[0].mlp
-
-    hidden = torch.randn(1, seq_len, config.hidden_size, dtype=torch.bfloat16)
-    torch_out = torch_mlp(hidden)
-
-    # Replace MLP's linear layers with TTNN equivalents
-    mlp_copy = copy.deepcopy(torch_mlp)
-    register_modules(mlp_copy, {torch.nn.Linear: TTNNLinear})
-    set_device(mlp_copy, device)
-
-    ttnn_input = TorchTTNNTensor(hidden)
-    ttnn_out = mlp_copy(ttnn_input)
-
-    assert_pcc(ttnn_out, torch_out, threshold=0.999, msg="mlp")
-```
+Two patterns are used for TTNN conversion:
+- **Direct from_torch**: when an integration class provides complete TTNN replacement
+  (e.g., `TTNNSelfAttention.from_torch(torch_attn)`)
+- **register_modules**: when replacing leaf modules within a composite
+  (e.g., replacing all `nn.Linear` inside an MLP with `TTNNLinear`)
 
 ### 5d. Tier 3 -- Decoder Layer Tests
 
-Generate `tests/capabilities/<model_name>/test_decoder_<model_name>.py`:
-
-```python
-# SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
-# SPDX-License-Identifier: Apache-2.0
-
-"""Tier 3 PCC tests: full decoder layer for <model_name>."""
-
-import copy
-import pytest
-import torch
-from transformers import AutoConfig, AutoModelForCausalLM
-
-from tt_symbiote.core.tensor import TorchTTNNTensor
-from tt_symbiote.integrations.ttnn_linear import TTNNLinear
-from tt_symbiote.integrations.ttnn_normalization import TTNNRMSNorm
-from tt_symbiote.utils.device_management import set_device
-from tt_symbiote.utils.module_replacement import register_modules
-from tests.capabilities.pcc_utils import assert_pcc
-
-MODEL_ID = "<hf_model_id>"
-
-
-@pytest.mark.parametrize("seq_len", [32, 128])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 245760}], indirect=True)
-def test_decoder_layer(device, seq_len):
-    """Full decoder layer PCC: attention + MLP + norms + residual."""
-    torch.set_grad_enabled(False)
-    config = AutoConfig.from_pretrained(MODEL_ID, trust_remote_code=True)
-    config.num_hidden_layers = 1
-    model = AutoModelForCausalLM.from_config(config).to(torch.bfloat16).eval()
-
-    torch_layer = model.model.layers[0]
-    hidden = torch.randn(1, seq_len, config.hidden_size, dtype=torch.bfloat16)
-    position_ids = torch.arange(seq_len).unsqueeze(0)
-
-    # Generate position embeddings
-    rotary_emb = getattr(model.model, 'rotary_emb', None)
-    position_embeddings = None
-    if rotary_emb is not None:
-        cos, sin = rotary_emb(hidden, position_ids)
-        position_embeddings = (cos, sin)
-
-    # Run torch reference
-    torch_kwargs = {"position_embeddings": position_embeddings} if position_embeddings else {}
-    torch_out = torch_layer(hidden, **torch_kwargs)
-    torch_hidden_out = torch_out[0] if isinstance(torch_out, tuple) else torch_out
-
-    # Create TTNN decoder layer via module replacement
-    ttnn_layer = copy.deepcopy(torch_layer)
-    replacement_dict = {torch.nn.Linear: TTNNLinear}
-    if hasattr(torch_layer, 'input_layernorm'):
-        replacement_dict[type(torch_layer.input_layernorm)] = TTNNRMSNorm
-    register_modules(ttnn_layer, replacement_dict)
-    set_device(ttnn_layer, device)
-
-    ttnn_input = TorchTTNNTensor(hidden)
-    ttnn_out = ttnn_layer(ttnn_input, **torch_kwargs)
-    ttnn_hidden_out = ttnn_out[0] if isinstance(ttnn_out, tuple) else ttnn_out
-
-    assert_pcc(ttnn_hidden_out, torch_hidden_out, threshold=0.999, msg="decoder_layer")
-
-
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 245760}], indirect=True)
-def test_decoder_layer_decode_step(device):
-    """Decoder layer with single-token decode (seq_len=1)."""
-    torch.set_grad_enabled(False)
-    config = AutoConfig.from_pretrained(MODEL_ID, trust_remote_code=True)
-    config.num_hidden_layers = 1
-    model = AutoModelForCausalLM.from_config(config).to(torch.bfloat16).eval()
-
-    torch_layer = model.model.layers[0]
-    seq_len = 1
-    past_seq_len = 64
-
-    hidden = torch.randn(1, seq_len, config.hidden_size, dtype=torch.bfloat16)
-    position_ids = torch.tensor([[past_seq_len]])
-
-    rotary_emb = getattr(model.model, 'rotary_emb', None)
-    position_embeddings = None
-    if rotary_emb is not None:
-        cos, sin = rotary_emb(hidden, position_ids)
-        position_embeddings = (cos, sin)
-
-    torch_kwargs = {"position_embeddings": position_embeddings} if position_embeddings else {}
-    torch_out = torch_layer(hidden, **torch_kwargs)
-    torch_hidden_out = torch_out[0] if isinstance(torch_out, tuple) else torch_out
-
-    import copy
-    ttnn_layer = copy.deepcopy(torch_layer)
-    replacement_dict = {torch.nn.Linear: TTNNLinear}
-    if hasattr(torch_layer, 'input_layernorm'):
-        replacement_dict[type(torch_layer.input_layernorm)] = TTNNRMSNorm
-    register_modules(ttnn_layer, replacement_dict)
-    set_device(ttnn_layer, device)
-
-    ttnn_input = TorchTTNNTensor(hidden)
-    ttnn_out = ttnn_layer(ttnn_input, **torch_kwargs)
-    ttnn_hidden_out = ttnn_out[0] if isinstance(ttnn_out, tuple) else ttnn_out
-
-    assert_pcc(ttnn_hidden_out, torch_hidden_out, threshold=0.999, msg="decoder_layer_decode")
-```
+Generate `tests/capabilities/<model_name>/test_decoder_<model_name>.py` with both
+prefill (seq_len=32,128) and decode (seq_len=1) tests.
 
 ### 5e. Tier 4 -- Full Model Test
 
 Generate `tests/capabilities/<model_name>/test_modeling_<model_name>.py`. Two paths:
 
-**Path A (Recipe/Auto API)**:
-```python
-# SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
-# SPDX-License-Identifier: Apache-2.0
+**Path A (Recipe/Auto API)**: Uses `from tt_symbiote import AutoModelForCausalLM, set_device`.
 
-"""Tier 4 PCC test: full model end-to-end for <model_name> (Auto API path)."""
-
-import os
-import pytest
-import torch
-from transformers import AutoTokenizer
-import ttnn
-
-from tt_symbiote import AutoModelForCausalLM, set_device
-from tt_symbiote.core.run_config import DispatchManager, TracedRun
-
-MODEL_ID = "<hf_model_id>"
-
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000000,
-    "num_command_queues": 1}], indirect=True)
-def test_full_model(mesh_device):
-    """Full model generation test."""
-    torch.set_grad_enabled(False)
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_ID, trust_remote_code=True, torch_dtype=torch.bfloat16
-    )
-    set_device(model, mesh_device)
-    model.eval()
-
-    inputs = tokenizer("What is machine learning?", return_tensors="pt")
-    inputs.pop("token_type_ids", None)
-
-    outputs = model.generate(**inputs, max_new_tokens=32, use_cache=True)
-    decoded = tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1]:])
-    assert len(decoded.strip()) > 0, "Generated output should not be empty"
-    TracedRun.release_all()
-```
-
-**Path B (Manual replacement)**: Use explicit `register_modules` calls with
+**Path B (Manual replacement)**: Uses explicit `register_modules` calls with
 `from tt_symbiote.utils.device_management import set_device`.
 
 ### 5f. Generate Device Guard Verification Test
 
-Generate `tests/capabilities/<model_name>/test_device_guards_<model_name>.py`:
-
-```python
-# SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
-# SPDX-License-Identifier: Apache-2.0
-
-"""Verify @run_on_devices guards on all TTNN modules for <model_name>."""
-
-def test_device_guards_present():
-    """All TTNNModule.forward methods must have @run_on_devices."""
-    from tt_symbiote.integrations.ttnn_linear import TTNNLinear
-    # Import all TTNN classes used by this model
-    # ...
-
-    classes_to_check = [TTNNLinear]  # Add all classes used
-
-    missing = []
-    for cls in classes_to_check:
-        forward = getattr(cls, 'forward', None)
-        if forward and not hasattr(forward, '__tt_allowed_archs__'):
-            missing.append(cls.__name__)
-
-    # NOTE: Some base classes (e.g., TTNNLinear) may not have guards --
-    # only their device-specific subclasses do.
-    if missing:
-        import warnings
-        warnings.warn(f"Modules missing @run_on_devices: {missing}")
-```
+Generate `tests/capabilities/<model_name>/test_device_guards_<model_name>.py` to verify
+`@run_on_devices` guards are present on all TTNN module forward() methods.
 
 ## Step 6 -- compare_fn_outputs Migration Guidance
 
@@ -623,7 +414,7 @@ If yes, for each file:
 2. Replace `compare_fn_outputs(torch_out, ttnn_out, "Name")` with `assert_pcc(ttnn_out, torch_out, msg="Name")`
 3. Note argument order difference: `compare_fn_outputs(torch, ttnn, name)` vs `assert_pcc(actual=ttnn, expected=torch, msg=name)`
 
-## Step 7 -- Validate
+## Step 7 -- Validate (Final VERIFY)
 
 ```bash
 # Verify pytest can discover the tests
@@ -636,6 +427,8 @@ python -c "import json; json.load(open('tests/capabilities/<model_name>/shapes.j
 python -c "import tests.capabilities.<model_name>"
 ```
 
+If any validation fails, return to PLAN, diagnose, and iterate.
+
 ## Error Handling
 
 | Problem | Resolution |
@@ -644,3 +437,4 @@ python -c "import tests.capabilities.<model_name>"
 | No TTNN integration for a module | Flag to user, skip that tier, suggest creating one |
 | `from_torch` signature varies | Read source of each `from_torch` to get correct params |
 | Model requires specific transformers version | Add version check at top of generated test files |
+| torch.* in generated forward() | A1 violation -- refactor to use ttnn.* equivalents |

@@ -14,6 +14,11 @@ Apply the best-known configurations to every module in a model.
 
 **Test location**: All per-model tests go under `tests/capabilities/<model_name>/`.
 
+**Pure TTNN forward**: ALL `TTNNModule.forward()` methods must use pure `ttnn.*` ops only.
+  No `torch.*` calls in the compute path. When overriding `forward()` for memory config,
+  the entire body must use `ttnn.*` ops.
+  Reference: `$TT_METAL_HOME/models/tt_transformers/tt/mlp.py` forward() -- pure ttnn.
+
 **Device guards**: ALL new `TTNNModule.forward()` methods MUST have `@run_on_devices`.
 
 **License headers**: Every generated `.py` file starts with `(C)` format.
@@ -27,6 +32,80 @@ Apply the best-known configurations to every module in a model.
 
 **CRITICAL**: Do NOT modify shared integration modules in `src/tt_symbiote/integrations/`.
   These are shared across ALL models.
+
+**TT_METAL_COMMIT Hash**: When modifying `modeling_<model_name>.py`, ensure
+  `TT_METAL_COMMIT = '<hash>'` is present. Update if stale:
+  ```bash
+  git -C "$TT_METAL_HOME" rev-parse HEAD
+  ```
+
+## Step 0 -- Mandatory Exploration Preamble
+
+**This step is NON-NEGOTIABLE. Complete it IN FULL before proceeding to Step 1.**
+
+### 0a. Read ALL Tech Reports
+
+Read every tech report in `$TT_METAL_HOME/tech_reports/`:
+
+```bash
+TT_METAL_HOME="${TT_METAL_HOME:-/localdev/salnahari/testing_dir/tt-metal}"
+for f in $(find "$TT_METAL_HOME/tech_reports" -name "*.md" | sort); do
+  echo "=== Reading: $f ==="
+  cat "$f"
+done
+```
+
+Key reports for config-optimize-all (read FIRST):
+1. `data_formats/data_formats.md` -- Dtype tradeoffs for weight and activation optimization
+2. `GEMM_FLOPS/GEMM_FLOPS.md` -- Understanding theoretical limits for config selection
+3. `tensor_sharding/tensor_sharding.md` -- Sharding strategy for memory config optimization
+4. `memory/allocator.md` -- L1 vs DRAM config selection
+5. `AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md` -- Multi-technique optimization
+6. `YoloV4-TTNN/yolov4.md` -- Data type optimization examples
+
+Read ALL remaining reports after these priority ones.
+
+### 0b. Explore $TT_METAL_HOME Reference Implementations
+
+```bash
+TT_METAL_HOME="${TT_METAL_HOME:-/localdev/salnahari/testing_dir/tt-metal}"
+ls "$TT_METAL_HOME/models/tt_transformers/tt/"
+```
+
+**Key extraction for config optimization**: Study `model_config.py` to understand:
+- `DecoderOptimizations` pattern -- per-layer dtype and math fidelity tuning
+- How `get_math_fidelity()`, `get_tensor_dtype()` parameterize per-op configs
+- How the config is applied at the `ttnn.linear()` call site, not as module attributes
+
+### 0c. Capture TT_METAL_COMMIT Hash
+
+```bash
+TT_METAL_HOME="${TT_METAL_HOME:-/localdev/salnahari/testing_dir/tt-metal}"
+TT_METAL_COMMIT=$(git -C "$TT_METAL_HOME" rev-parse HEAD)
+echo "TT_METAL_COMMIT=$TT_METAL_COMMIT"
+```
+
+## Plan-Verify-Execute Loop
+
+This skill follows a mandatory loop structure. If the loop fails 5 times, report failure to the caller.
+
+### PLAN Phase
+1. Collect inputs (model name, optimization goal, PCC threshold, target arch)
+2. Read perf-analysis recommendation.json
+3. Design subclass overrides for each module, ensuring forward() stays pure TTNN
+4. Draft the optimized modeling file contents
+
+### VERIFY Phase (no hardware, no user approval needed)
+1. Verify recommendation.json exists and is valid JSON
+2. Verify all overridden `forward()` methods use only `ttnn.*` ops (pure TTNN constraint)
+3. Verify all overridden `forward()` methods have `@run_on_devices` decorator
+4. Verify no shared integration modules in `src/tt_symbiote/integrations/` are modified
+5. Verify license headers are present on all generated files
+6. Verify `TT_METAL_COMMIT` constant is present in the modeling file
+7. If ANY verification fails, return to PLAN with failure details and re-plan
+
+### EXECUTE Phase (only after VERIFY passes)
+Write the optimized subclasses, update register_modules dict, run PCC validation.
 
 ## Prerequisites
 
@@ -56,6 +135,9 @@ established pattern (TTNNLinearLLama, TTNNBailingMoEAttention, etc.).
 
 ```python
 # src/tt_symbiote/models/<model_name>/modeling_<model_name>.py
+
+# Commit hash for reproducibility
+TT_METAL_COMMIT = "<40-char hash>"
 
 from tt_symbiote.integrations.ttnn_linear import TTNNLinear
 from ttnn.model_preprocessing import preprocess_linear_weight, preprocess_linear_bias
@@ -98,7 +180,7 @@ class TTNNAttention<Model>(TTNNSelfAttention):
         )
 ```
 
-### For memory config overrides (in forward):
+### For memory config overrides (in forward -- pure TTNN only):
 
 ```python
 from tt_symbiote.core.module import run_on_devices, DeviceArch
@@ -108,6 +190,7 @@ class TTNNLinear<Model>L1(TTNNLinear):
 
     @run_on_devices(DeviceArch.T3K)
     def forward(self, input_tensor):
+        # Pure TTNN ops only -- no torch.* calls
         # ... forward with memory_config=ttnn.L1_MEMORY_CONFIG ...
 ```
 
@@ -122,7 +205,15 @@ register_modules(hf_model, {
 })
 ```
 
-## Step 5 -- Re-validate PCC
+## Step 5 -- Update TT_METAL_COMMIT
+
+Ensure `modeling_<model_name>.py` has the current commit hash:
+
+```python
+TT_METAL_COMMIT = '<full 40-char hash from Step 0c>'
+```
+
+## Step 6 -- Re-validate PCC
 
 **ASK USER:** "Apply configs to all modules, or review each individually?"
 
@@ -132,7 +223,7 @@ pytest tests/capabilities/<model_name>/ -v --tb=short
 
 If any test fails, revert that module's subclass and report.
 
-## Step 6 -- Generate Optimization Report
+## Step 7 -- Generate Optimization Report
 
 Per-module before/after device time and PCC.
 
@@ -140,6 +231,7 @@ Per-module before/after device time and PCC.
 
 | Problem | Resolution |
 |---------|------------|
-| No recommendation data | Use heuristic defaults |
+| No recommendation data | Use heuristic defaults from tech reports |
 | PCC regression | Revert specific module's subclass; report |
 | Multiple arch targets | Generate separate config per arch |
+| torch.* in forward override (A1 violation) | Refactor to pure ttnn immediately |

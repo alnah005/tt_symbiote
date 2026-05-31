@@ -16,6 +16,13 @@ Systematically explore the configuration space for TTNN ops to find optimal sett
 **Test location**: All per-model tests go under `tests/capabilities/<model_name>/`.
   - `tests/models/` does NOT exist. Never create files there.
 
+**Pure TTNN forward**: ALL `TTNNModule.forward()` methods must use pure `ttnn.*` ops only.
+  No `torch.*` calls in the compute path. Weight preprocessing may use PyTorch.
+  The sweep subclass overrides `preprocess_weights_impl()` for dtype (torch allowed here)
+  and inherits `forward()` which must be pure ttnn.
+  Reference: `$TT_METAL_HOME/models/tt_transformers/tt/mlp.py` -- note how math fidelity
+  and dtype are applied within pure ttnn `ttnn.linear()` calls.
+
 **Device guards**: ALL new `TTNNModule.forward()` methods MUST have `@run_on_devices`.
   - Import: `from tt_symbiote.core.module import run_on_devices, DeviceArch`
   - Default: `@run_on_devices(DeviceArch.T3K)`
@@ -34,6 +41,69 @@ Systematically explore the configuration space for TTNN ops to find optimal sett
 **Config system**: The typed config system does NOT exist yet. Weight dtype is controlled
   by selecting different TTNNLinear subclasses that override `preprocess_weights_impl()`.
   Math fidelity is passed via `compute_kernel_config` in `forward()`.
+
+## Step 0 -- Mandatory Exploration Preamble
+
+**This step is NON-NEGOTIABLE. Complete it IN FULL before proceeding to Step 1.**
+
+### 0a. Read ALL Tech Reports
+
+Read every tech report in `$TT_METAL_HOME/tech_reports/`:
+
+```bash
+TT_METAL_HOME="${TT_METAL_HOME:-/localdev/salnahari/testing_dir/tt-metal}"
+for f in $(find "$TT_METAL_HOME/tech_reports" -name "*.md" | sort); do
+  echo "=== Reading: $f ==="
+  cat "$f"
+done
+```
+
+Key reports for op-sweep (read FIRST):
+1. `data_formats/data_formats.md` -- bfloat16 vs bfloat8_b vs bfloat4_b tradeoffs, PCC impact
+2. `GEMM_FLOPS/GEMM_FLOPS.md` -- Understanding matmul performance ceiling
+3. `memory/allocator.md` -- L1 vs DRAM memory config impact on performance
+4. `tensor_sharding/tensor_sharding.md` -- Sharding strategy impact on op performance
+5. `ttnn/TTNN-model-bringup.md` -- Optimization stage guidance
+6. `YoloV4-TTNN/yolov4.md` -- Data type optimization examples (section 2.3)
+7. `AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md` -- Advanced optimization patterns
+
+Read ALL remaining reports after these priority ones.
+
+### 0b. Explore $TT_METAL_HOME Reference Implementations
+
+```bash
+TT_METAL_HOME="${TT_METAL_HOME:-/localdev/salnahari/testing_dir/tt-metal}"
+ls "$TT_METAL_HOME/models/tt_transformers/tt/"
+ls "$TT_METAL_HOME/models/tt_dit/" 2>/dev/null
+ls "$TT_METAL_HOME/models/tt_cnn/tt/" 2>/dev/null
+ls "$TT_METAL_HOME/models/demos/" 2>/dev/null
+```
+
+**Key extraction for sweeps**: Study `model_config.py` in tt_transformers (~196K bytes,
+~4,236 lines) to understand how math fidelity, dtype, and memory configs are selected.
+Also study `mlp.py` to see how `compute_kernel_config` and `activation_dtype`
+are applied within pure ttnn `ttnn.linear()` calls.
+
+## Plan-Verify-Execute Loop
+
+This skill follows a mandatory loop structure. If the loop fails 5 times, report failure to the caller.
+
+### PLAN Phase
+1. Collect inputs (model name, ops to sweep, sweep mode, PCC threshold)
+2. Read shapes.json and op_map.json to determine parameter space
+3. Draft sweep test file contents with the TTNNLinearSweep subclass
+4. Determine the sweep parameter grid
+
+### VERIFY Phase (no hardware, no user approval needed)
+1. Verify shapes.json exists and is valid: `python -c "import json; json.load(open('tests/capabilities/<model_name>/shapes.json'))"`
+2. Verify all imports resolve: `python -c "from tt_symbiote.integrations.ttnn_linear import TTNNLinear; from ttnn.model_preprocessing import preprocess_linear_weight"`
+3. Verify the sweep subclass forward() uses only `ttnn.*` ops (pure TTNN constraint)
+4. Verify `@run_on_devices` is present on any overridden `forward()` methods
+5. Verify license headers are present
+6. If ANY verification fails, return to PLAN with failure details and re-plan
+
+### EXECUTE Phase (only after VERIFY passes)
+Write sweep test file, run the sweep, collect and analyze results.
 
 ## Prerequisites
 
@@ -73,153 +143,19 @@ Systematically explore the configuration space for TTNN ops to find optimal sett
 
 3. **Memory config**: `ttnn.DRAM_MEMORY_CONFIG` or `ttnn.L1_MEMORY_CONFIG`.
 
-For sweeping, we create a **TTNNLinearSweep subclass** that parameterizes both:
+**Reference from $TT_METAL_HOME**: In `tt_transformers/tt/mlp.py`, the forward() uses
+`ttnn.linear(x, self.w1, ..., compute_kernel_config=li_ff1_3_compute_kernel_cfg, ...)` --
+the compute kernel config is passed inline to the ttnn op, not set on the module.
+
+For sweeping, we create a **TTNNLinearSweep subclass** that parameterizes both.
 
 ## Step 2 -- Generate Sweep Test File
 
-Create `tests/capabilities/<model_name>/test_sweep_<op_name>.py`:
-
-```python
-# SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
-# SPDX-License-Identifier: Apache-2.0
-
-"""Parameter sweep for <op_name> in <model_name>.
-
-HOW THIS WORKS:
-Weight dtype is controlled by overriding preprocess_weights_impl() in a
-TTNNLinear subclass. Math fidelity is passed via ttnn.linear()'s
-compute_kernel_config parameter. This matches the codebase's actual
-config application mechanism.
-"""
-
-import csv
-import json
-import time
-import pytest
-import torch
-from pathlib import Path
-
-import ttnn
-from tt_symbiote.core.tensor import TorchTTNNTensor
-from tt_symbiote.integrations.ttnn_linear import TTNNLinear
-from ttnn.model_preprocessing import preprocess_linear_weight, preprocess_linear_bias
-from tt_symbiote.utils.device_management import set_device
-from tests.capabilities.pcc_utils import assert_pcc, compute_pcc
-
-SHAPES = json.loads((Path(__file__).parent / "shapes.json").read_text())
-
-WEIGHT_DTYPES = {
-    "bfloat16": ttnn.bfloat16,
-    "bfloat8_b": ttnn.bfloat8_b,
-    "bfloat4_b": ttnn.bfloat4_b,
-}
-MATH_FIDELITIES = {
-    "HiFi4": ttnn.MathFidelity.HiFi4,
-    "HiFi2": ttnn.MathFidelity.HiFi2,
-    "LoFi": ttnn.MathFidelity.LoFi,
-}
-FP32_ACC = [True, False]
-
-RESULTS_FILE = Path(__file__).parent / "sweep_results" / "<op_name>_sweep.csv"
-
-
-class TTNNLinearSweep(TTNNLinear):
-    """TTNNLinear subclass for runtime dtype/fidelity sweeping.
-
-    Overrides preprocess_weights_impl() for weight dtype and
-    forward() to pass compute_kernel_config -- matching the codebase's
-    actual config mechanism (e.g., TTNNLinearLLama overrides preprocess_weights_impl).
-    """
-
-    def __init__(self, in_features, out_features):
-        super().__init__(in_features, out_features)
-        self._sweep_weight_dtype = ttnn.bfloat16
-        self._sweep_math_fidelity = ttnn.MathFidelity.HiFi4
-        self._sweep_fp32_acc = True
-
-    @classmethod
-    def from_torch_with_config(cls, torch_linear, weight_dtype, math_fidelity, fp32_acc):
-        """Create from a PyTorch linear with specific sweep configuration."""
-        instance = cls.from_torch(torch_linear)
-        instance._sweep_weight_dtype = weight_dtype
-        instance._sweep_math_fidelity = math_fidelity
-        instance._sweep_fp32_acc = fp32_acc
-        return instance
-
-    def preprocess_weights_impl(self):
-        """Override to use the sweep-configured weight dtype."""
-        self.tt_weight_host = preprocess_linear_weight(
-            self.weight, dtype=self._sweep_weight_dtype, layout=ttnn.TILE_LAYOUT
-        )
-        self.tt_bias_host = None
-        if self.bias is not None:
-            self.tt_bias_host = preprocess_linear_bias(
-                self.bias, dtype=self._sweep_weight_dtype, layout=ttnn.TILE_LAYOUT
-            )
-
-
-@pytest.mark.parametrize("weight_dtype_name", list(WEIGHT_DTYPES.keys()))
-@pytest.mark.parametrize("math_fidelity_name", list(MATH_FIDELITIES.keys()))
-@pytest.mark.parametrize("fp32_acc", FP32_ACC)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 245760}], indirect=True)
-def test_sweep_linear(device, weight_dtype_name, math_fidelity_name, fp32_acc):
-    """Sweep linear with different configs."""
-    torch.set_grad_enabled(False)
-    hidden_size = SHAPES["config"]["hidden_size"]
-    num_heads = SHAPES["config"]["num_attention_heads"]
-    head_dim = SHAPES["config"].get("head_dim", hidden_size // num_heads)
-
-    torch_linear = torch.nn.Linear(hidden_size, num_heads * head_dim, bias=False)
-    torch_linear = torch_linear.to(torch.bfloat16).eval()
-
-    weight_dtype = WEIGHT_DTYPES[weight_dtype_name]
-    math_fidelity = MATH_FIDELITIES[math_fidelity_name]
-
-    try:
-        ttnn_linear = TTNNLinearSweep.from_torch_with_config(
-            torch_linear, weight_dtype, math_fidelity, fp32_acc
-        )
-        set_device(ttnn_linear, device)
-
-        input_tensor = torch.randn(1, 128, hidden_size, dtype=torch.bfloat16)
-        torch_output = torch_linear(input_tensor)
-        ttnn_input = TorchTTNNTensor(input_tensor)
-
-        # Warm up
-        _ = ttnn_linear(ttnn_input)
-
-        # Timed run
-        start = time.perf_counter()
-        ttnn_output = ttnn_linear(ttnn_input)
-        elapsed = time.perf_counter() - start
-
-        pcc_results = compute_pcc(ttnn_output, torch_output)
-        pcc_val = pcc_results[0][0] if pcc_results else float('nan')
-        status = "PASS" if pcc_val >= 0.999 else "FAIL"
-    except RuntimeError as e:
-        if "OOM" in str(e) or "out of memory" in str(e).lower():
-            pytest.skip(f"OOM with config: {weight_dtype_name}/{math_fidelity_name}/fp32={fp32_acc}")
-        raise
-
-    # Write result to CSV
-    RESULTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    write_header = not RESULTS_FILE.exists()
-    with open(RESULTS_FILE, 'a', newline='') as f:
-        writer = csv.writer(f)
-        if write_header:
-            writer.writerow(["weight_dtype", "math_fidelity", "fp32_acc", "pcc", "time_ms", "status"])
-        writer.writerow([
-            weight_dtype_name, math_fidelity_name, fp32_acc,
-            f"{pcc_val:.6f}", f"{elapsed*1000:.3f}", status
-        ])
-
-    assert pcc_val >= 0.999, (
-        f"PCC {pcc_val:.6f} below threshold for "
-        f"{weight_dtype_name}/{math_fidelity_name}/fp32={fp32_acc}"
-    )
-```
-
-For SDPA attention sweeps, generate a separate file that parametrizes `q_chunk_size`, `k_chunk_size`, `exp_approx_mode` via `ttnn.SDPAProgramConfig`.
+Create `tests/capabilities/<model_name>/test_sweep_<op_name>.py` with:
+- A `TTNNLinearSweep` subclass that overrides `preprocess_weights_impl()` for weight dtype
+- Parametrized test function sweeping weight_dtype x math_fidelity x fp32_acc
+- CSV result output to `sweep_results/<op_name>_sweep.csv`
+- OOM handling via `pytest.skip`
 
 ## Step 3 -- Run the Sweep
 
@@ -233,22 +169,11 @@ pytest tests/capabilities/<model_name>/test_sweep_<op_name>.py -v --tb=no -q 2>&
 
 Parse the CSV, filter passing configs (PCC >= 0.999), sort by time. Present top 5 to user.
 
-Save best config as `tests/capabilities/<model_name>/sweep_results/<op_name>_best.json`:
-```json
-{
-    "op": "<op_name>",
-    "model": "<model_name>",
-    "device_arch": "T3K",
-    "best_config": {
-        "weight_dtype": "bfloat8_b",
-        "math_fidelity": "HiFi2",
-        "fp32_dest_acc_en": false
-    },
-    "recommended_class": "TTNNLinearLLama",
-    "pcc": 0.999234,
-    "time_ms": 1.234
-}
-```
+**Cross-reference with tech reports**: Check if recommended configs from `YoloV4-TTNN/yolov4.md`
+(section 2.3: "set math_fidelity=ttnn.MathFidelity.LoFi unless noticeable PCC drop")
+align with sweep results.
+
+Save best config as `tests/capabilities/<model_name>/sweep_results/<op_name>_best.json`.
 
 ## Error Handling
 

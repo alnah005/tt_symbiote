@@ -18,6 +18,12 @@ Profile a pytest test or standalone script to measure TTNN op device times.
   - Shared capability tests: `tests/capabilities/` root (e.g., `test_attention.py`)
   - Auto/unit tests: `tests/auto/`
 
+**Pure TTNN forward**: ALL `TTNNModule.forward()` methods must use pure `ttnn.*` ops only.
+  No `torch.*` calls in the compute path. Weight preprocessing may use PyTorch.
+  Reference: `$TT_METAL_HOME/models/tt_transformers/tt/mlp.py` forward().
+  When profiling, VERIFY the code under test follows this convention. Torch fallbacks
+  in forward() will produce misleading profiling results.
+
 **Device guards**: ALL new `TTNNModule.forward()` methods MUST have `@run_on_devices`.
   - Import: `from tt_symbiote.core.module import run_on_devices, DeviceArch`
   - Default: `@run_on_devices(DeviceArch.T3K)`
@@ -50,6 +56,69 @@ Profile a pytest test or standalone script to measure TTNN op device times.
 
 **HuggingFace**: Always pass `trust_remote_code=True` in `AutoConfig.from_pretrained()` and `AutoModelForCausalLM.from_pretrained()`.
 
+## Step 0 -- Mandatory Exploration Preamble
+
+**This step is NON-NEGOTIABLE. Complete it IN FULL before proceeding to Step 1.**
+
+### 0a. Read ALL Tech Reports
+
+Read every tech report in `$TT_METAL_HOME/tech_reports/`:
+
+```bash
+TT_METAL_HOME="${TT_METAL_HOME:-/localdev/salnahari/testing_dir/tt-metal}"
+for f in $(find "$TT_METAL_HOME/tech_reports" -name "*.md" | sort); do
+  echo "=== Reading: $f ==="
+  cat "$f"
+done
+```
+
+Key reports for tracy-profiling (read these FIRST):
+1. `MetalProfiler/metal-profiler.md` -- Profiler tool details
+2. `AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md` -- Trace, 2CQ, Metal Trace optimization
+3. `GEMM_FLOPS/GEMM_FLOPS.md` -- Understanding matmul performance metrics
+4. `ttnn/TTNN-model-bringup.md` -- Canonical model bring-up flow including profiling steps
+5. `data_formats/data_formats.md` -- How data format affects profiling results
+6. `memory/allocator.md` -- L1 vs DRAM performance implications
+7. `tensor_sharding/tensor_sharding.md` -- Sharding impact on op performance
+
+Read ALL remaining reports after these priority ones.
+
+### 0b. Explore $TT_METAL_HOME Reference Implementations
+
+```bash
+TT_METAL_HOME="${TT_METAL_HOME:-/localdev/salnahari/testing_dir/tt-metal}"
+ls "$TT_METAL_HOME/models/tt_transformers/tt/"
+ls "$TT_METAL_HOME/models/tt_dit/" 2>/dev/null
+ls "$TT_METAL_HOME/models/tt_cnn/tt/" 2>/dev/null
+ls "$TT_METAL_HOME/models/demos/" 2>/dev/null
+```
+
+**Extract from tt_transformers**: Understand how forward() is pure ttnn -- this affects
+what ops appear in the tracy profile. Note the pattern:
+- `model.py`: `Transformer.forward()` -- pure ttnn ops
+- `mlp.py`: `MLP.forward()` -- `ttnn.linear`, `ttnn.multiply`, `ttnn.silu`
+- `attention.py`: `Attention.forward_decode/prefill()` -- ttnn attention ops
+- `model_config.py`: How math fidelity and memory configs are parameterized
+
+## Plan-Verify-Execute Loop
+
+This skill follows a mandatory loop structure. If the loop fails 5 times, report failure to the caller.
+
+### PLAN Phase
+1. Collect inputs from user
+2. Determine test file, output directory, decoder layer limits
+3. Design the profiling strategy based on model architecture
+
+### VERIFY Phase (no hardware, no user approval needed)
+1. Verify tracy is importable: `python -c "from tracy import signpost; print('tracy OK')"`
+2. Verify tt-perf-report is available: `which tt-perf-report`
+3. Verify the test file exists and has valid imports: `python -c "import ast; ast.parse(open('<test_file>').read())"`
+4. Verify no `torch.*` calls in any `forward()` bodies of the model being profiled
+5. If ANY verification fails, return to PLAN with the failure details and re-plan
+
+### EXECUTE Phase (only after VERIFY passes)
+Proceed with warm-up, profiling, and report generation.
+
 ## Step 1 -- Collect Inputs
 
 Ask the user for:
@@ -65,7 +134,7 @@ Ask the user for:
 
 3. **Output directory** (optional): Where to save results. Default: current working directory.
 
-## Step 2 -- Pre-flight Checks
+## Step 2 -- Pre-flight Checks (VERIFY)
 
 Run these checks before proceeding:
 
@@ -78,6 +147,9 @@ which tt-perf-report || echo "WARNING: tt-perf-report not found in PATH"
 
 # Verify the test file exists
 test -f "<test_file>" && echo "Test file OK" || echo "ERROR: Test file not found"
+
+# A1 CHECK: Verify forward() methods in the model code are pure TTNN
+grep -n "torch\." src/tt_symbiote/models/*/modeling_*.py 2>/dev/null | grep -v "import\|#\|preprocess_weights\|from_torch\|__init__" || echo "Pure TTNN forward: OK"
 ```
 
 **If tracy import fails**: tracy is NOT a pip package. It comes from tt-metal. Ensure the
@@ -86,6 +158,8 @@ tt-metal Python environment is active (source env/activate or equivalent). Check
 
 **If tt-perf-report is missing**: The user can still get the raw CSV but not the summary report.
 Proceed with profiling and note the missing tool.
+
+**If any VERIFY step fails**: Return to PLAN, diagnose, and re-plan.
 
 ## Step 3 -- Decoder Layer Limiting (if requested)
 
@@ -148,7 +222,8 @@ tt-perf-report --ignore-signposts */ops_perf_results_*.csv > perf_report.txt
 1. Report the CSV file path and perf_report.txt path to the user
 2. Parse and summarize the top 10 ops by device time from the CSV
 3. Identify any ops taking >10% of total device time as optimization targets
-4. Suggest next step: "Run op-sweep on the bottleneck ops to find optimal configs."
+4. Flag if any profiled ops appear to be torch fallbacks (non-ttnn ops in the trace) -- this indicates an A1 violation
+5. Suggest next step: "Run op-sweep on the bottleneck ops to find optimal configs."
 
 ## Error Handling
 
@@ -159,3 +234,4 @@ tt-perf-report --ignore-signposts */ops_perf_results_*.csv > perf_report.txt
 | Tracy crash/hang | Op buffer too small | Increase `--op-support-count` to 50000+ |
 | Test fails during profiling | Different from warm-up failure | May be tracy interference; try `-r` only |
 | `tt-perf-report` not found | Not in PATH | User can manually parse the CSV |
+| torch ops in profile | Model has torch fallbacks in forward() | Fix model code to use pure TTNN forward (A1) |

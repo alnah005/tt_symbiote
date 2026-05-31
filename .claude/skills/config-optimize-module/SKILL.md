@@ -13,7 +13,11 @@ Fine-tune configuration for one specific module.
 
 **Test location**: All per-model tests go under `tests/capabilities/<model_name>/`.
 
+**Pure TTNN forward**: ALL `TTNNModule.forward()` methods must use pure `ttnn.*` ops only.
+  No `torch.*` calls in the compute path.
+
 **Device guards**: ALL new `TTNNModule.forward()` methods MUST have `@run_on_devices`.
+  - Always add `@run_on_devices(DeviceArch.T3K)` on any overridden forward()
 
 **License headers**: Every generated `.py` file starts with `(C)` format.
 
@@ -23,9 +27,78 @@ Fine-tune configuration for one specific module.
   - Weight dtype: override `preprocess_weights_impl()`
   - Compute config: override `move_weights_to_device_impl()`
   - Memory layout: override `forward()` with appropriate memory_config
-  - Always add `@run_on_devices(DeviceArch.T3K)` on any overridden forward()
 
 **CRITICAL**: Do NOT modify shared integration modules in `src/tt_symbiote/integrations/`.
+
+**TT_METAL_COMMIT Hash**: When modifying `modeling_<model_name>.py`, ensure
+  `TT_METAL_COMMIT = '<hash>'` is present and current.
+
+## Step 0 -- Mandatory Exploration Preamble
+
+**This step is NON-NEGOTIABLE. Complete it IN FULL before proceeding to Step 1.**
+
+### 0a. Read ALL Tech Reports
+
+Read every tech report in `$TT_METAL_HOME/tech_reports/`:
+
+```bash
+TT_METAL_HOME="${TT_METAL_HOME:-/localdev/salnahari/testing_dir/tt-metal}"
+for f in $(find "$TT_METAL_HOME/tech_reports" -name "*.md" | sort); do
+  echo "=== Reading: $f ==="
+  cat "$f"
+done
+```
+
+Key reports for config-optimize-module (read FIRST):
+1. `data_formats/data_formats.md` -- Dtype impact on compute and PCC for the specific op
+2. `GEMM_FLOPS/GEMM_FLOPS.md` -- Theoretical peak for the module's dominant op
+3. `memory/allocator.md` -- L1 vs DRAM for this specific module's access pattern
+4. `tensor_sharding/tensor_sharding.md` -- Optimal sharding for the module's tensor shapes
+5. `YoloV4-TTNN/yolov4.md` -- Per-op optimization examples
+
+Read ALL remaining reports after these priority ones.
+
+### 0b. Explore $TT_METAL_HOME Reference Implementations
+
+```bash
+TT_METAL_HOME="${TT_METAL_HOME:-/localdev/salnahari/testing_dir/tt-metal}"
+ls "$TT_METAL_HOME/models/tt_transformers/tt/"
+```
+
+**Key extraction**: Find the reference implementation of the same type of module you are
+optimizing. For example:
+- Optimizing a linear projection? -> Study mlp.py's forward(), note compute_kernel_config usage
+- Optimizing attention? -> Study attention.py's forward_decode/prefill, note SDPA config
+- Optimizing a norm? -> Study decoder.py's norm call, note the norm_config pattern
+
+### 0c. Capture TT_METAL_COMMIT Hash
+
+```bash
+TT_METAL_HOME="${TT_METAL_HOME:-/localdev/salnahari/testing_dir/tt-metal}"
+TT_METAL_COMMIT=$(git -C "$TT_METAL_HOME" rev-parse HEAD)
+echo "TT_METAL_COMMIT=$TT_METAL_COMMIT"
+```
+
+## Plan-Verify-Execute Loop
+
+This skill follows a mandatory loop structure. If the loop fails 5 times, report failure to the caller.
+
+### PLAN Phase
+1. Collect inputs (module to optimize, model name, optimization goal)
+2. Analyze current module config (class, dtype, fidelity, memory)
+3. Check for existing sweep data or plan a targeted sweep
+4. Design the optimal subclass override
+
+### VERIFY Phase (no hardware, no user approval needed)
+1. Verify the module exists and can be imported
+2. Verify the overridden `forward()` uses only `ttnn.*` ops (pure TTNN constraint)
+3. Verify `@run_on_devices` is present on any overridden `forward()`
+4. Verify no shared integration modules are modified
+5. Verify `TT_METAL_COMMIT` constant is present
+6. If ANY verification fails, return to PLAN with failure details and re-plan
+
+### EXECUTE Phase (only after VERIFY passes)
+Write the subclass, update register_modules, run targeted PCC validation.
 
 ## Step 1 -- Collect Inputs (ASK the user)
 
@@ -53,6 +126,9 @@ If no sweep data exists for this module, generate a focused sweep test (using op
 For a single-module override, create a model-specific subclass in `modeling_<model_name>.py`:
 
 ```python
+# TT_METAL_COMMIT must be at module level
+TT_METAL_COMMIT = "<40-char hash>"
+
 class TTNNLinear<Model>QProj(TTNNLinear):
     """Optimized q_proj for <model_name>."""
     def preprocess_weights_impl(self):
@@ -70,11 +146,15 @@ register_modules(model, {nn.Linear: TTNNLinear}, exclude_replacement=exclude)
 register_modules(model.model.layers[5].self_attn, {nn.Linear: TTNNLinear<Model>QProj})
 ```
 
-## Step 5 -- Validate PCC
+## Step 5 -- Update TT_METAL_COMMIT
+
+Ensure `modeling_<model_name>.py` has the current commit hash.
+
+## Step 6 -- Validate PCC
 
 Run only the tests that exercise this module (Tier 1 for the op, plus Tier 2/3 composites).
 
-## Step 6 -- Report Before/After
+## Step 7 -- Report Before/After
 
 ```
 Module: model.layers[5].self_attn.q_proj
@@ -91,3 +171,4 @@ PCC delta: -0.000589 (still above 0.999)
 | Module not found | Search integrations/ for the class; ask user |
 | PCC drops below threshold | Show PCC; ask user if acceptable |
 | Per-module override not supported | Use exclude_replacement + separate register_modules call |
+| torch.* in forward override (A1) | Refactor to pure ttnn immediately |
