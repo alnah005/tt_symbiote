@@ -75,8 +75,14 @@ Run these commands on the maintainer's machine before creating the tag.
   tests/models/gemma4 tests/models/qwen3_vl` → 127/127 passing.
 - [x] **Sandboxed tag dry-run** — a temporary git worktree with `v0.1.0`
   tagged at HEAD built `tt_symbiote-0.1.0-py3-none-any.whl`, installed
-  cleanly in a fresh venv, and reported `tt_symbiote.__version__ ==
-  "0.1.0"`. Worktree cleaned up.
+  cleanly in a fresh venv, reported `tt_symbiote.__version__ ==
+  "0.1.0"`, and registered all 4 recipes
+  (`BailingMoeV2ForCausalLM`, `Gemma4ForConditionalGeneration`,
+  `Qwen3VLForConditionalGeneration`, `ResNetForImageClassification`).
+  Worktree cleaned up.
+- [x] **`pre-commit run --all-files` is green** — production-cleanup
+  lint sweep (commit `d2f7aad`) landed all of black, isort, autoflake,
+  yamllint, end-of-file, and trailing-whitespace fixes.
 
 ## Stage C: PyPI name availability
 
