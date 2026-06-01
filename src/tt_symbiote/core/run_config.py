@@ -11,7 +11,18 @@ from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, Type
 
 import torch
 import ttnn
-from tracy import signpost
+
+try:
+    from tracy import signpost
+except ImportError:
+    # tracy is Tenstorrent's profiler. It ships only via a tt-metal build
+    # and is not on PyPI, so users who pip-install tt_symbiote cannot
+    # resolve it. signpost is only invoked when TT_SYMBIOTE_SIGNPOST_MODE
+    # is set in the environment, so a no-op fallback is safe — the
+    # default code path never calls it.
+    def signpost(*args, **kwargs):  # noqa: D401 — fallback shim, matches tracy API shape
+        return None
+
 
 from tt_symbiote.core.ccl import TT_CCL
 from tt_symbiote.core.utils import (

@@ -9,13 +9,12 @@ standard HuggingFace forward / generate API.
 Hardware verification is split into three states:
 
 - ✅ **verified** — end-to-end smoke pass on the listed hardware target,
-  with zero *unexpected* TTNN-forward-fallback warnings, and (for vision)
+  with zero unexpected TTNN-forward-fallback warnings, and (for vision)
   semantically correct top-1 on a known image / (for LLM) coherent
   EOS-terminated output / (for VLM) semantically correct answer to the
   documented prompt. CPU-only ports count as verified iff every CPU
   module is explicitly listed in the recipe's `cpu_fallback` (so
-  `tt_symbiote.compatibility.report(model)["runtime_observed"]["unexpected"]`
-  is empty).
+  `tt_symbiote.compatibility.report(model)["regressions"]` is empty).
 - ⏳ **structurally supported** — recipe + module replacement land,
   unit tests pass. Hardware forward has not been exercised yet.
 - ⚠ **partial** — runs but with documented caveats. See the linked
@@ -24,6 +23,10 @@ Hardware verification is split into three states:
 When a row is at ✅ there is a matching script in
 [`examples/e2e/`](../examples/e2e/) that reproduces the run on the
 listed hardware.
+
+Reproducing any ✅ row requires a working `(ttnn, sfpi)` install on
+the host — see [`install_prerequisites.md`](install_prerequisites.md)
+for what to install and how to verify it.
 
 ## TT-implemented vs. CPU coverage
 
@@ -49,17 +52,19 @@ Every recipe declares four class-name lists that drive
   dataclasses that aren't modules at all).
 
 Per-model the "TT / CPU / host_glue / OOS" counts in the tables below
-are read directly from the recipes; the runtime ledger in
-`compatibility.report(...)["runtime_observed"]` flags any fallback
-that fired during the demo *and* was not declared (a sign the recipe
-drifted relative to the HF source).
+are read directly from the recipes. At runtime,
+`compatibility.report(model)["regressions"]` flags any fallback class
+the recipe did *not* declare under `cpu_fallback` — a clean run leaves
+that list empty.
 
 For the *full* CPU-vs-device split per demo (which exact classes run
 where, and on what hardware), see
 [`docs/cpu_vs_device_coverage.md`](cpu_vs_device_coverage.md). Each
 demo script also writes a `<script>_coverage.json` next to itself
-after every run; those JSON files are the source of truth that the
-coverage doc aggregates.
+after every run. **Phase 8.5** made these JSONs pure runtime
+observation artefacts — gitignored, regenerated on every run, read
+locally to confirm the run was clean. The recipe declarations stay in
+source code; the JSON serializes only what actually happened.
 
 ## Causal LM
 
@@ -110,7 +115,7 @@ the `masked_scatter` of vision tokens into the text embedding stream,
 the sliding/full causal mask construction, and the optional final
 logit softcap, none of which have FLOPs worth moving. Confirm with
 `tt_symbiote.compatibility.report(model)` after any demo run — the
-``runtime_observed.unexpected`` field must stay empty.
+``regressions`` field must stay empty.
 
 ### Budget + MoE gating for the larger Gemma-4 variants
 
@@ -137,10 +142,10 @@ a `UserWarning`:
 When a variant is gated, `model._tt_runtime_config` carries
 diagnostic flags (`ttnn_swap_skipped`, `ttnn_replicated_footprint_bytes`,
 `ttnn_swap_skipped_reason`) so the user can inspect *why* the swap
-was skipped. The runtime path stays clean — every fallback is
-declared, `runtime_observed.unexpected` stays `[]`, and the model
-produces the same semantically correct answer as the smaller
-variants. See
+was skipped. The runtime JSON reflects this cleanly:
+`ttnn_swap_skipped == true`, `modules_swapped == {by_class: {},
+by_module: {}}`, `regressions == []`, and the model produces the same
+semantically correct answer as the smaller variants. See
 [`docs/cpu_vs_device_coverage.md`](cpu_vs_device_coverage.md)
 "Budget and MoE gating" for the data behind the 9 GB threshold and
 the per-variant headline numbers.

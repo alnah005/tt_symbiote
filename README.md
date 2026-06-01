@@ -18,7 +18,7 @@ implementations of HF model architectures.
 > variants to CPU until tensor-parallel sharding lands. All four Gemma-4
 > variants and Qwen3-VL-2B run end-to-end via
 > `tt_symbiote.AutoModel*.from_pretrained` + `set_device` + `generate`
-> with `compatibility.report(...)["runtime_observed"]["unexpected"] == []`.
+> with `compatibility.report(...)["regressions"] == []`.
 > See [`docs/cpu_vs_device_coverage.md`](docs/cpu_vs_device_coverage.md)
 > for the per-variant CPU/device split,
 > [`docs/migration_notes.md`](docs/migration_notes.md) for the per-phase
@@ -64,27 +64,69 @@ src/tt_symbiote/
 Examples and tests live at the repo root (not inside the package) — see
 [`PROJECT_PROPOSAL.md`](PROJECT_PROPOSAL.md) §3 for the full layout.
 
-## Quick start
+## Installation
+
+### From PyPI (recommended)
+
+```bash
+pip install "tt_symbiote[ttnn]"
+```
+
+This pulls `tt_symbiote` plus the pinned `ttnn==0.68.0` wheel (matching
+`scripts/ttnn-pin.txt`) plus the transitive deps (`torch`,
+`transformers==5.9.0`, `accelerate`, `tokenizers`, ...).
+
+> **System prerequisite.** `ttnn` JIT-compiles firmware kernels at first
+> `open_mesh_device(...)` call using the Tenstorrent sfpi RISC-V
+> toolchain at `/opt/tenstorrent/sfpi/`. Every `ttnn` wheel pins one
+> sfpi version; if the host's installed sfpi doesn't match,
+> `open_mesh_device()` fails with `unrecognized command-line option`.
+> The `[ttnn]` extra above pins `ttnn==0.68.0` which requires
+> `sfpi 7.35.3`. See [`docs/install_prerequisites.md`](docs/install_prerequisites.md)
+> for how to install / verify the sfpi toolchain and a (ttnn, sfpi)
+> compatibility table.
+
+If you want `tt_symbiote` *without* the bundled ttnn pin (e.g. because
+your sfpi is on a different version and you'll install a matching ttnn
+manually):
+
+```bash
+pip install tt_symbiote
+pip install ttnn==<version_matching_your_sfpi>
+```
+
+`tracy` (Tenstorrent's profiler) is *not* on PyPI; install it from
+tt-metal only if you need performance instrumentation.
+
+### From source (editable, contributors)
 
 ```bash
 git clone https://github.com/alnah005/tt_symbiote.git
 cd tt_symbiote
-./scripts/bootstrap_venv.sh     # creates .venv, pip installs ttnn + tt_symbiote
+./scripts/bootstrap_venv.sh     # creates .venv, validates sfpi, pip installs ttnn + tt_symbiote (editable)
 source .venv/bin/activate
-python examples/e2e/run_ling_mini_2_0.py            # T3K
-python examples/e2e/resnet/run_resnet50.py          # N150
-python examples/e2e/gemma4/run_gemma4_e2b.py        # N150
-python examples/e2e/qwen3_vl/run_qwen3_vl_2b.py     # N150
 ```
 
 The bootstrap script reads `(ttnn, sfpi)` from
 [`scripts/ttnn-pin.txt`](scripts/ttnn-pin.txt), probes the system
 [Tenstorrent sfpi toolchain](https://docs.tenstorrent.com/) at
-`/opt/tenstorrent/sfpi/`, and installs `ttnn==<pinned>`, `torch`,
+`/opt/tenstorrent/sfpi/`, **refuses to proceed if the versions
+disagree** (preventing the silent runtime failure described above),
+and then installs `ttnn==<pinned>`, `torch`,
 `transformers==5.9.0`, and `tt_symbiote` (editable) into a fresh venv.
 No `tt-metal` source checkout is required. See
 [`docs/ling_mini_2_0_guide.md`](docs/ling_mini_2_0_guide.md) §B.1 for
 the full prerequisites.
+
+## Quick start
+
+```bash
+source .venv/bin/activate                           # if you used the bootstrap script
+python examples/e2e/run_ling_mini_2_0.py            # T3K
+python examples/e2e/resnet/run_resnet50.py          # N150
+python examples/e2e/gemma4/run_gemma4_e2b.py        # N150
+python examples/e2e/qwen3_vl/run_qwen3_vl_2b.py     # N150
+```
 
 ## Development
 
@@ -95,11 +137,13 @@ make test           # capability tests
 make smoke MODEL=bailing_moe_v2    # per-model smoke test
 ```
 
-Requires `ttnn` and `tracy` (both tt-metal-built C extensions) to be importable
-in the active Python environment. `ttnn` is now available on PyPI (consumed
-by `scripts/bootstrap_venv.sh`); `tracy` still ships only via tt-metal and is
-not on PyPI. See `PROJECT_PROPOSAL.md` open question OQ-1, which is partly
-closed by the bootstrap script.
+Requires `ttnn` to be importable in the active Python environment (pulled
+in automatically by `pip install "tt_symbiote[ttnn]"` or by
+`scripts/bootstrap_venv.sh`). `tracy` is optional — `tt_symbiote.core.run_config`
+guards the `from tracy import signpost` import behind a `try/except` and
+falls back to a no-op shim when tracy is absent, so the profile-only
+signpost hook becomes a no-op unless you set `TT_SYMBIOTE_SIGNPOST_MODE`
+in the environment.
 
 `transformers==5.9.0` is the strict pin for this branch; every other dep in
 `pyproject.toml` mirrors the specifier used by HF transformers v5.9.0's own
