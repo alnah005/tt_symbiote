@@ -21,6 +21,10 @@ final step of the ``tt_symbiote`` loading flow (per ``PROJECT_PROPOSAL.md``
 5. If a recipe is registered for ``type(obj).__name__`` and exposes
    ``make_kv_cache``, builds the model-specific KV cache and attaches it as
    ``obj._tt_kv_cache`` (resolves ``PROJECT_PROPOSAL.md`` Q9 — see Phase 5).
+   The kwargs passed to ``make_kv_cache`` come from
+   ``obj._tt_kv_cache_kwargs`` (set by ``AutoModel*.from_pretrained``'s
+   ``kv_cache_kwargs=``) merged with any ``kv_cache_kwargs=`` override
+   on this call. The override wins per-key.
 6. Sets ``_tt_symbiote_device_set = True`` on the root object and on every
    visited TTNN module.
 
@@ -368,14 +372,26 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs) -> None:
     # set_device time (since HF builds the model on CPU first). The cache
     # is attached as ``model._tt_kv_cache`` and the test/demo code passes
     # it back in as ``past_key_values=`` for ``model.generate``.
+    #
+    # Resolution order for the kwargs passed to ``make_kv_cache``:
+    #   1. ``model._tt_kv_cache_kwargs`` — set by ``AutoModel*.from_pretrained``
+    #      from its ``kv_cache_kwargs=`` keyword. This is the declarative
+    #      "the cache for this model has these dimensions" path.
+    #   2. ``kwargs["kv_cache_kwargs"]`` passed to this call — per-key
+    #      override at the bind site, for A/B-testing cache budgets
+    #      against the same loaded model without re-loading.
+    # ``override`` wins per-key, mirroring how ``dict.update`` works.
     try:
         from tt_symbiote.auto.auto_mappings import TT_MODEL_REGISTRY
     except Exception:
         TT_MODEL_REGISTRY = {}
     recipe = TT_MODEL_REGISTRY.get(type(obj).__name__)
     if recipe is not None and hasattr(recipe, "make_kv_cache"):
+        stored_kv_kwargs = getattr(obj, "_tt_kv_cache_kwargs", None) or {}
+        override_kv_kwargs = kwargs.get("kv_cache_kwargs") or {}
+        merged_kv_kwargs = {**stored_kv_kwargs, **override_kv_kwargs}
         try:
-            kv = recipe.make_kv_cache(obj, device, **kwargs.get("kv_cache_kwargs", {}))
+            kv = recipe.make_kv_cache(obj, device, **merged_kv_kwargs)
             if kv is not None:
                 obj._tt_kv_cache = kv
         except Exception as e:

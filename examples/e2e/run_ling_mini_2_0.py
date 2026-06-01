@@ -43,18 +43,25 @@ tokenizer = AutoTokenizer.from_pretrained(
     "inclusionAI/Ling-mini-2.0",
     trust_remote_code=True,
 )
-model = AutoModelForCausalLM.from_pretrained(
-    "inclusionAI/Ling-mini-2.0",
-    trust_remote_code=True,
-    dtype="auto",
-)
-
 # Paged KV-cache capacity = block_size (64) * max_num_blocks (512) = 32 768
 # tokens of context (prompt + generated). The recipe default is 32 blocks
 # (2 048 tokens) which is enough for short demos but truncates long answers.
 # 512 blocks costs ~1.3 GB across the mesh (~160 MB / device) on Ling-mini-2.0;
 # see `docs/ling_mini_2_0_guide.md` §B.3 for the budget table.
-set_device(model, mesh_device, kv_cache_kwargs={"max_num_blocks": 512})
+#
+# The cache shape is a model-config decision so it goes through
+# `AutoModelForCausalLM.from_pretrained`, not through `set_device`. The
+# kwarg is stashed on the model as `model._tt_kv_cache_kwargs` and
+# consumed by the recipe's `make_kv_cache` hook the moment a device is
+# bound (`set_device` below).
+model = AutoModelForCausalLM.from_pretrained(
+    "inclusionAI/Ling-mini-2.0",
+    trust_remote_code=True,
+    dtype="auto",
+    kv_cache_kwargs={"max_num_blocks": 512},
+)
+
+set_device(model, mesh_device)
 assert hasattr(model, "_tt_kv_cache"), "Phase 5 recipe should have allocated this"
 
 model.eval()

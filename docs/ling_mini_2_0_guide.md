@@ -195,6 +195,17 @@ Optional hook (PROJECT_PROPOSAL.md OQ-9 resolution). Returns a
 moved, then attaches the result as `model._tt_kv_cache`. The user
 passes it as `past_key_values=model._tt_kv_cache` to `model.generate`.
 
+The `**kwargs` that reach `make_kv_cache` are sourced (in order, last
+wins per-key) from:
+
+1. `model._tt_kv_cache_kwargs`, which `AutoModelForCausalLM.from_pretrained`
+   populates from its `kv_cache_kwargs=` keyword. This is the
+   recommended path — the cache shape is a model-config decision that
+   pairs naturally with model loading.
+2. `kwargs["kv_cache_kwargs"]` on the `set_device` call site, kept as
+   an escape hatch for A/B-testing different cache budgets without
+   reloading the model.
+
 If a recipe has no `make_kv_cache` (most non-LM models), the no-op
 default installed by the `@register_recipe` decorator quietly returns
 `None` and `model._tt_kv_cache` is never set.

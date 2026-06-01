@@ -105,8 +105,13 @@ are what the skill automates:
      coverage JSON writeback, permissive dog-equivalents semantic check).
 3. Swap the HF model id, mesh geometry (`MeshShape(...)`), fabric
    config, and any per-model knobs:
-   - LLM: `kv_cache_kwargs={"max_num_blocks": N}` for the paged KV
-     cache budget.
+   - LLM: `kv_cache_kwargs={"max_num_blocks": N}` as a keyword to
+     `AutoModelForCausalLM.from_pretrained(...)` for the paged KV
+     cache budget. The shape is a model-config decision, so it pairs
+     with model loading; `set_device` consumes it implicitly when the
+     device is bound. (Pass `kv_cache_kwargs=` to `set_device` only if
+     you want to A/B-test budgets against the same loaded model
+     without reloading.)
    - Vision: `l1_small_size=...` if the first/heaviest conv needs more
      scratch (see `RESNET_TTNN_TUNING` in
      `src/tt_symbiote/models/resnet/configuration_resnet.py`).
