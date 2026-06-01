@@ -25,33 +25,36 @@ Each script is intended to be:
 These differ from `examples/chat/HF_chat.py` (an interactive demo): the
 files here are deliberately **one-shot, non-interactive smoke runs**.
 After every successful run, each script writes a
-`<script_name>_coverage.json` next to itself; those JSON files aggregate
-into [`docs/cpu_vs_device_coverage.md`](../../docs/cpu_vs_device_coverage.md)
-so the CPU-vs-device split for every demo stays visible.
+`<script_name>_coverage.json` next to itself summarising what
+*actually* executed on device. Phase 8.5 made these JSONs a **pure
+runtime artefact**: they're gitignored, regenerated on every run, and
+read locally. The aggregated textual summary lives in
+[`docs/cpu_vs_device_coverage.md`](../../docs/cpu_vs_device_coverage.md).
 
 ## Layout
 
 One script per HF model id, grouped into a folder per model family. The
 exception is single-variant families (Ling today) which stay flat until
-a sibling variant lands.
+a sibling variant lands. The `_coverage.json` artefacts are **not
+checked in** (Phase 8.5): each run regenerates them.
 
 ```
 examples/e2e/
 ├── README.md                     ← this file
 ├── run_ling_mini_2_0.py          ← flat: only 1 variant so far
-├── run_ling_mini_2_0_coverage.json
+├── run_ling_mini_2_0_coverage.json   (gitignored; written on each run)
 ├── gemma4/
 │   ├── README.md
 │   ├── run_gemma4_{e2b,e4b,31b,26b_a4b}.py
-│   └── run_gemma4_*_coverage.json
+│   └── run_gemma4_*_coverage.json    (gitignored)
 ├── qwen3_vl/
 │   ├── README.md
 │   ├── run_qwen3_vl_{2b,4b,8b,32b}.py
-│   └── run_qwen3_vl_*_coverage.json
+│   └── run_qwen3_vl_*_coverage.json  (gitignored)
 └── resnet/
     ├── README.md
     ├── run_resnet{18,34,50,101,152}.py
-    └── run_resnet*_coverage.json
+    └── run_resnet*_coverage.json     (gitignored)
 ```
 
 ## Index (one row per script)
@@ -115,11 +118,13 @@ are what the skill automates:
    token sequence; vision: a sensible top-1 ImageNet label for a known
    image; VLM: semantically correct answer to a known prompt). For
    CPU-first ports also confirm
-   `tt_symbiote.compatibility.report(model)["runtime_observed"]["unexpected"]`
-   is empty (every CPU fallback was declared in the recipe).
-5. Add a row to the index table above, drop the `_coverage.json`
-   artefact in alongside the script (every demo writes its own), and
-   add a row to [`docs/cpu_vs_device_coverage.md`](../../docs/cpu_vs_device_coverage.md).
+   `tt_symbiote.compatibility.report(model)["regressions"]` is empty
+   (every observed fallback was declared in `recipe.cpu_fallback`).
+5. Add a row to the index table above. Every demo writes a local
+   `_coverage.json` next to itself (Phase 8.5: gitignored, regenerated
+   on every run — don't commit it). Update
+   [`docs/cpu_vs_device_coverage.md`](../../docs/cpu_vs_device_coverage.md)
+   if the per-model textual breakdown changed.
 
 ## Running
 

@@ -2,21 +2,34 @@
 
 For every verified or structurally-supported `examples/e2e/` script,
 this page documents *where every model submodule runs* — on the
-Tenstorrent device (N150 / N300 / T3K) or on the host CPU. The data is
-sourced from the per-script `*_coverage.json` artefacts that each demo
-writes next to itself; this document just aggregates them into a
-human-readable table.
+Tenstorrent device (N150 / N300 / T3K) or on the host CPU. The class
+breakdown below is sourced from the recipe code in
+[`tt_symbiote.models.*`](../src/tt_symbiote/models/); a separate
+per-demo `*_coverage.json` is *generated locally* every time you run
+an `examples/e2e/` script and captures what actually happened on that
+run.
+
+> **Phase 8.5 — `*_coverage.json` is a runtime-only artefact.**
+> The recipe still ships four design-time lists (`tt_implemented` /
+> `cpu_fallback` / `host_glue` / `out_of_scope`), but the JSON output
+> no longer echoes them: it serializes *only* what was observed. The
+> JSON files are gitignored — operators regenerate them by running
+> the demo, then read them locally. This page is the long-form
+> textual summary; the JSON is the live diff.
 
 ## Pipeline
 
 ```mermaid
 graph LR
-    Recipe[Recipe lists in<br/>tt_symbiote/models/&lt;name&gt;/]
-    Recipe -->|design-time intent| Report["compatibility.report(model)"]
-    Runtime[run_config TTNN forward<br/>fallback hook]
-    Runtime -->|runtime observation| Report
-    Report --> JSON["examples/e2e/&lt;family&gt;/<br/>run_&lt;variant&gt;_coverage.json"]
-    JSON --> Doc[This page]
+    SetDev["set_device(model, mesh)"] -->|walk tree| Reg["record_swapped_class<br/>per TTNNModule"]
+    Fwd["TTNNModule.__call__"] -->|on success| Suc["record_runtime_success"]
+    Fwd -->|on fallback| Fb["record_runtime_fallback"]
+    Cfg["model._tt_runtime_config<br/>(ttnn_swap_skipped*)"] --> Report
+    Reg --> Report["compatibility.report(model)"]
+    Suc --> Report
+    Fb --> Report
+    Recipe["recipe.cpu_fallback<br/>(intent, code only)"] -->|"regressions = observed - declared"| Report
+    Report --> JSON["examples/e2e/&lt;family&gt;/<br/>run_&lt;variant&gt;_coverage.json<br/>(local, gitignored)"]
 ```
 
 Each recipe in [`tt_symbiote.models.*`](../src/tt_symbiote/models/)
@@ -24,7 +37,8 @@ declares four class-name lists (Phase 8 added `host_glue` alongside
 the original three):
 
 - `tt_implemented` — HF classes the recipe ships a TTNN wrapper for
-  (in `build_module_dict`). These run on Tenstorrent silicon.
+  (in `build_module_dict`). These run on Tenstorrent silicon when the
+  variant is not budget-gated.
 - `cpu_fallback` — HF classes exercised by the demo that stay as
   PyTorch *for now* (no TTNN equivalent yet). These run on the host
   CPU and are the actionable backlog.
@@ -37,19 +51,44 @@ the original three):
   file but aren't touched by the documented demo path (audio towers
   on image-only demos, alternative heads).
 
-Where the recipe also enables it (Phase 7+), a runtime hook in
-[`tt_symbiote.core.run_config`](../src/tt_symbiote/core/run_config.py)
-records every `TTNNModule.forward` exception that fell back to PyTorch.
-That ledger is surfaced under `runtime_observed.unexpected` — *any
-non-empty value there is a regression*: it means a TTNN wrapper failed
-mid-run and the recipe didn't declare it as a known fallback.
+These lists drive the budget/MoE gate in `Gemma4Recipe`, the
+port-hf-model-to-tt-symbiote skill, and the textual tables on this
+page. They are *not* serialized into the JSON.
 
-## How to regenerate this page
+The JSON instead carries three runtime ledgers + a derived regression
+set:
 
-Re-run the demo whose row you want refreshed. The JSON next to the
-script updates atomically; copy the relevant counts and class lists
-into the table below. The JSON files are checked in so the table never
-drifts from reality.
+- `modules_swapped` — populated by a post-`set_device` walk: every
+  `TTNNModule` still present in the model tree (i.e. the chip-arch
+  gate didn't swap it back out) gets recorded as
+  `{module_name: hf_class_name}`. Aggregated by class for the at-a-
+  glance "how many things ran on device" count.
+- `runtime_observed.successes_by_class` — every successful TTNN
+  `forward` increments a counter keyed by HF class. Aggregated calls,
+  not modules, so the number reflects "this op ran on device X
+  times" not "X distinct modules used this class".
+- `runtime_observed.fallbacks_by_class` / `.fallbacks_by_module` —
+  populated by the existing fallback hook in `run_config`
+  (`TTNNModule.forward` raised, `_fallback_torch_layer` carried the
+  load). Set semantics (one entry per module).
+- `regressions` — the derived field: classes observed in the fallback
+  ledger that the recipe does *not* declare under `cpu_fallback`.
+  Empty list = clean run; non-empty = a TTNN wrapper failed mid-run
+  on a class the recipe expected to succeed.
+
+## How to regenerate the JSON
+
+Re-run the demo whose row you want refreshed:
+
+```bash
+python examples/e2e/gemma4/run_gemma4_e2b.py
+# → writes examples/e2e/gemma4/run_gemma4_e2b_coverage.json (gitignored)
+```
+
+The JSON is overwritten atomically each run; read it locally to see
+what shipped vs. what fell back on your machine. To refresh the
+textual tables on this page, run the relevant demo, then transcribe
+the counts and class lists below.
 
 ## Coverage by model
 
@@ -57,46 +96,55 @@ drifts from reality.
 
 #### Ling-mini-2.0 — T3K (1×8), full TTNN
 
-Source: [`examples/e2e/run_ling_mini_2_0.py`](../examples/e2e/run_ling_mini_2_0.py)
-+ [`examples/e2e/run_ling_mini_2_0_coverage.json`](../examples/e2e/run_ling_mini_2_0_coverage.json)
+Source: [`examples/e2e/run_ling_mini_2_0.py`](../examples/e2e/run_ling_mini_2_0.py).
+Re-run the demo to regenerate `run_ling_mini_2_0_coverage.json` next
+to the script.
 
-The Ling recipe predates the Phase 7 design-time list convention, so
-its `tt_implemented` / `cpu_fallback` / `out_of_scope` lists are not
-yet populated; the runtime ledger (when re-run on T3K) is the
-authoritative source. From the Phase 5 acceptance: every text decoder
-submodule (RMSNorm, attention, MoE experts + router, decoder layer,
-top-level model) runs on **T3K device**; tokenizer + the `generate`
-scaffolding run on CPU.
+Counts (recipe): **8 TT / 0 CPU / 2 host_glue / 5 OOS**.
+`regressions == []` — Ling-mini-2.0 is a *full* TTNN port: every
+compute-bearing HF class is wrapped by the recipe, and the runtime
+fallback ledger is empty because no `TTNNModule.forward` ever fell
+back to its `_fallback_torch_layer`.
 
-Follow-up: backfill the recipe's three design-time lists, mirroring
-the Gemma-4 / Qwen3-VL pattern.
+| Stage | Component class | Where | Hardware |
+|---|---|---|---|
+| TTNN runtime | `ttnn.set_fabric_config(FABRIC_1D_RING)` + `open_mesh_device((1,8))` | T3K (mgmt) | init/alloc |
+| Loader | `AutoTokenizer.from_pretrained` (`trust_remote_code=True`) | CPU | — |
+| Loader | `AutoModelForCausalLM.from_pretrained` (`trust_remote_code=True`) | CPU | — |
+| Walker | `tt_symbiote.set_device` (+ `make_kv_cache`) | CPU + T3K handle | swaps 8 HF classes + `nn.Linear` lm_head + `nn.Embedding` |
+| Tokenisation | `tokenizer.apply_chat_template` | CPU | — |
+| Forward (TTNN) | `BailingMoeV2RMSNorm`, `BailingMoeV2RotaryEmbedding`, `BailingMoeV2MLP` (dense layer 0), `BailingMoeV2Gate`, `BailingMoeV2SparseMoeBlock`, `BailingMoeV2SdpaAttention`, `BailingMoeV2DecoderLayer`, `BailingMoeV2Model` | **T3K** | every decoder + MoE op on device |
+| Forward (TTNN, primitives) | `nn.Embedding` (word_embeddings), `nn.Linear` (lm_head) | **T3K** | swapped by `BailingMoEV2Recipe.build_module_dict` even though they're not HF-specific classes |
+| Forward (host_glue) | `BailingMoeV2PreTrainedModel`, `BailingMoeV2ForCausalLM` | CPU (policy) | HF base + GenerationMixin orchestration, no FLOPs |
+| De-tokenisation | `tokenizer.decode` | CPU | — |
+| Out of scope | `BailingMoeV2Attention` (eager), `BailingMoeV2FlashAttention2`, `BailingMoeV2MTPLayer` (`num_nextn_predict_layers == 0`), 2× output dataclass | — | — |
 
 ### Image classification
 
 #### ResNet-50 — N150 (1×1), full TTNN
 
-Source: [`examples/e2e/resnet/run_resnet50.py`](../examples/e2e/resnet/run_resnet50.py)
-+ [`examples/e2e/resnet/run_resnet50_coverage.json`](../examples/e2e/resnet/run_resnet50_coverage.json)
+Source: [`examples/e2e/resnet/run_resnet50.py`](../examples/e2e/resnet/run_resnet50.py).
+Re-run the demo to regenerate `run_resnet50_coverage.json` next to
+the script.
 
-Same caveat as Ling — the ResNet recipe predates the design-time list
-convention; counts in the JSON are zero. Runtime: zero unexpected
-fallbacks on the verified run.
+Counts (recipe): **5 TT / 0 CPU / 5 host_glue / 4 OOS**.
+`regressions == []` — like Ling, ResNet is a *full* TTNN port: every
+compute-bearing HF class is wrapped, and the only host modules are
+pure container / orchestration code with no FLOPs.
 
-From the recipe source ([`modeling_resnet.py`](../src/tt_symbiote/models/resnet/modeling_resnet.py)):
-
-| Module | Where it runs | Notes |
-|---|---|---|
-| `TTNNResNetEmbeddings` (stem) | **N150** | 7×7 stride-2 conv, NCHW → NHWC permute |
-| `TTNNResNetConvLayer` | **N150** | fused conv + BN + activation |
-| `TTNNResNetShortCut` | **N150** | identity / 1×1 projection |
-| `TTNNResNetBasicLayer` (resnet-18/34) | **N150** | two-conv block |
-| `TTNNResNetBottleNeckLayer` (resnet-50/101/152) | **N150** | three-conv block |
-| `ResNetEncoder` | **N150** (walks children) | unchanged HF wrapper |
-| `nn.AdaptiveAvgPool2d` + `nn.Linear` (classifier) | **CPU** | post NHWC → NCHW boundary |
+| Stage | Component class | Where | Hardware |
+|---|---|---|---|
+| TTNN runtime | `set_fabric_config(DISABLED)` + `open_mesh_device((1,1), l1_small_size=245760)` | N150 (mgmt) | init/alloc |
+| Loader | `AutoModelForImageClassification.from_pretrained` (`torch_dtype=bfloat16`) | CPU | — |
+| Walker | `tt_symbiote.set_device` | CPU + N150 handle | swaps 5 HF classes + `nn.AdaptiveAvgPool2d` + `nn.Linear` |
+| Forward (TTNN) | `ResNetEmbeddings` (stem: NCHW→NHWC + 7×7 conv + maxpool), `ResNetConvLayer` (fused conv+BN+ReLU), `ResNetShortCut` (1×1 projection), `ResNetBasicLayer` (resnet-18/34), `ResNetBottleNeckLayer` (resnet-50/101/152) | **N150** | every conv block on device |
+| Forward (TTNN, primitives) | `nn.AdaptiveAvgPool2d` (`TTNNResNetAdaptiveAvgPool2dNHWC`), `nn.Linear` (classifier head) | **N150** | swapped by `ResNetRecipe.build_module_dict` |
+| Forward (host_glue) | `ResNetPreTrainedModel`, `ResNetStage` (container loop), `ResNetEncoder` (container loop), `ResNetModel`, `ResNetForImageClassification` | CPU (policy) | pure containers + optional CE loss when `labels` provided |
+| Out of scope | `ResNetBackbone` (alt feature-extraction head), 3× output dataclass | — | — |
 
 The four sibling variants (`resnet-18`, `-34`, `-101`, `-152`) share
-the same recipe; their coverage JSONs are stubs until each runs on
-hardware.
+the same recipe; the JSON for each is regenerated locally by running
+the matching `run_resnet*.py` script.
 
 ### Image-text-to-text (VLM)
 
@@ -110,11 +158,13 @@ four Qwen3-VL variants remain CPU-first until Wave B lands.
 
 #### Gemma-4 E2B-it — N150 (1×1), Wave A (✅ verified)
 
-Source: [`examples/e2e/gemma4/run_gemma4_e2b.py`](../examples/e2e/gemma4/run_gemma4_e2b.py)
-+ [`examples/e2e/gemma4/run_gemma4_e2b_coverage.json`](../examples/e2e/gemma4/run_gemma4_e2b_coverage.json)
+Source: [`examples/e2e/gemma4/run_gemma4_e2b.py`](../examples/e2e/gemma4/run_gemma4_e2b.py).
+Re-run the demo to regenerate `run_gemma4_e2b_coverage.json` next to
+the script.
 
-Counts (design + runtime): **5 TT / 14 CPU / 2 host_glue / 14 OOS**.
-`runtime_observed.unexpected == []`.
+Counts (recipe): **5 TT / 14 CPU / 2 host_glue / 14 OOS**. On a clean
+run `regressions == []`; `modules_swapped.by_class` reports the 5
+Wave A wrapper instances + the 122 RMSNorm sites the recipe touches.
 
 | Stage | Component class | Where | Hardware |
 |---|---|---|---|
@@ -133,65 +183,68 @@ Counts (design + runtime): **5 TT / 14 CPU / 2 host_glue / 14 OOS**.
 
 #### Gemma-4 E4B-it — N150 (1×1), Wave A (✅ verified)
 
-Source: [`run_gemma4_e4b.py`](../examples/e2e/gemma4/run_gemma4_e4b.py)
-+ [`run_gemma4_e4b_coverage.json`](../examples/e2e/gemma4/run_gemma4_e4b_coverage.json).
-Same class layout as E2B (same recipe). Runtime counts: **5 TT / 14
-CPU / 2 host_glue / 14 OOS**. `runtime_observed.unexpected == []`.
-Three expected fallbacks fire on the embedding / multimodal embedder
+Source: [`run_gemma4_e4b.py`](../examples/e2e/gemma4/run_gemma4_e4b.py).
+Re-run the demo to regenerate `run_gemma4_e4b_coverage.json` next to
+the script. Same class layout as E2B (same recipe). Recipe counts:
+**5 TT / 14 CPU / 2 host_glue / 14 OOS**. `regressions == []`. A few
+expected fallbacks fire on the embedding / multimodal embedder
 boundaries (`Gemma4TextScaledWordEmbedding`, `Gemma4MultimodalEmbedder`)
 because some HF call sites hand those modules tensors whose dtype /
 shape the TTNN integrations can't yet consume — the preserved
-`_fallback_torch_layer` carries the load. Identical pattern to E2B.
+`_fallback_torch_layer` carries the load. Identical pattern to E2B,
+and harmless: both classes are *also* declared in `cpu_fallback`, so
+they don't bump `regressions`.
 
 #### Gemma-4 31B-it — T3K (1×8), Wave A budget-gated (✅ verified, CPU-only)
 
-Source: [`run_gemma4_31b.py`](../examples/e2e/gemma4/run_gemma4_31b.py)
-+ [`run_gemma4_31b_coverage.json`](../examples/e2e/gemma4/run_gemma4_31b_coverage.json).
-Same design-time class layout as E2B (`Gemma4Recipe` is shared); mesh
-shape `(1, 8)`. **At runtime, the recipe's budget gate triggers**: the
-Wave A swap map would replicate ~43.5 GB of weights across each of the
-8 T3K chips (matmul + embedding + multimodal projection), which is
-~3.6× over the 12 GB DRAM ceiling. `_ttnn_swap_is_safe(model)` returns
-`False` with the reason `"replicated weight footprint ~43.5 GB exceeds
-the 9 GB per-chip budget (tensor-parallel sharding not yet wired
-in)"`; `Gemma4Recipe.build_module_dict` short-circuits to `{}` and
-emits a `UserWarning`. Effective runtime counts: **0 TT / 19 CPU / 2
-host_glue / 14 OOS** (every Wave A "tt_implemented" class falls
-through to its HF source layer; the recipe's design-time
-`tt_implemented` list stays unchanged so the JSON artefact remains
-auditable). `runtime_observed.unexpected == []`. The model produces
-the same semantically correct dog identification as E2B / E4B.
-`model._tt_runtime_config["ttnn_swap_skipped"] == True` and
-`ttnn_replicated_footprint_bytes` exposes the actual footprint so the
-gate decision is inspectable.
+Source: [`run_gemma4_31b.py`](../examples/e2e/gemma4/run_gemma4_31b.py).
+Re-run the demo to regenerate `run_gemma4_31b_coverage.json` next to
+the script. Same design-time class layout as E2B (`Gemma4Recipe` is
+shared); mesh shape `(1, 8)`. **At runtime, the recipe's budget gate
+triggers**: the Wave A swap map would replicate ~43.5 GB of weights
+across each of the 8 T3K chips (matmul + embedding + multimodal
+projection), which is ~3.6× over the 12 GB DRAM ceiling.
+`_ttnn_swap_is_safe(model)` returns `False` with the reason
+`"replicated weight footprint ~43.5 GB exceeds the 9 GB per-chip
+budget (tensor-parallel sharding not yet wired in)"`;
+`Gemma4Recipe.build_module_dict` short-circuits to `{}` and emits a
+`UserWarning`. Effective runtime: **0 modules swapped, 19 CPU classes
+fall back, 2 host_glue, 14 OOS**. The runtime JSON reflects this
+cleanly: `ttnn_swap_skipped == true`, `modules_swapped == {by_class:
+{}, by_module: {}}`, `regressions == []`. The model produces the
+same semantically correct dog identification as E2B / E4B.
+`ttnn_swap_skipped_reason` (if set by the recipe) and
+`ttnn_replicated_footprint_bytes` are stashed on
+`model._tt_runtime_config` for inspection.
 
 #### Gemma-4 26B-A4B-it — T3K (1×8), MoE-gated (✅ verified, CPU-only)
 
-Source: [`run_gemma4_26b_a4b.py`](../examples/e2e/gemma4/run_gemma4_26b_a4b.py)
-+ [`run_gemma4_26b_a4b_coverage.json`](../examples/e2e/gemma4/run_gemma4_26b_a4b_coverage.json).
-Same design-time layout; the `Gemma4TextExperts` / `Gemma4TextRouter`
-MoE pair is exercised here (unlike on E2B / E4B). **At runtime, the
-recipe's MoE gate triggers**: `text_config.enable_moe_block == True`
-puts the model on a code path where (a) `Gemma4TextExperts` is a
-sparsely-routed expert FFN whose weights are *not* matched by the
-dense `Gemma4TextMLP` Wave A wrapper, and (b) the per-head Q/K
+Source: [`run_gemma4_26b_a4b.py`](../examples/e2e/gemma4/run_gemma4_26b_a4b.py).
+Re-run the demo to regenerate `run_gemma4_26b_a4b_coverage.json` next
+to the script. Same design-time layout; the `Gemma4TextExperts` /
+`Gemma4TextRouter` MoE pair is exercised here (unlike on E2B / E4B).
+**At runtime, the recipe's MoE gate triggers**: `text_config.enable_moe_block
+== True` puts the model on a code path where (a) `Gemma4TextExperts`
+is a sparsely-routed expert FFN whose weights are *not* matched by
+the dense `Gemma4TextMLP` Wave A wrapper, and (b) the per-head Q/K
 RMSNorms inside `Gemma4TextDecoderLayer` use `dim ∈ {32, 96}` shapes
 the current TTNN RMSNorm tile geometry rejects. A partial swap would
 fire hundreds of runtime fallbacks; the gate returns the recipe to
 `{}` swaps with the reason `"MoE variant: Gemma4TextExperts + bespoke
 head-dim norms fall outside the Wave A wrapper coverage (Gemma4TextMLP
 wraps only the dense branch); a partial swap produces hundreds of
-shape-validation fallbacks at runtime"`. Effective runtime counts: **0
-TT / 19 CPU / 2 host_glue / 14 OOS**, `runtime_observed.unexpected ==
-[]`, semantically correct answer.
+shape-validation fallbacks at runtime"`. Same JSON shape as 31B:
+`ttnn_swap_skipped == true`, `modules_swapped == {by_class: {},
+by_module: {}}`, `regressions == []`, semantically correct answer.
 
 #### Qwen3-VL-2B-Instruct — N150 (1×1), Wave B (✅ verified)
 
-Source: [`examples/e2e/qwen3_vl/run_qwen3_vl_2b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_2b.py)
-+ [`examples/e2e/qwen3_vl/run_qwen3_vl_2b_coverage.json`](../examples/e2e/qwen3_vl/run_qwen3_vl_2b_coverage.json)
+Source: [`examples/e2e/qwen3_vl/run_qwen3_vl_2b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_2b.py).
+Re-run the demo to regenerate `run_qwen3_vl_2b_coverage.json` next to
+the script.
 
-Counts: **4 TT / 9 CPU / 3 host_glue / 3 OOS**.
-`runtime_observed.unexpected == []`.
+Counts (recipe): **4 TT / 9 CPU / 3 host_glue / 3 OOS**.
+`regressions == []`.
 
 | Stage | Component class | Where | Hardware |
 |---|---|---|---|
@@ -213,33 +266,35 @@ the output dataclasses) vs. Gemma-4's 14.
 #### Qwen3-VL-4B / 8B / 32B Instruct — Wave B (⏳ structurally supported)
 
 Same class layout as 2B (same recipe). Per-variant sources:
-[`run_qwen3_vl_4b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_4b.py)
-([stub](../examples/e2e/qwen3_vl/run_qwen3_vl_4b_coverage.json)),
-[`run_qwen3_vl_8b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_8b.py)
-([stub](../examples/e2e/qwen3_vl/run_qwen3_vl_8b_coverage.json)),
-[`run_qwen3_vl_32b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_32b.py)
-([stub](../examples/e2e/qwen3_vl/run_qwen3_vl_32b_coverage.json)).
+[`run_qwen3_vl_4b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_4b.py),
+[`run_qwen3_vl_8b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_8b.py),
+[`run_qwen3_vl_32b.py`](../examples/e2e/qwen3_vl/run_qwen3_vl_32b.py).
+Coverage JSONs are regenerated per run; check the local file after
+exercising the matching script.
 
 ## Summary table
 
-Aggregating the JSON files into a single overview:
+Recipe-declared class counts, plus the regression budget each demo is
+expected to hit on a clean run. Re-run any demo to refresh the
+matching `*_coverage.json` and confirm the columns still match
+reality:
 
-| Demo | Hardware | Status | TT classes | CPU classes | host_glue | OOS classes | Runtime unexpected |
+| Demo | Hardware | Status | TT classes | CPU classes | host_glue | OOS classes | Expected regressions |
 |---|---|---|---|---|---|---|---|
-| `run_ling_mini_2_0.py` | T3K (1×8) | ✅ verified (Phase 5) | not yet declared | not yet declared | not yet declared | not yet declared | clean at Phase 5 acceptance |
-| `resnet/run_resnet18.py` | N150 (1×1) | ⏳ stub | 0 | 0 | 0 | 0 | n/a |
-| `resnet/run_resnet34.py` | N150 (1×1) | ⏳ stub | 0 | 0 | 0 | 0 | n/a |
-| `resnet/run_resnet50.py` | N150 (1×1) | ✅ verified (re-run in reorg) | 0 (lists not declared) | 0 (lists not declared) | 0 (lists not declared) | 0 (lists not declared) | 0 |
-| `resnet/run_resnet101.py` | N150 (1×1) | ⏳ stub | 0 | 0 | 0 | 0 | n/a |
-| `resnet/run_resnet152.py` | N150 (1×1) | ⏳ stub | 0 | 0 | 0 | 0 | n/a |
+| `run_ling_mini_2_0.py` | T3K (1×8) | ✅ verified (Phase 5; lists backfilled post-Phase 8) | **8** | 0 | 2 | 5 | 0 |
+| `resnet/run_resnet18.py` | N150 (1×1) | ⏳ structurally supported | 5 | 0 | 5 | 4 | 0 |
+| `resnet/run_resnet34.py` | N150 (1×1) | ⏳ structurally supported | 5 | 0 | 5 | 4 | 0 |
+| `resnet/run_resnet50.py` | N150 (1×1) | ✅ verified (Phase 6; lists backfilled post-Phase 8) | **5** | 0 | 5 | 4 | 0 |
+| `resnet/run_resnet101.py` | N150 (1×1) | ⏳ structurally supported | 5 | 0 | 5 | 4 | 0 |
+| `resnet/run_resnet152.py` | N150 (1×1) | ⏳ structurally supported | 5 | 0 | 5 | 4 | 0 |
 | `gemma4/run_gemma4_e2b.py` | N150 (1×1) | ✅ verified (Phase 8 Wave A) | **5** | 14 | 2 | 14 | 0 |
 | `gemma4/run_gemma4_e4b.py` | N150 (1×1) | ✅ verified (Phase 8 Wave A) | **5** | 14 | 2 | 14 | 0 |
 | `gemma4/run_gemma4_31b.py` | T3K (1×8) | ✅ verified (CPU-only via budget gate) | 0 effective (5 declared) | 19 effective (14 declared) | 2 | 14 | 0 |
 | `gemma4/run_gemma4_26b_a4b.py` | T3K (1×8) | ✅ verified (CPU-only via MoE gate) | 0 effective (5 declared) | 19 effective (14 declared) | 2 | 14 | 0 |
 | `qwen3_vl/run_qwen3_vl_2b.py` | N150 (1×1) | ✅ verified (Phase 8 Wave B) | **4** | 9 | 3 | 3 | 0 |
-| `qwen3_vl/run_qwen3_vl_4b.py` | N150 (1×1) | ⏳ stub | 4 | 9 | 3 | 3 | n/a |
-| `qwen3_vl/run_qwen3_vl_8b.py` | N150 (1×1) | ⏳ stub | 4 | 9 | 3 | 3 | n/a |
-| `qwen3_vl/run_qwen3_vl_32b.py` | T3K (1×8) | ⏳ stub | 4 | 9 | 3 | 3 | n/a |
+| `qwen3_vl/run_qwen3_vl_4b.py` | N150 (1×1) | ⏳ structurally supported | 4 | 9 | 3 | 3 | 0 |
+| `qwen3_vl/run_qwen3_vl_8b.py` | N150 (1×1) | ⏳ structurally supported | 4 | 9 | 3 | 3 | 0 |
+| `qwen3_vl/run_qwen3_vl_32b.py` | T3K (1×8) | ⏳ structurally supported | 4 | 9 | 3 | 3 | 0 |
 
 **Net Tenstorrent coverage today:** ResNet-50 (full TTNN on N150) and
 Ling-mini-2.0 (full TTNN on T3K) remain the only models with the
@@ -282,10 +337,6 @@ variant is added to this folder.
 
 ## Open follow-ups
 
-- Backfill `tt_implemented` / `cpu_fallback` / `host_glue` /
-  `out_of_scope` lists in the **Ling** and **ResNet** recipes so
-  their JSON artefacts have populated design-time sections (currently
-  empty for both because those recipes predate the list convention).
 - Land Wave A+1 for Gemma-4: the bespoke text attention (KV-sharing
   + dual RoPE + per-head norms) and PLE. This is what unblocks moving
   the decoder loop to device.
@@ -297,6 +348,8 @@ variant is added to this folder.
 - Land Wave B+1 for Qwen3-VL: the bespoke M-RoPE precompute,
   Q/K head-norm-aware attention, varlen-packed vision SDPA, and
   DeepStack-aware decoder loop.
-- CI gate that fails if any committed `*_coverage.json` has
-  `runtime_observed.unexpected != []`. Trivial follow-up; the file
-  format is already JSON-friendly.
+- CI gate that fails if a demo's
+  `compatibility.report(model)["regressions"]` is non-empty. Phase
+  8.5 already gitignores the `*_coverage.json` files; the natural
+  next step is a CI harness that runs a few demos under a stub mesh
+  device and asserts the regression list is empty.

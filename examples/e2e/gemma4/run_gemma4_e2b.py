@@ -115,14 +115,15 @@ print(f"Gemma-4 E2B answer: {answer!r}")
 
 # Compatibility report drives the docs/supported_models.md "TT-implemented vs
 # CPU" status column and the per-script row in docs/cpu_vs_device_coverage.md.
-# Any new fallback that shows up under ``runtime_observed.unexpected`` is an
-# actionable signal for the next-phase TTNN port.
+# Phase 8.5: any class in ``regressions`` is an actionable signal — it means
+# a TTNN wrapper hit the fallback path on a class the recipe expected to
+# succeed on. ``modules_swapped`` shows what actually ran on device.
 report = compatibility.report(model)
 print("\n=== tt_symbiote.compatibility.report(model) ===")
 print(json.dumps(report, indent=2))
 
-# Persist the report next to the script so the aggregated docs page
-# always has a deterministic, checked-in artefact to read from.
+# Persist the report next to the script. Phase 8.5: the JSON is a pure
+# runtime observation artefact (gitignored, regenerated every run).
 coverage_path = Path(__file__).with_name(f"{Path(__file__).stem}_coverage.json")
 coverage_path.write_text(json.dumps(report, indent=2) + "\n")
 print(f"Wrote coverage report to {coverage_path}")

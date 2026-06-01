@@ -1027,11 +1027,6 @@ from Phase 5/6).
 
 ### Follow-ups (deferred)
 
-- **Backfill design-time lists** for the Ling and ResNet recipes
-  (`tt_implemented` / `cpu_fallback` / `out_of_scope`). Currently
-  empty for both because those recipes predate the Phase 7 list
-  convention; the runtime ledger is the only authoritative source for
-  their CPU/device split.
 - **Hardware verification of the new scripts** — each is an
   independent run-and-flip-the-flag step:
   `gemma4/run_gemma4_e4b.py`, `gemma4/run_gemma4_26b_a4b.py`,
@@ -1421,3 +1416,235 @@ when present — and is already merged.
   that exceeds the per-chip budget, mirror the Gemma-4 gate verbatim.
 - **CI gate on `runtime_observed.unexpected != []`** in the
   committed coverage JSON files — trivial follow-up.
+
+# Post-Phase 8 — Ling + ResNet design-time list backfill
+
+The Phase 5 (`BailingMoEV2Recipe`) and Phase 6 (`ResNetRecipe`)
+reference ports predated the Phase 7 introduction of the four
+design-time lists (`tt_implemented` / `cpu_fallback` / `host_glue` /
+`out_of_scope`) on the recipe object. Their `compatibility.report`
+JSONs therefore showed zero declared coverage even though both ports
+are full TTNN — a confusing signal, since runtime-empty
+`runtime_observed.unexpected` was being interpreted as "design-time
+unknown" rather than "no fallbacks fired, by design".
+
+This commit backfills both recipes to match the Gemma-4 / Qwen3-VL
+convention. Every compute-bearing HF class is now declared
+`tt_implemented`; the only host modules left are pure containers / HF
+base classes (`host_glue`) and HF classes never touched by the
+verified demo (`out_of_scope`). `cpu_fallback` is intentionally empty
+on both — a clean run shows zero entries in
+`runtime_observed.unexpected`, which is the canonical signal for "full
+TTNN port, no regressions".
+
+## What landed
+
+**`BailingMoEV2Recipe`** (Ling-mini-2.0 / T3K) — 8 / 0 / 2 / 5 split:
+
+- `tt_implemented` (8): `BailingMoeV2RMSNorm`,
+  `BailingMoeV2RotaryEmbedding`, `BailingMoeV2MLP`, `BailingMoeV2Gate`,
+  `BailingMoeV2SparseMoeBlock`, `BailingMoeV2SdpaAttention`,
+  `BailingMoeV2DecoderLayer`, `BailingMoeV2Model`. Every HF class
+  touched by the SDPA decode path now has an on-device counterpart
+  (some at the `register_modules` level, some inside the
+  `TTNNBailingMoEDecoderLayer.from_torch` subtree sweep).
+- `cpu_fallback` (0): nothing intentionally host-bound on the demo
+  path.
+- `host_glue` (2): `BailingMoeV2PreTrainedModel` (HF abstract base)
+  and `BailingMoeV2ForCausalLM` (top-level causal-LM head, delegates
+  to the swapped `BailingMoeV2Model` and the swapped `nn.Linear`
+  `lm_head` then runs `GenerationMixin` orchestration).
+- `out_of_scope` (5): 2 output dataclasses, the eager
+  `BailingMoeV2Attention` and `BailingMoeV2FlashAttention2`
+  alternative-implementation classes (the SDPA path is the demo
+  default), and `BailingMoeV2MTPLayer` (only built when
+  `config.num_nextn_predict_layers > 0`; Ling-mini-2.0 ships
+  `num_nextn_predict_layers=0`).
+
+**`ResNetRecipe`** (microsoft/resnet-{18,34,50,101,152} / N150) —
+5 / 0 / 5 / 4 split:
+
+- `tt_implemented` (5): `ResNetConvLayer`, `ResNetShortCut`,
+  `ResNetBasicLayer`, `ResNetBottleNeckLayer`, `ResNetEmbeddings`.
+  The recipe's `build_module_dict` also swaps `nn.AdaptiveAvgPool2d`
+  and `nn.Linear` onto TTNN counterparts; these are torch primitives
+  rather than HF-specific classes, so per the Gemma-4 / Qwen3-VL
+  convention they aren't listed (their replacement is documented
+  inline in the recipe file).
+- `cpu_fallback` (0): nothing intentionally host-bound.
+- `host_glue` (5): `ResNetPreTrainedModel`, `ResNetStage`,
+  `ResNetEncoder`, `ResNetModel`, `ResNetForImageClassification`.
+  `ResNetStage` and `ResNetEncoder` are pure container modules (just
+  `for layer in self.layers: x = layer(x)`); `ResNetModel` and
+  `ResNetForImageClassification` are thin assemblies on top of the
+  swapped children, with no FLOPs of their own beyond optional
+  cross-entropy when `labels` is passed.
+- `out_of_scope` (4): 3 output dataclasses and `ResNetBackbone` (the
+  alternative feature-extraction head that the
+  `run_resnet*.py` scripts don't exercise).
+
+## Why no `cpu_fallback` entries on either model
+
+A `cpu_fallback` entry says "the recipe knows this HF class is
+exercised at runtime but deliberately leaves it on PyTorch". Both
+Ling-mini-2.0 and every ResNet variant are full TTNN ports — every
+compute-bearing class on the demo path is wrapped, so there is no
+"deliberately on CPU" set. Leaving the list empty is the right answer
+*and* is the canonical signal for the runtime hook: any class that
+shows up in `runtime_observed.unexpected` now points to a real
+regression rather than an undeclared-but-expected fallback.
+
+## Regenerated artefacts
+
+The six checked-in coverage JSON files were regenerated against the
+new recipes:
+
+- `examples/e2e/run_ling_mini_2_0_coverage.json` (verified-run shape;
+  T3K demo produces an identical report — full design-time lists,
+  empty `runtime_observed`).
+- `examples/e2e/resnet/run_resnet50_coverage.json` (verified-run
+  shape; previous N150 demo's runtime ledger was empty, the only
+  diff is the populated design-time lists).
+- `examples/e2e/resnet/run_resnet{18,34,101,152}_coverage.json`
+  (stub-run shape with `status: "not yet recorded"` and the
+  populated design-time lists; replaces the previous all-zero
+  stubs).
+
+The aggregated tables in `docs/cpu_vs_device_coverage.md` and the
+"Coverage by model" sections were updated to match.
+
+# Phase 8.5 — `_coverage.json` as a pure runtime artefact
+
+## What changed and why
+
+The post-Phase-8 audit surfaced a real failure mode of the previous
+`_coverage.json` shape: for the gated Gemma-4 variants (31B / 26B-A4B)
+the JSON would advertise `tt_implemented = [5 classes]` while the
+budget gate had silently zeroed every actual TTNN swap. The artefact
+mixed *intent* (what the recipe declared it would wrap) with
+*observation* (what actually ran on device), which made the file
+unreadable as a single-source answer to "what happened on this run?".
+
+Phase 8.5 splits the two cleanly:
+
+- **Intent stays in code.** Each recipe keeps its four design-time
+  lists (`tt_implemented` / `cpu_fallback` / `host_glue` /
+  `out_of_scope`). The budget gate, the porting skill, and the
+  textual breakdown in `docs/cpu_vs_device_coverage.md` continue to
+  consume them — they are *the* shared vocabulary for talking about
+  what the recipe is supposed to do.
+- **Observation moves to runtime.** The new `compatibility.report`
+  shape serializes *only* what the runtime saw: which `TTNNModule`s
+  the `set_device` walk left in place, which forwards completed on
+  device, which forwards fell back to torch, and (the single derived
+  field) the set of observed fallback classes that the recipe did
+  *not* declare under `cpu_fallback`.
+- **JSONs become local-only.** All 14 previously checked-in
+  `*_coverage.json` files were `git rm`-ed; `.gitignore` now matches
+  `**/*_coverage.json`. Operators regenerate them by running the
+  per-demo script. No CI artefact, no PR diff drift.
+
+## New JSON shape
+
+```json
+{
+  "model_class": "Gemma4ForConditionalGeneration",
+  "ttnn_swap_skipped": false,
+  "ttnn_swap_skipped_reason": null,
+  "modules_swapped": {
+    "by_class": {"Gemma4TextMLP": 26, "Gemma4RMSNorm": 122, "...": "..."},
+    "by_module": {"model.language_model.layers.0.mlp": "Gemma4TextMLP", "...": "..."}
+  },
+  "runtime_observed": {
+    "successes_by_class": {"Gemma4TextMLP": 1560, "...": "..."},
+    "fallbacks_by_class": {"Gemma4VisionAttention": 27},
+    "fallbacks_by_module": {"model.vision_tower.encoder.layers.0.self_attn":
+                            "Gemma4VisionAttention", "...": "..."}
+  },
+  "regressions": [],
+  "summary": {
+    "modules_swapped_count": 153,
+    "runtime_successes": 1587,
+    "runtime_fallbacks": 27,
+    "regression_count": 0
+  }
+}
+```
+
+Field semantics:
+
+- `modules_swapped.by_class` — count of unique `TTNNModule`
+  instances still bound after `set_device` (i.e. not arch-swapped
+  back to torch), keyed by the HF source class
+  (`type(_fallback_torch_layer).__name__`).
+- `runtime_observed.successes_by_class` — total successful TTNN
+  forward calls aggregated by class. Counts **events**, not modules:
+  an MLP that runs 60 times across decode shows up as 60.
+- `runtime_observed.fallbacks_by_class` — count of unique modules
+  that hit the torch fallback path at least once. Counts modules.
+- `runtime_observed.fallbacks_by_module` — the raw mapping for
+  traceability when the by-class summary isn't enough.
+- `regressions` — `set(fallbacks_by_class) - set(recipe.cpu_fallback)`.
+  Empty list = clean run; non-empty = the recipe didn't predict that
+  fallback and a contributor needs to investigate.
+- `ttnn_swap_skipped` / `ttnn_swap_skipped_reason` — mirrored from
+  `model._tt_runtime_config` so the gate decision is inspectable.
+
+## Plumbing
+
+The hooks live in three places:
+
+```
+set_device(model, mesh)
+    └── walk model tree → record_swapped_class(name, cls) per TTNNModule
+TTNNModule.__call__
+    ├── on success → record_runtime_success(name, cls)
+    └── on fallback → record_runtime_fallback(name, cls)   # already existed
+compatibility.report(model)
+    └── reads all three ledgers + recipe.cpu_fallback → JSON
+```
+
+Implementation sites:
+
+- [`src/tt_symbiote/utils/compatibility.py`](../src/tt_symbiote/utils/compatibility.py)
+  owns three module-level dicts (`_SWAPPED_REGISTRY`,
+  `_SUCCESS_LEDGER` + `_SUCCESS_CALL_COUNT`, `_RUNTIME_LEDGER`)
+  guarded by a single lock. Three public hooks
+  (`record_swapped_class`, `record_runtime_success`,
+  `record_runtime_fallback`) and two reset helpers
+  (`reset_swapped_registry`, `reset_runtime_observations`).
+- [`src/tt_symbiote/core/run_config.py`](../src/tt_symbiote/core/run_config.py)
+  calls `_record_runtime_success(self)` on the success path of every
+  TTNN-attempting `module_run` (`NormalRun`, `NormalRunWithFallback`).
+  The explicit "host only" run modes (`LightweightRun`, `CPU`) do not
+  record either ledger — they're an opt-out, not a run.
+- [`src/tt_symbiote/utils/device_management.py`](../src/tt_symbiote/utils/device_management.py)
+  resets `_SWAPPED_REGISTRY` at the start of `set_device` and walks
+  `model.named_modules()` once at the end to populate it. The runtime
+  observation ledgers are left intact across `set_device` calls so
+  callers can chain operations (call `reset_runtime_observations()`
+  explicitly between independent runs).
+
+## Acceptance criteria
+
+A clean run for any verified demo now produces:
+
+- `regressions == []`
+- `modules_swapped.by_class` populated with the recipe's
+  `tt_implemented` classes (counts = number of HF sites per class)
+- `runtime_observed.successes_by_class` populated by call counts
+- `runtime_observed.fallbacks_by_class` empty (or limited to classes
+  in `recipe.cpu_fallback`)
+- `ttnn_swap_skipped == false`
+
+For the gated Gemma-4 variants (31B / 26B-A4B):
+
+- `ttnn_swap_skipped == true` (set by `Gemma4Recipe.post_register`)
+- `modules_swapped == {by_class: {}, by_module: {}}`
+- `regressions == []` (no TTNN was attempted, so no fallback can
+  surface)
+
+Hardware-free coverage of the new shape lives in
+[`tests/auto/test_compatibility.py`](../tests/auto/test_compatibility.py)
+(11 tests pinning ledger semantics, regression delta, and the
+absence of the four design-time lists from the JSON).

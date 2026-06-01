@@ -75,10 +75,10 @@ predicted_class_idx = int(logits.argmax(dim=-1).item())
 label = model.config.id2label.get(predicted_class_idx, f"<class {predicted_class_idx}>")
 print(f"ResNet-50 top-1: class {predicted_class_idx} = {label!r}")
 
-# Persist compatibility.report next to the script so the aggregated
-# docs/cpu_vs_device_coverage.md page has a deterministic artefact.
-# ResNet-50 is a full TTNN port — the runtime_observed ledger should
-# stay empty (no fallbacks fired).
+# Persist compatibility.report next to the script. Phase 8.5: the
+# JSON is a pure runtime observation artefact (gitignored, regenerated
+# every run). ResNet-50 is a full TTNN port — `regressions` should
+# stay `[]` and the fallback ledger should be empty.
 report = compatibility.report(model)
 print("\n=== tt_symbiote.compatibility.report(model) ===")
 print(json.dumps(report, indent=2))

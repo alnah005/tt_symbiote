@@ -69,54 +69,78 @@ def test_recipe_registered(recipe):
     assert callable(recipe.make_kv_cache)
 
 
-def test_build_module_dict_is_empty_cpu_first(recipe, fake_gemma4_model):
-    """Phase 7 contract: ``build_module_dict`` returns ``{}`` (CPU-first port).
+def test_build_module_dict_wraps_phase8_wave_a(recipe, fake_gemma4_model):
+    """Phase 8 contract: E2B build_module_dict ships the 5-class Wave A swap.
 
-    The empty dict is *the* signal that the recipe is in its initial
-    CPU-first phase: nothing gets swapped, all HF modules stay as
-    PyTorch, and ``set_device`` reduces to attaching
-    ``_tt_runtime_config``. Future commits that land TTNN wrappers
-    will populate this dict and shrink ``cpu_fallback``.
+    The fake fixture targets the E2B variant (35 layers, vision tower
+    present, no audio config). For that footprint the chip-budget gate
+    is *not* expected to fire, so ``build_module_dict`` returns the
+    full Wave A mapping: RMSNorm, scaled word embedding, text MLP,
+    vision MLP, multimodal embedder. The gate-fires case (31B /
+    26B-A4B) is covered separately.
     """
     module_dict = recipe.build_module_dict(fake_gemma4_model)
-    assert module_dict == {}, (
-        f"Phase 7 ships a CPU-first port; build_module_dict must return {{}} "
-        f"until TTNN wrappers land. Got {module_dict!r}."
+
+    assert module_dict, (
+        "Phase 8 E2B should not be gated; got an empty build_module_dict, "
+        "which suggests the budget/MoE gate misclassified the variant"
     )
+    swapped_class_names = {cls.__name__ for cls in module_dict.keys()}
+    assert swapped_class_names == {
+        "Gemma4RMSNorm",
+        "Gemma4TextScaledWordEmbedding",
+        "Gemma4TextMLP",
+        "Gemma4VisionMLP",
+        "Gemma4MultimodalEmbedder",
+    }
 
 
 def test_design_time_coverage_lists_populated(recipe):
-    """The three class-name lists must be present and non-trivial.
+    """The four class-name lists must be present and non-trivial.
 
-    ``tt_implemented`` is empty in Phase 7 (CPU-first), but
-    ``cpu_fallback`` and ``out_of_scope`` carry the design-time
-    coverage manifest that :func:`compatibility.report` surfaces.
+    Phase 8 ships five TTNN wrappers; ``cpu_fallback``, ``host_glue``,
+    and ``out_of_scope`` carry the rest of the design-time coverage
+    manifest that the budget gate and porting skill consume.
     """
     assert isinstance(recipe.tt_implemented, list)
     assert isinstance(recipe.cpu_fallback, list)
+    assert isinstance(recipe.host_glue, list)
     assert isinstance(recipe.out_of_scope, list)
 
-    assert recipe.tt_implemented == [], (
-        "Phase 7 ships zero TTNN wrappers; tt_implemented must be empty"
-    )
+    for required in (
+        "Gemma4RMSNorm",
+        "Gemma4TextScaledWordEmbedding",
+        "Gemma4TextMLP",
+        "Gemma4VisionMLP",
+        "Gemma4MultimodalEmbedder",
+    ):
+        assert required in recipe.tt_implemented, (
+            f"{required} must be declared in tt_implemented (Phase 8 Wave A)"
+        )
 
-    # The exhaustive list covers the text path, vision path, multimodal
-    # projection and both top-level composites. The literal count is
-    # less interesting than the requirement that key classes are
-    # present, so we assert membership on the load-bearing entries
-    # instead of a brittle ``len()`` check.
+    # Load-bearing classes still deferred to torch: Phase 8 wraps the
+    # element-wise compute (RMSNorm/MLP/embeddings) but leaves the
+    # attention stacks and the top-level orchestration (text + vision
+    # encoder layers, model containers, dual RoPE, vision attention)
+    # for later waves.
     for required in (
         "Gemma4VisionModel",
         "Gemma4VisionEncoderLayer",
-        "Gemma4MultimodalEmbedder",
+        "Gemma4VisionAttention",
         "Gemma4TextModel",
         "Gemma4TextDecoderLayer",
-        "Gemma4ForConditionalGeneration",
+        "Gemma4TextAttention",
     ):
         assert required in recipe.cpu_fallback, (
             f"{required} must be declared in cpu_fallback so the "
             f"compatibility report flags it as 'expected' rather than "
-            f"'unexpected' when the demo runs."
+            f"a regression when the demo runs."
+        )
+
+    for required in ("Gemma4Model", "Gemma4ForConditionalGeneration"):
+        assert required in recipe.host_glue, (
+            f"{required} should be in host_glue (orchestration / "
+            f"output dataclass — no FLOPs to accelerate)."
         )
 
     for required in (
@@ -132,22 +156,32 @@ def test_design_time_coverage_lists_populated(recipe):
 def test_design_time_lists_are_disjoint(recipe):
     """A class must not appear in two coverage lists simultaneously.
 
-    Overlap would make ``compatibility.report`` ambiguous (does the
-    class count as TT-accelerated or as a known fallback?). Catch the
-    accident in CI before it ships.
+    Overlap would make the recipe's coverage manifest ambiguous (does
+    the class count as TT-accelerated, an expected fallback, or pure
+    host glue?). Catch the accident in CI before it ships.
     """
     impl = set(recipe.tt_implemented)
     fallback = set(recipe.cpu_fallback)
+    host_glue = set(recipe.host_glue)
     oos = set(recipe.out_of_scope)
 
     assert impl.isdisjoint(fallback), (
         f"tt_implemented and cpu_fallback overlap on {impl & fallback}"
     )
+    assert impl.isdisjoint(host_glue), (
+        f"tt_implemented and host_glue overlap on {impl & host_glue}"
+    )
     assert impl.isdisjoint(oos), (
         f"tt_implemented and out_of_scope overlap on {impl & oos}"
     )
+    assert fallback.isdisjoint(host_glue), (
+        f"cpu_fallback and host_glue overlap on {fallback & host_glue}"
+    )
     assert fallback.isdisjoint(oos), (
         f"cpu_fallback and out_of_scope overlap on {fallback & oos}"
+    )
+    assert host_glue.isdisjoint(oos), (
+        f"host_glue and out_of_scope overlap on {host_glue & oos}"
     )
 
 
@@ -239,52 +273,64 @@ def test_lookup_ttnn_tuning_fallbacks():
     assert cfg["mesh_shape"] == (1, 1), "default tuning falls back to single-chip mesh"
 
 
-def test_compatibility_report_consumes_recipe(recipe, fake_gemma4_model):
-    """End-to-end: ``compatibility.report`` reads the recipe lists.
+def test_compatibility_report_shape(recipe, fake_gemma4_model):
+    """End-to-end: ``compatibility.report`` returns the Phase 8.5 runtime shape.
 
-    Builds the report against the fake model, confirms the design-time
-    section matches the recipe, and confirms the runtime section is
-    empty (this test never runs a forward).
+    The fake model never runs a forward and ``set_device`` is not
+    called, so every observation ledger is empty. The test pins the
+    new schema: no ``design_time`` key, ``modules_swapped`` and
+    ``runtime_observed`` sub-dicts present, ``regressions`` empty.
     """
-    from tt_symbiote.utils.compatibility import report, reset_runtime_observations
+    from tt_symbiote.utils.compatibility import (
+        report,
+        reset_runtime_observations,
+        reset_swapped_registry,
+    )
 
     reset_runtime_observations()
+    reset_swapped_registry()
     out = report(fake_gemma4_model)
 
     assert out["model_class"] == "_FakeGemma4ForConditionalGeneration", (
         "the fake stand-in shadows the real class on purpose to keep the "
         "test hardware-free; ``report`` must still surface that class name"
     )
-    # The registry is keyed by the *real* HF class name, so the fake
-    # model resolves to no recipe and the design-time lists come back
-    # empty. That's the documented behaviour for unrecognised classes.
-    assert out["design_time"]["tt_implemented"] == []
-    assert out["design_time"]["cpu_fallback"] == []
-    assert out["design_time"]["out_of_scope"] == []
-    assert out["runtime_observed"]["by_module"] == {}
-    assert out["summary"]["runtime_fallback_count"] == 0
+    assert "design_time" not in out, (
+        "Phase 8.5 dropped the design_time block from the runtime artefact"
+    )
+    assert out["modules_swapped"] == {"by_class": {}, "by_module": {}}
+    assert out["runtime_observed"] == {
+        "successes_by_class": {},
+        "fallbacks_by_class": {},
+        "fallbacks_by_module": {},
+    }
+    assert out["regressions"] == []
+    assert out["summary"]["modules_swapped_count"] == 0
+    assert out["summary"]["runtime_fallbacks"] == 0
 
 
 def test_compatibility_report_for_registered_class():
-    """For the actual ``Gemma4ForConditionalGeneration`` class, the report uses recipe lists.
+    """For the registered ``Gemma4ForConditionalGeneration``, the report stays runtime-only.
 
-    Constructs an object whose ``type(...).__name__`` matches the
-    registry key; ``report`` should then surface the recipe's
-    ``cpu_fallback`` list verbatim.
+    Even when the recipe lookup succeeds (so the report could in
+    principle compute regressions against ``cpu_fallback``), the JSON
+    must still be observational only — ``cpu_fallback`` is consumed
+    internally to compute ``regressions`` but is never serialized.
     """
-    from tt_symbiote.utils.compatibility import report, reset_runtime_observations
+    from tt_symbiote.utils.compatibility import (
+        report,
+        reset_runtime_observations,
+        reset_swapped_registry,
+    )
 
     class Gemma4ForConditionalGeneration:  # noqa: N801 — mirrors HF name on purpose
         pass
 
     reset_runtime_observations()
+    reset_swapped_registry()
     out = report(Gemma4ForConditionalGeneration())
 
     assert out["model_class"] == "Gemma4ForConditionalGeneration"
-    assert out["summary"]["tt_implemented_count"] == 0
-    assert out["summary"]["cpu_fallback_count"] >= 19, (
-        "the Gemma-4 recipe should declare at least the vision tower, "
-        "multimodal projection, and full text decoder under cpu_fallback"
-    )
-    assert "Gemma4VisionModel" in out["design_time"]["cpu_fallback"]
-    assert "Gemma4ForConditionalGeneration" in out["design_time"]["cpu_fallback"]
+    assert "design_time" not in out
+    assert out["regressions"] == []
+    assert out["ttnn_swap_skipped"] is False

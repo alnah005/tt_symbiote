@@ -41,7 +41,6 @@ from tt_symbiote.core.module import MeshShapeToDeviceArch, TTNNModule
 from tt_symbiote.core.run_config import DispatchManager, DistributedConfig
 from tt_symbiote.utils.graph_visualization import draw_model_graph
 
-
 __all__ = ["DeviceInit", "set_device"]
 
 
@@ -162,7 +161,22 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs) -> None:
       - ``register_forward_hook`` (default ``True``): wrap each module's
         ``forward``/``call`` with timing instrumentation.
       - ``dump_visualization`` (default ``True``): write ``model_graph.png``.
+
+    Phase 8.5: the swapped-class registry consumed by
+    :func:`tt_symbiote.utils.compatibility.report` is cleared at entry
+    and repopulated at exit so it always mirrors the *current* model
+    tree (running two demos in the same process never aliases). Runtime
+    observation ledgers (success / fallback) are left intact — callers
+    that want a clean slate call ``reset_runtime_observations()``
+    explicitly.
     """
+    try:
+        from tt_symbiote.utils.compatibility import reset_swapped_registry
+
+        reset_swapped_registry()
+    except Exception:
+        pass
+
     initialized_modules: list = []  # collected for the weight-prep pass
 
     # Build module name mapping before recursion
@@ -182,8 +196,7 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs) -> None:
                 )
             else:
                 warnings.warn(
-                    f"Running {child.module_name} on CPU; "
-                    f"not supported on {_active_device_arch()}",
+                    f"Running {child.module_name} on CPU; " f"not supported on {_active_device_arch()}",
                     stacklevel=2,
                 )
                 _swap_module(parent, key, fallback)
@@ -200,9 +213,7 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs) -> None:
             if kwargs.get("register_forward_hook", True):
                 if hasattr(current_obj, "forward"):
                     if not hasattr(current_obj.forward, "_is_timed"):
-                        current_obj.forward = timed_call(
-                            current_obj.forward, name, current_obj.__class__.__name__
-                        )
+                        current_obj.forward = timed_call(current_obj.forward, name, current_obj.__class__.__name__)
                         current_obj.forward._is_timed = True
 
             # _modules children
@@ -346,8 +357,7 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs) -> None:
             module.move_weights_to_device()
         except Exception as e:
             warnings.warn(
-                f"set_device: failed to (preprocess|move) weights for "
-                f"{module.module_name}: {e!r}",
+                f"set_device: failed to (preprocess|move) weights for " f"{module.module_name}: {e!r}",
                 stacklevel=2,
             )
 
@@ -379,6 +389,39 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs) -> None:
         setattr(obj, "_tt_symbiote_device_set", True)
     except Exception:
         pass
+
+    # Phase 8.5: single post-walk to populate the swapped-class registry that
+    # ``compatibility.report`` reads. Every TTNNModule still present in the
+    # tree after the bind/arch pass had ``_swap_module`` decline to replace it
+    # — i.e. it is *actually* about to execute on device. We record the HF
+    # source class (the type of ``_fallback_torch_layer``) so the registry
+    # cross-references cleanly with the recipe's design-time lists. TTNN
+    # modules without a fallback layer are skipped: their wrapper class name
+    # is not meaningful for HF-side reporting.
+    try:
+        from tt_symbiote.utils.compatibility import record_swapped_class
+
+        if isinstance(obj, nn.Module):
+            iterator = obj.named_modules()
+        elif isinstance(obj, TTNNModule):
+            iterator = [(getattr(obj, "module_name", ""), obj)]
+        else:
+            iterator = []
+        for module_name, module in iterator:
+            if not isinstance(module, TTNNModule):
+                continue
+            fallback = getattr(module, "_fallback_torch_layer", None)
+            if fallback is None:
+                continue
+            record_swapped_class(
+                module_name or getattr(module, "module_name", type(module).__name__),
+                type(fallback).__name__,
+            )
+    except Exception as e:
+        warnings.warn(
+            f"set_device: failed to populate swapped-class registry: {e!r}",
+            stacklevel=2,
+        )
 
     if kwargs.get("dump_visualization", True):
         draw_model_graph(obj)

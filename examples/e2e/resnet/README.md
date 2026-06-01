@@ -38,16 +38,21 @@ Every script in this folder is the same ~70-line template:
 3. `set_device(model, mesh_device)` (this actually moves modules to device — full TTNN port)
 4. Synthetic 1×3×224×224 BF16 input (swap to a real image via `AutoImageProcessor` for semantic verification — see `run_resnet50.py` "synthetic input" comment block).
 5. `model(pixel_values=...)` forward
-6. `compatibility.report(model)` → printed and written to `<script>_coverage.json`
+6. `compatibility.report(model)` → printed and written to
+   `<script>_coverage.json` (Phase 8.5: gitignored, regenerated on
+   every run — read it locally to confirm clean execution).
 7. `ttnn.close_mesh_device(mesh_device)`
 
-The per-script `_coverage.json` artefacts aggregate into
+The aggregated textual summary across all variants lives in
 [`docs/cpu_vs_device_coverage.md`](../../../docs/cpu_vs_device_coverage.md).
-Note that the ResNet recipe predates the Phase 7 compatibility-list
-convention, so its design-time `tt_implemented` / `cpu_fallback` /
-`out_of_scope` lists are currently empty — the runtime ledger is the
-authoritative source for the ResNet CPU/device split until those lists
-are populated (tracked as a follow-up in `docs/migration_notes.md`).
+The ResNet recipe was originally written in Phase 6 before the
+compatibility-list convention existed; the four design-time lists
+(`tt_implemented` / `cpu_fallback` / `host_glue` / `out_of_scope`)
+were backfilled post-Phase 8 so the recipe's textual coverage stays
+auditable. ResNet is a *full* TTNN port, so `cpu_fallback` is
+intentionally empty and a clean run reports `regressions == []`,
+`modules_swapped.by_class` populated, and `runtime_observed.fallbacks_by_class`
+empty.
 
 ## Reproducing a clean run
 

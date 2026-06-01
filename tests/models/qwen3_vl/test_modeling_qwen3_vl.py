@@ -42,17 +42,21 @@ def qwen3_vl_recipe():
     return TT_MODEL_REGISTRY["Qwen3VLForConditionalGeneration"]
 
 
-def test_recipe_is_cpu_first_phase(qwen3_vl_recipe):
-    """CPU-first contract: empty build_module_dict, populated coverage lists."""
-    assert qwen3_vl_recipe.build_module_dict(None) == {}, (
-        "CPU-first contract: no TTNN swaps until vision/text wrappers land "
-        "in a follow-up commit."
+def test_recipe_has_phase8_wave_b_wrappers(qwen3_vl_recipe):
+    """Phase 8 Wave B contract: 4 TTNN wrappers declared, with the design-time manifest."""
+    assert set(qwen3_vl_recipe.tt_implemented) >= {
+        "Qwen3VLVisionMLP",
+        "Qwen3VLVisionPatchMerger",
+        "Qwen3VLTextRMSNorm",
+        "Qwen3VLTextMLP",
+    }
+    assert len(qwen3_vl_recipe.cpu_fallback) >= 9, (
+        "cpu_fallback should still enumerate the vision tower (5), "
+        "text decoder (4) deferred to later waves"
     )
-    assert qwen3_vl_recipe.tt_implemented == []
-    assert len(qwen3_vl_recipe.cpu_fallback) >= 16, (
-        "cpu_fallback should enumerate the vision tower (7), the text "
-        "decoder (6), and top-level composites (3) exercised by the "
-        "image-text-to-text demo — 16 total minimum"
+    assert len(qwen3_vl_recipe.host_glue) >= 3, (
+        "host_glue should cover the top-level composites (PreTrainedModel, "
+        "Qwen3VLModel, Qwen3VLForConditionalGeneration)"
     )
 
 
@@ -62,28 +66,45 @@ def test_recipe_make_kv_cache_is_noop(qwen3_vl_recipe):
 
 
 def test_compatibility_report_shape_for_qwen3_vl():
-    """End-to-end: ``compatibility.report`` returns the JSON-friendly Phase 7 shape."""
-    from tt_symbiote.utils.compatibility import report, reset_runtime_observations
+    """End-to-end: ``compatibility.report`` returns the Phase 8.5 runtime shape."""
+    from tt_symbiote.utils.compatibility import (
+        report,
+        reset_runtime_observations,
+        reset_swapped_registry,
+    )
 
     class Qwen3VLForConditionalGeneration:  # noqa: N801 — match HF class name
         pass
 
     reset_runtime_observations()
+    reset_swapped_registry()
     out = report(Qwen3VLForConditionalGeneration())
 
-    for top_key in ("model_class", "design_time", "runtime_observed", "summary"):
+    for top_key in (
+        "model_class",
+        "ttnn_swap_skipped",
+        "ttnn_swap_skipped_reason",
+        "modules_swapped",
+        "runtime_observed",
+        "regressions",
+        "summary",
+    ):
         assert top_key in out, f"report missing top-level key {top_key!r}"
+    assert "design_time" not in out, (
+        "Phase 8.5 dropped the design_time block from the runtime artefact"
+    )
 
-    for design_key in ("tt_implemented", "cpu_fallback", "out_of_scope"):
-        assert design_key in out["design_time"], (
-            f"report['design_time'] missing {design_key!r}"
+    for swapped_key in ("by_class", "by_module"):
+        assert swapped_key in out["modules_swapped"], (
+            f"report['modules_swapped'] missing {swapped_key!r}"
         )
 
-    for runtime_key in ("by_class", "by_module", "unexpected"):
+    for runtime_key in ("successes_by_class", "fallbacks_by_class", "fallbacks_by_module"):
         assert runtime_key in out["runtime_observed"], (
             f"report['runtime_observed'] missing {runtime_key!r}"
         )
 
-    assert out["summary"]["runtime_fallback_count"] == 0, (
+    assert out["summary"]["runtime_fallbacks"] == 0, (
         "no forward was run; runtime ledger should be empty"
     )
+    assert out["regressions"] == []

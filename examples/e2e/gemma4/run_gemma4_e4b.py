@@ -105,8 +105,8 @@ report = compatibility.report(model)
 print("\n=== tt_symbiote.compatibility.report(model) ===")
 print(json.dumps(report, indent=2))
 
-# Persist the report next to the script so the aggregated docs page
-# always has a deterministic, checked-in artefact to read from.
+# Persist the report next to the script. Phase 8.5: the JSON is a pure
+# runtime observation artefact (gitignored, regenerated every run).
 coverage_path = Path(__file__).with_name(f"{Path(__file__).stem}_coverage.json")
 coverage_path.write_text(json.dumps(report, indent=2) + "\n")
 print(f"Wrote coverage report to {coverage_path}")

@@ -8,15 +8,17 @@
 #   - models/experimental/tt_symbiote/models/bailing_moe_v2.py
 #   - models/experimental/tt_symbiote/modules/decoder_layer.py
 
-from typing import Optional, List
+from typing import List, Optional
+
 import torch
-from torch import nn
 import ttnn
+from torch import nn
 from transformers.modeling_attn_mask_utils import (
     _prepare_4d_causal_attention_mask,
     _prepare_4d_causal_attention_mask_for_sdpa,
 )
 from transformers.modeling_outputs import MoeModelOutputWithPast
+
 from tt_symbiote.auto.auto_mappings import register_recipe
 from tt_symbiote.core.module import TTNNModule
 from tt_symbiote.core.run_config import trace_enabled
@@ -25,10 +27,7 @@ from tt_symbiote.integrations.ttnn_attention import (
     TTNNBailingMoEAttention,
     TTNNPagedAttentionKVCache,
 )
-from tt_symbiote.integrations.ttnn_embedding import (
-    TTNNBailingPaddedEmbedding,
-    TTNNBailingRotaryEmbedding,
-)
+from tt_symbiote.integrations.ttnn_embedding import TTNNBailingPaddedEmbedding, TTNNBailingRotaryEmbedding
 from tt_symbiote.integrations.ttnn_linear import TTNNLinearIColShardedWRowSharded
 from tt_symbiote.integrations.ttnn_moe import TTNNBailingMoE
 from tt_symbiote.integrations.ttnn_normalization import TTNNDistributedRMSNorm
@@ -36,9 +35,6 @@ from tt_symbiote.utils.module_replacement import register_modules
 
 # === content from models/experimental/tt_symbiote/models/bailing_moe_v2.py ===
 """TTNN BailingMoeV2 Model implementation."""
-
-
-
 
 
 class MoeV2ModelOutputWithPast(MoeModelOutputWithPast):
@@ -335,15 +331,13 @@ class TTNNBailingMoeV2Model(TTNNModule):
             router_logits=all_router_logits,
         )
 
+
 # === content from models/experimental/tt_symbiote/modules/decoder_layer.py ===
 """TTNN Decoder Layer for BailingMoeV2 (Ling-mini-2.0).
 
 Replaces BailingMoeV2DecoderLayer to perform residual adds on-device using ttnn.add,
 eliminating host round-trips that force device synchronization.
 """
-
-
-
 
 
 @trace_enabled
@@ -607,8 +601,91 @@ class TTNNBailingMoEDecoderLayerPadded(TTNNModule):
 #   * ``make_kv_cache`` allocates the paged-attention KV cache; it is
 #     invoked by ``set_device`` once a device is bound and the result is
 #     attached as ``model._tt_kv_cache`` (resolves PROJECT_PROPOSAL.md Q9).
+#
+# Design-time coverage manifests (backfilled post-Phase 8 to keep
+# ``tt_symbiote.compatibility.report`` informative for the reference
+# port). Names match the HF upstream module file
+# (``transformers_modules/inclusionAI/Ling.../modeling_bailing_moe_v2.py``)
+# so the runtime hook in :mod:`tt_symbiote.core.run_config` can
+# cross-reference observed classes against the recipe's declared intent.
+#
+# Membership rules (mirrors the Gemma-4 / Qwen3-VL recipes):
+#   * ``tt_implemented``: this commit ships a TTNN wrapper that runs on
+#     device. For Ling-mini-2.0 every compute-bearing class is wrapped
+#     — either by the outer ``build_module_dict`` or recursively by
+#     ``TTNNBailingMoeV2Model.from_torch`` /
+#     ``TTNNBailingMoEDecoderLayer.from_torch``.
+#   * ``cpu_fallback``: HF class is exercised by the demo but stays on
+#     PyTorch. Ling-mini-2.0 is a *full* TTNN port — this list is
+#     intentionally empty.
+#   * ``host_glue``: HF class is intentionally host-only by policy
+#     (orchestration / ``GenerationMixin`` shim / pure container with
+#     no FLOPs). Glue has no compute to accelerate.
+#   * ``out_of_scope``: HF class exists in the model file but is *not
+#     touched* by the verified ``examples/e2e/run_ling_mini_2_0.py`` run
+#     (alternate attention implementations, MTP head when
+#     ``num_nextn_predict_layers == 0``, output dataclasses).
+
+
+_TT_IMPLEMENTED: list[str] = [
+    "BailingMoeV2RMSNorm",  # -> TTNNDistributedRMSNorm
+    "BailingMoeV2RotaryEmbedding",  # -> TTNNBailingRotaryEmbedding
+    "BailingMoeV2MLP",  # -> TTNNBailingMoeV2MLP (dense layer 0)
+    "BailingMoeV2Gate",  # gate weight folded into TTNNBailingMoE
+    "BailingMoeV2SparseMoeBlock",  # -> TTNNBailingMoE (layers 1..N-1)
+    "BailingMoeV2SdpaAttention",  # -> TTNNBailingMoEAttention (SDPA is the demo default)
+    "BailingMoeV2DecoderLayer",  # -> TTNNBailingMoEDecoderLayerPadded
+    "BailingMoeV2Model",  # -> TTNNBailingMoeV2Model
+]
+
+
+# Ling-mini-2.0 is a full TTNN port. Every HF class on the demo path is
+# either accelerated (``tt_implemented``) or pure orchestration with no
+# FLOPs (``host_glue``). A clean run should leave
+# ``compatibility.report(model)["regressions"]`` empty — any class
+# showing up there is a real regression signal.
+_CPU_FALLBACK: list[str] = []
+
+
+_HOST_GLUE: list[str] = [
+    # Abstract HF base class; provides config / generation mixins only.
+    "BailingMoeV2PreTrainedModel",
+    # Top-level causal-LM head. ``forward`` delegates to the swapped
+    # ``BailingMoeV2Model`` and applies the (also-swapped) ``nn.Linear``
+    # ``lm_head``; the rest is ``GenerationMixin`` orchestration.
+    "BailingMoeV2ForCausalLM",
+]
+
+
+_OUT_OF_SCOPE: list[str] = [
+    # ----- Output dataclasses (not torch modules) -----
+    "MoEV2CausalLMOutputWithPast",
+    "MoeV2ModelOutputWithPast",
+    # ----- Alternate attention implementations not selected by
+    # ----- the verified demo (which falls through to SDPA). The
+    # ----- swap inside ``TTNNBailingMoEDecoderLayer.from_torch`` is
+    # ----- attribute-based, so users who explicitly opt into
+    # ----- ``attn_implementation="eager"`` or ``"flash_attention_2"``
+    # ----- would still get the same TTNN wrapper; the demo path
+    # ----- itself never instantiates these classes.
+    "BailingMoeV2Attention",  # eager / manual SDPA
+    "BailingMoeV2FlashAttention2",  # flash-attn-2 backend
+    # ----- Multi-Token Prediction head — only constructed when
+    # ----- ``config.num_nextn_predict_layers > 0``. Ling-mini-2.0
+    # ----- ships with ``num_nextn_predict_layers=0`` so MTP layers
+    # ----- are never built and the model.layers list contains only
+    # ----- ``BailingMoeV2DecoderLayer`` instances.
+    "BailingMoeV2MTPLayer",
+]
+
+
 @register_recipe(hf_class_name="BailingMoeV2ForCausalLM")
 class BailingMoEV2Recipe:
+    tt_implemented: list[str] = _TT_IMPLEMENTED
+    cpu_fallback: list[str] = _CPU_FALLBACK
+    host_glue: list[str] = _HOST_GLUE
+    out_of_scope: list[str] = _OUT_OF_SCOPE
+
     def build_module_dict(self, model):
         return {
             type(model.model): TTNNBailingMoeV2Model,
@@ -631,4 +708,3 @@ class BailingMoEV2Recipe:
             config=config,
             device=None,
         ).to_device(device)
-

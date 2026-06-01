@@ -54,8 +54,10 @@ plus `ttnn_swap_skipped_reason` / `ttnn_replicated_footprint_bytes`,
 and returns `{}` so every module stays as the HF reference module.
 The model still runs end-to-end through the TTNN mesh device handle
 (opened to satisfy the `set_device` contract) and produces a
-semantically correct answer; `runtime_observed.unexpected` stays
-`[]`.
+semantically correct answer. The runtime JSON for the gated variants
+reflects the gate cleanly: `ttnn_swap_skipped == true`,
+`modules_swapped == {by_class: {}, by_module: {}}`, `regressions ==
+[]`.
 
 Lifting the gate is the natural milestone for Wave A+1 (MoE wrappers)
 and Wave A+2 (tensor-parallel sharding). Each can be flipped on
@@ -81,10 +83,14 @@ Every script in this folder is the same 100-line template:
    `"What is this animal in the photo?"`
 6. `model.generate(**inputs, max_new_tokens=64, do_sample=False, use_cache=True)`
 7. `compatibility.report(model)` → printed and written to
-   `<script>_coverage.json` next to the script.
+   `<script>_coverage.json` next to the script. Phase 8.5 made this
+   JSON a runtime-only artefact: gitignored, regenerated each run,
+   read locally to confirm `regressions == []` and the expected
+   `modules_swapped` / `runtime_observed.successes_by_class`
+   populations.
 8. Permissive dog-equivalents semantic assertion.
 
-The per-script `_coverage.json` artefacts aggregate into
+The aggregated textual summary across all variants lives in
 [`docs/cpu_vs_device_coverage.md`](../../../docs/cpu_vs_device_coverage.md).
 
 ## Reproducing a clean run

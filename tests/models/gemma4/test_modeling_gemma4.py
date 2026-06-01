@@ -43,16 +43,18 @@ def gemma4_recipe():
     return TT_MODEL_REGISTRY["Gemma4ForConditionalGeneration"]
 
 
-def test_recipe_is_cpu_first_phase(gemma4_recipe):
-    """Phase 7 ships a CPU-first port: empty build_module_dict, populated coverage lists."""
-    assert gemma4_recipe.build_module_dict(None) == {}, (
-        "Phase 7 contract: no TTNN swaps until vision/text wrappers land "
-        "in a follow-up commit."
-    )
-    assert gemma4_recipe.tt_implemented == []
-    assert len(gemma4_recipe.cpu_fallback) >= 19, (
-        "cpu_fallback should enumerate the text + vision + multimodal "
-        "modules exercised by the image-text-to-text demo"
+def test_recipe_has_phase8_wave_a_wrappers(gemma4_recipe):
+    """Phase 8 contract: 5 TTNN wrappers declared, plus the design-time manifest."""
+    assert set(gemma4_recipe.tt_implemented) >= {
+        "Gemma4RMSNorm",
+        "Gemma4TextScaledWordEmbedding",
+        "Gemma4TextMLP",
+        "Gemma4VisionMLP",
+        "Gemma4MultimodalEmbedder",
+    }
+    assert len(gemma4_recipe.cpu_fallback) >= 14, (
+        "cpu_fallback should still enumerate the text + vision attention "
+        "stacks (deferred) exercised by the image-text-to-text demo"
     )
 
 
@@ -62,39 +64,57 @@ def test_recipe_make_kv_cache_is_noop(gemma4_recipe):
 
 
 def test_top_level_compatibility_module_exposed():
-    """``import tt_symbiote`` should expose the new ``compatibility`` submodule."""
+    """``import tt_symbiote`` should expose the ``compatibility`` submodule."""
     import tt_symbiote
 
     assert hasattr(tt_symbiote, "compatibility"), (
-        "Phase 7 added tt_symbiote.compatibility as the top-level op-coverage report"
+        "tt_symbiote.compatibility is the top-level op-coverage report surface"
     )
     assert callable(tt_symbiote.compatibility.report)
     assert callable(tt_symbiote.compatibility.reset_runtime_observations)
+    assert callable(tt_symbiote.compatibility.reset_swapped_registry)
 
 
 def test_compatibility_report_shape_for_gemma4():
-    """End-to-end: ``compatibility.report`` returns the JSON-friendly Phase 7 shape."""
-    from tt_symbiote.utils.compatibility import report, reset_runtime_observations
+    """End-to-end: ``compatibility.report`` returns the Phase 8.5 runtime shape."""
+    from tt_symbiote.utils.compatibility import (
+        report,
+        reset_runtime_observations,
+        reset_swapped_registry,
+    )
 
     class Gemma4ForConditionalGeneration:  # noqa: N801 — match HF class name
         pass
 
     reset_runtime_observations()
+    reset_swapped_registry()
     out = report(Gemma4ForConditionalGeneration())
 
-    for top_key in ("model_class", "design_time", "runtime_observed", "summary"):
+    for top_key in (
+        "model_class",
+        "ttnn_swap_skipped",
+        "ttnn_swap_skipped_reason",
+        "modules_swapped",
+        "runtime_observed",
+        "regressions",
+        "summary",
+    ):
         assert top_key in out, f"report missing top-level key {top_key!r}"
+    assert "design_time" not in out, (
+        "Phase 8.5 dropped the design_time block from the runtime artefact"
+    )
 
-    for design_key in ("tt_implemented", "cpu_fallback", "out_of_scope"):
-        assert design_key in out["design_time"], (
-            f"report['design_time'] missing {design_key!r}"
+    for swapped_key in ("by_class", "by_module"):
+        assert swapped_key in out["modules_swapped"], (
+            f"report['modules_swapped'] missing {swapped_key!r}"
         )
 
-    for runtime_key in ("by_class", "by_module", "unexpected"):
+    for runtime_key in ("successes_by_class", "fallbacks_by_class", "fallbacks_by_module"):
         assert runtime_key in out["runtime_observed"], (
             f"report['runtime_observed'] missing {runtime_key!r}"
         )
 
-    assert out["summary"]["runtime_fallback_count"] == 0, (
+    assert out["summary"]["runtime_fallbacks"] == 0, (
         "no forward was run; runtime ledger should be empty"
     )
+    assert out["regressions"] == []

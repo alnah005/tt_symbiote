@@ -34,9 +34,8 @@ returns NHWC.
 from __future__ import annotations
 
 import torch
-from torch import nn
-
 import ttnn
+from torch import nn
 from transformers.models.resnet.modeling_resnet import (
     ResNetBasicLayer,
     ResNetBottleNeckLayer,
@@ -49,15 +48,10 @@ from tt_symbiote.auto.auto_mappings import register_recipe
 from tt_symbiote.core.module import TTNNModule
 from tt_symbiote.core.run_config import trace_enabled
 from tt_symbiote.integrations.ttnn_activation import TTNNReLU
-from tt_symbiote.integrations.ttnn_conv import (
-    TTNNConv2dBNActivationNHWC,
-    TTNNConv2dBNNHWC,
-    TTNNMaxPool2dNHWC,
-)
+from tt_symbiote.integrations.ttnn_conv import TTNNConv2dBNActivationNHWC, TTNNConv2dBNNHWC, TTNNMaxPool2dNHWC
 from tt_symbiote.integrations.ttnn_linear import TTNNLinear  # noqa: F401 — re-exported via recipe
 from tt_symbiote.integrations.ttnn_tensor import TTNNPermute
 from tt_symbiote.models.resnet.configuration_resnet import lookup_ttnn_tuning
-
 
 __all__ = [
     "ResNetRecipe",
@@ -81,6 +75,7 @@ __all__ = [
 # below exists only to translate HF's nested attribute shape
 # (``layer.convolution``, ``layer.normalization``, ``layer.activation``)
 # into the constructor arguments that the existing TTNN class expects.
+
 
 class TTNNResNetConvLayer(TTNNModule):
     """Adapter: HF ``ResNetConvLayer`` -> on-device fused conv+BN+activation.
@@ -111,9 +106,7 @@ class TTNNResNetConvLayer(TTNNModule):
         # binds their device. The same convention applies to every child
         # ``TTNNModule`` reference below in this file.
         if is_relu:
-            new.inner = TTNNConv2dBNActivationNHWC.from_torch(
-                layer.convolution, layer.normalization, nn.ReLU()
-            )
+            new.inner = TTNNConv2dBNActivationNHWC.from_torch(layer.convolution, layer.normalization, nn.ReLU())
         elif is_identity:
             new.inner = TTNNConv2dBNNHWC.from_torch(layer.convolution, layer.normalization)
         else:
@@ -174,6 +167,7 @@ class TTNNResNetShortCut(TTNNModule):
 # (conv+BN+ReLU) are generic. Block boundaries are also where on-device
 # residual adds happen — the same Phase 5 optimization that avoided
 # host round-trips in the LLM decoder layer.
+
 
 @trace_enabled
 class TTNNResNetBasicLayer(TTNNModule):
@@ -301,6 +295,7 @@ class TTNNResNetBottleNeckLayer(TTNNModule):
 # stem is also where we do the NCHW->NHWC permute so the rest of the
 # network can stay NHWC.
 
+
 class TTNNResNetEmbeddings(TTNNModule):
     """HF ``ResNetEmbeddings`` -> NCHW->NHWC permute, then conv+BN+relu, then maxpool."""
 
@@ -347,6 +342,7 @@ class TTNNResNetEmbeddings(TTNNModule):
 # downstream classifier head (``nn.Flatten() -> nn.Linear``) sees the
 # expected layout.
 
+
 class TTNNResNetAdaptiveAvgPool2dNHWC(TTNNModule):
     """NHWC-aware replacement for HF ``ResNetModel.pooler``.
 
@@ -369,8 +365,7 @@ class TTNNResNetAdaptiveAvgPool2dNHWC(TTNNModule):
             output_size = (output_size, output_size)
         if tuple(output_size) != (1, 1):
             raise NotImplementedError(
-                f"TTNNResNetAdaptiveAvgPool2dNHWC only supports output_size=(1, 1); "
-                f"got {output_size}."
+                f"TTNNResNetAdaptiveAvgPool2dNHWC only supports output_size=(1, 1); " f"got {output_size}."
             )
         new = cls()
         new._fallback_torch_layer = pool
@@ -387,6 +382,84 @@ class TTNNResNetAdaptiveAvgPool2dNHWC(TTNNModule):
 
 
 # ---------------------------------------------------------------------------
+# Design-time coverage manifests
+# ---------------------------------------------------------------------------
+#
+# Backfilled post-Phase 8 so ``tt_symbiote.compatibility.report`` produces
+# a populated design-time view of the ResNet port. The convention mirrors
+# the Gemma-4 / Qwen3-VL recipes: list HF class names from the upstream
+# ``transformers/models/resnet/modeling_resnet.py`` file so the runtime
+# hook in :mod:`tt_symbiote.core.run_config` can cross-reference observed
+# instances against the recipe's declared intent.
+#
+# ResNet (every Microsoft variant) is a *full* TTNN port: every
+# compute-bearing HF class is wrapped, and the only host modules left
+# are pure container / orchestration code with no FLOPs of their own.
+# That makes the ``cpu_fallback`` list intentionally empty — a clean
+# run leaves ``compatibility.report(model)["regressions"]`` empty.
+#
+# Membership rules:
+#   * ``tt_implemented``: HF class swapped to a TTNN wrapper by
+#     ``build_module_dict`` below.
+#   * ``cpu_fallback``: exercised on the demo path but kept on PyTorch.
+#     Empty for ResNet — see above.
+#   * ``host_glue``: intentionally host-only by policy (pure container
+#     modules and the abstract HF base class — no FLOPs to accelerate).
+#   * ``out_of_scope``: present in the upstream model file but never
+#     instantiated by the verified ``run_resnet*.py`` scripts (alternate
+#     ``ResNetBackbone`` head and HF output dataclasses).
+
+
+_TT_IMPLEMENTED: list[str] = [
+    "ResNetConvLayer",  # -> TTNNResNetConvLayer (fused Conv2d+BN+ReLU NHWC)
+    "ResNetShortCut",  # -> TTNNResNetShortCut (1x1 Conv2d+BN NHWC)
+    "ResNetBasicLayer",  # -> TTNNResNetBasicLayer (2-conv block, resnet-18/34)
+    "ResNetBottleNeckLayer",  # -> TTNNResNetBottleNeckLayer (3-conv block, resnet-50/101/152)
+    "ResNetEmbeddings",  # -> TTNNResNetEmbeddings (stem: NCHW->NHWC permute + conv + maxpool)
+]
+
+
+# ResNet is a full TTNN port — no class is intentionally left on CPU.
+# nn.AdaptiveAvgPool2d (HF's pooler) and nn.Linear (HF's classifier head)
+# are also swapped via ``build_module_dict`` below; they are torch
+# primitives rather than HF-specific classes and so don't appear in this
+# list, matching the Gemma-4 / Qwen3-VL convention.
+_CPU_FALLBACK: list[str] = []
+
+
+_HOST_GLUE: list[str] = [
+    # Abstract base class providing the HF PreTrainedModel mixins.
+    "ResNetPreTrainedModel",
+    # Pure container modules — both just iterate their children. No
+    # compute beyond a Python ``for`` loop.
+    "ResNetStage",
+    "ResNetEncoder",
+    # Backbone wrapper: runs the (swapped) stem, then the (host_glue)
+    # encoder, then the (swapped) NHWC adaptive avg pool. Contributes
+    # only an output-dataclass packaging step.
+    "ResNetModel",
+    # Top-level classification head: delegates to ``ResNetModel``, then
+    # the (swapped) ``nn.Flatten() + nn.Linear`` classifier, plus an
+    # optional cross-entropy loss when ``labels`` is provided.
+    "ResNetForImageClassification",
+]
+
+
+_OUT_OF_SCOPE: list[str] = [
+    # ----- Output dataclasses (not torch modules) -----
+    "BaseModelOutputWithNoAttention",
+    "BaseModelOutputWithPoolingAndNoAttention",
+    "ImageClassifierOutputWithNoAttention",
+    # ----- Alternate top-level head (feature-extraction / detection
+    # ----- frontend). Not exercised by the verified
+    # ----- ``examples/e2e/resnet/run_resnet*.py`` scripts. ResNetBackbone
+    # ----- reuses the same swapped children, so wiring it up later is
+    # ----- additive — no recipe changes required.
+    "ResNetBackbone",
+]
+
+
+# ---------------------------------------------------------------------------
 # Recipe (Phase 5 / Option 1)
 # ---------------------------------------------------------------------------
 #
@@ -397,7 +470,7 @@ class TTNNResNetAdaptiveAvgPool2dNHWC(TTNNModule):
 #     dict that the auto factory hands to ``register_modules`` in a
 #     single pass.
 #   * Each TTNN wrapper class is responsible for converting its own
-#     subtree in ``from_torch``. The recipe describes the six top-level
+#     subtree in ``from_torch``. The recipe describes the seven top-level
 #     class swaps — the encoder, the stages, and the model wrapper stay
 #     as HF code (they are pure containers and reuse the swapped
 #     children without modification).
@@ -409,19 +482,25 @@ class TTNNResNetAdaptiveAvgPool2dNHWC(TTNNModule):
 #   * ``make_kv_cache`` is N/A for vision — the no-op installed by
 #     ``@register_recipe`` is the right answer.
 
+
 @register_recipe(hf_class_name="ResNetForImageClassification")
 class ResNetRecipe:
     """TTNN recipe for HuggingFace ResNet image-classification models."""
 
+    tt_implemented: list[str] = _TT_IMPLEMENTED
+    cpu_fallback: list[str] = _CPU_FALLBACK
+    host_glue: list[str] = _HOST_GLUE
+    out_of_scope: list[str] = _OUT_OF_SCOPE
+
     def build_module_dict(self, model):
         return {
-            ResNetConvLayer:       TTNNResNetConvLayer,
-            ResNetShortCut:        TTNNResNetShortCut,
-            ResNetBasicLayer:      TTNNResNetBasicLayer,
+            ResNetConvLayer: TTNNResNetConvLayer,
+            ResNetShortCut: TTNNResNetShortCut,
+            ResNetBasicLayer: TTNNResNetBasicLayer,
             ResNetBottleNeckLayer: TTNNResNetBottleNeckLayer,
-            ResNetEmbeddings:      TTNNResNetEmbeddings,
-            nn.AdaptiveAvgPool2d:  TTNNResNetAdaptiveAvgPool2dNHWC,
-            nn.Linear:             TTNNLinear,
+            ResNetEmbeddings: TTNNResNetEmbeddings,
+            nn.AdaptiveAvgPool2d: TTNNResNetAdaptiveAvgPool2dNHWC,
+            nn.Linear: TTNNLinear,
         }
 
     def post_register(self, model):

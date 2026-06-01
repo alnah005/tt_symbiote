@@ -78,10 +78,11 @@ out = model.generate(
 )
 print(tokenizer.decode(out[0][inputs["input_ids"].shape[-1]:]))
 
-# Persist compatibility.report next to the script so the aggregated
-# docs/cpu_vs_device_coverage.md page has a deterministic artefact.
-# Ling-mini-2.0 is a full TTNN port — the runtime_observed ledger
-# should stay empty (no fallbacks fired).
+# Persist compatibility.report next to the script. Phase 8.5: the
+# JSON is a pure runtime observation artefact (gitignored, regenerated
+# every run). Ling-mini-2.0 is a full TTNN port — `regressions` should
+# stay `[]` and `modules_swapped.by_class` should match the 8 entries
+# the recipe ships in `tt_implemented`.
 report = compatibility.report(model)
 print("\n=== tt_symbiote.compatibility.report(model) ===")
 print(json.dumps(report, indent=2))

@@ -74,6 +74,8 @@ mechanical migration is still parked in
 
 from __future__ import annotations
 
+import warnings
+
 import torch
 
 from tt_symbiote.auto.auto_mappings import register_recipe
@@ -83,12 +85,127 @@ from tt_symbiote.models.gemma4.modeling_gemma4_text import (
     TTNNGemma4ScaledWordEmbedding,
     TTNNGemma4TextMLP,
 )
-from tt_symbiote.models.gemma4.modeling_gemma4_vision import (
-    TTNNGemma4MultimodalEmbedder,
-    TTNNGemma4VisionMLP,
-)
+from tt_symbiote.models.gemma4.modeling_gemma4_vision import TTNNGemma4MultimodalEmbedder, TTNNGemma4VisionMLP
 
 __all__ = ["Gemma4Recipe"]
+
+
+# ---------------------------------------------------------------------------
+# Mesh-replicated weight budget (Wave A)
+# ---------------------------------------------------------------------------
+#
+# All Phase 8 Wave A wrappers (``TTNNLinear``, ``TTNNEmbedding``,
+# ``TTNNGemma4RMSNorm``) take the default ``ttnn.to_device(tensor, mesh)``
+# path which **replicates** the tensor across every chip of the mesh
+# (no ``mesh_mapper`` passed in). The footprint per chip is therefore
+# independent of mesh size: a 60-layer 5376/21504 MLP stack costs the
+# same ~38 GB on a single-chip N150 as it does on an 8-chip T3K.
+#
+# Wormhole (N150/N300/T3K building block) chips expose ~10.5 GB of
+# usable DRAM per chip after fabric reserve and the trace region. We
+# budget 9 GB for replicated weights, leaving the remaining ~1.5 GB for
+# activations, KV cache and intermediate tensors.
+#
+# Variants whose replicated footprint exceeds the budget are *not* swapped
+# by ``build_module_dict``: the demo runs entirely on PyTorch/CPU and the
+# compatibility report records 0 TTNN modules in ``runtime_observed``.
+# This is the deliberate sequencing point for the Wave B follow-up,
+# which is to plumb ``TTNNLinearIColShardedWRowSharded`` and friends
+# through the Gemma-4 recipe so 31B / 26B-A4B can shard MLP weights
+# along the intermediate dimension across the T3K mesh.
+
+_TTNN_PER_CHIP_BUDGET_BYTES: int = 9 * 1024**3
+
+
+def _ttnn_replicated_weight_footprint_bytes(model) -> int:
+    """Estimate per-chip replicated TTNN weight bytes for the Wave A wrappers.
+
+    Dominant terms (BF16, 2 bytes/elem):
+
+    1. Text embedding ``vocab x hidden``.
+    2. Optional Per-Layer-Embedding ``vocab x hidden_size_per_layer_input``
+       (E2B/E4B only; the dense 31B has ``ple_dim == 0``).
+    3. Three MLP linears per text layer: ``3 x hidden x intermediate``
+       times ``num_hidden_layers``.
+
+    RMSNorm scales, vision MLP linears and the multimodal embedder
+    projection together contribute <1% even on the smallest variant and
+    are folded into a 5% safety margin.
+
+    Returns 0 for any model that doesn't expose a ``text_config``
+    (e.g. callers that hand us a partially-loaded stub); the budget
+    check then defaults to "fits" and ``build_module_dict`` returns the
+    full TTNN swap dict.
+    """
+    config = getattr(model, "config", None)
+    text = getattr(config, "text_config", None) if config is not None else None
+    if text is None:
+        return 0
+
+    hidden = int(getattr(text, "hidden_size", 0) or 0)
+    intermediate = int(getattr(text, "intermediate_size", 0) or 0)
+    num_layers = int(getattr(text, "num_hidden_layers", 0) or 0)
+    vocab = int(getattr(text, "vocab_size", 0) or 0)
+    ple_dim = int(getattr(text, "hidden_size_per_layer_input", 0) or 0)
+
+    embed_bytes = vocab * (hidden + ple_dim) * 2
+    mlp_per_layer_bytes = 3 * hidden * intermediate * 2
+    return int(1.05 * (embed_bytes + num_layers * mlp_per_layer_bytes))
+
+
+def _ttnn_swap_is_safe(model) -> tuple[bool, str]:
+    """Return ``(is_safe, reason)`` for the Wave A swap on this model.
+
+    Two failure modes are gated here:
+
+    1. **Per-chip DRAM budget**. Wave A wrappers replicate weights
+       across the mesh; variants whose replicated footprint exceeds
+       :data:`_TTNN_PER_CHIP_BUDGET_BYTES` partially fill the device
+       and then OOM on the input/activation move. Empirically
+       calibrated against Wave A: E2B = 2.8 GB ✓, E4B = 7.8 GB ✓,
+       31B = 43 GB ✗ (oversubscribes per-chip DRAM by ~4x even on T3K).
+
+    2. **MoE structural mismatch**. The 26B-A4B variant interleaves a
+       dense ``Gemma4TextMLP`` (which Wave A wraps) with a
+       ``Gemma4TextRouter`` + ``Gemma4TextExperts`` block (which Wave A
+       leaves on CPU). The MoE branch carries extra
+       ``q_norm`` / ``k_norm`` / ``pre_feedforward_layernorm_2`` /
+       ``post_feedforward_layernorm_2`` siblings whose head-dim sizes
+       (32-352) don't match the TTNN RMSNorm tile geometry, and the
+       expert ``nn.Linear`` weights are shape-incompatible with the
+       wrapped dense MLP path. Wrapping these triggers hundreds of
+       per-token runtime fallbacks (validation failures inside
+       ``ttnn.rms_norm`` / ``ttnn.linear``) and an "unexpected"
+       ``Linear`` entry in the compatibility ledger.
+
+    Both failure modes have the same proper fix (tensor-parallel
+    sharding + a Gemma4TextExperts wrapper), so for now we route both
+    through the same "skip the swap, run pure-PyTorch on CPU" path.
+    """
+    footprint = _ttnn_replicated_weight_footprint_bytes(model)
+    if footprint > _TTNN_PER_CHIP_BUDGET_BYTES:
+        gb = footprint / 1024**3
+        return False, (
+            f"replicated weight footprint ~{gb:.1f} GB exceeds the "
+            f"{_TTNN_PER_CHIP_BUDGET_BYTES / 1024**3:.0f} GB per-chip "
+            f"budget (tensor-parallel sharding not yet wired in)"
+        )
+
+    text = getattr(getattr(model, "config", None), "text_config", None)
+    if text is not None and bool(getattr(text, "enable_moe_block", False)):
+        return False, (
+            "MoE variant: Gemma4TextExperts + bespoke head-dim norms "
+            "fall outside the Wave A wrapper coverage (Gemma4TextMLP "
+            "wraps only the dense branch); a partial swap produces "
+            "hundreds of shape-validation fallbacks at runtime"
+        )
+
+    return True, ""
+
+
+def _ttnn_swap_exceeds_chip_budget(model) -> bool:
+    """Compat alias used by :meth:`Gemma4Recipe.post_register`."""
+    return not _ttnn_swap_is_safe(model)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -128,24 +245,24 @@ _TT_IMPLEMENTED: list[str] = [
 _CPU_FALLBACK: list[str] = [
     # ----- Shared building blocks (text + vision share these) -----
     "Gemma4ClippableLinear",  # Inner nn.Linear is on-device when its
-                               # parent MLP gets swapped; otherwise this
-                               # is a thin host clamp wrapper.
+    # parent MLP gets swapped; otherwise this
+    # is a thin host clamp wrapper.
     # ----- Vision tower (Gemma4VisionModel) -----
     "Gemma4VisionPatchEmbedder",
     "Gemma4VisionRotaryEmbedding",  # 2-D RoPE precompute — deferred.
-    "Gemma4VisionAttention",        # Non-causal SDPA with 2-D RoPE — deferred.
+    "Gemma4VisionAttention",  # Non-causal SDPA with 2-D RoPE — deferred.
     "Gemma4VisionEncoderLayer",
     "Gemma4VisionEncoder",
     "Gemma4VisionPooler",
     "Gemma4VisionModel",
     # ----- Text decoder (Gemma4TextModel) -----
-    "Gemma4TextRotaryEmbedding",   # Dual rope tables per layer-type — deferred.
-    "Gemma4TextAttention",         # KV-sharing + dual RoPE + per-head norms — deferred.
+    "Gemma4TextRotaryEmbedding",  # Dual rope tables per layer-type — deferred.
+    "Gemma4TextAttention",  # KV-sharing + dual RoPE + per-head norms — deferred.
     # MoE pair only used by the 26B-A4B variant; harmless for dense models
     "Gemma4TextExperts",
     "Gemma4TextRouter",
-    "Gemma4TextDecoderLayer",      # PLE residual + 4-norm sandwich — deferred.
-    "Gemma4TextModel",             # PLE orchestration + dual mask — deferred.
+    "Gemma4TextDecoderLayer",  # PLE residual + 4-norm sandwich — deferred.
+    "Gemma4TextModel",  # PLE orchestration + dual mask — deferred.
 ]
 
 
@@ -208,10 +325,33 @@ class Gemma4Recipe:
     def build_module_dict(self, model):
         """Return the flat ``{torch_class: ttnn_class}`` replacement map.
 
+        For Wave A we gate the swap on the per-chip replicated weight
+        budget (see :func:`_ttnn_swap_exceeds_chip_budget`). Variants that
+        fit (``E2B``, ``E4B``) get the full 5-class swap dict; variants
+        that don't (``31B``, ``26B-A4B``) get an empty dict and a clear
+        ``UserWarning`` so the demo runs end-to-end on PyTorch/CPU
+        instead of OOMing mid-``set_device``. The compatibility report
+        for the skipped variants still carries the design-time intent
+        (``tt_implemented`` listing the 5 Wave A classes) while
+        ``runtime_observed`` is empty — the canonical signal that the
+        swap was budget-skipped and that tensor-parallel sharding is
+        the next-wave priority.
+
         Imports the HF source classes lazily so this module is cheap to
         import even when ``transformers`` isn't installed (matches the
         ResNet recipe convention).
         """
+        is_safe, reason = _ttnn_swap_is_safe(model)
+        if not is_safe:
+            warnings.warn(
+                f"Gemma4Recipe: skipping TTNN swap for "
+                f"{type(model).__name__} "
+                f"('{getattr(model.config, '_name_or_path', '<unknown>')}'): "
+                f"{reason}. Running on PyTorch/CPU.",
+                stacklevel=2,
+            )
+            return {}
+
         from transformers.models.gemma4.modeling_gemma4 import (
             Gemma4MultimodalEmbedder,
             Gemma4RMSNorm,
@@ -239,10 +379,23 @@ class Gemma4Recipe:
 
         ``_tt_runtime_config`` is consumed by the example scripts (mesh
         shape, ``l1_small_size``, etc.) and by downstream wrappers once
-        they land.
+        they land. We also attach two read-only diagnostic fields:
+
+        * ``ttnn_replicated_footprint_bytes``: estimate of the per-chip
+          replicated weight bytes that the Wave A wrappers *would*
+          allocate if all swaps applied. Useful when the e2e script
+          wants to render a "what would TTNN cost?" annotation next to
+          the compatibility report.
+        * ``ttnn_swap_skipped``: ``True`` iff ``build_module_dict``
+          returned ``{}`` because of the budget gate above. Lets the
+          demo and the docs distinguish a deliberate budget skip from
+          a forgotten recipe.
         """
         type(model).device = property(lambda self: torch.device("cpu"))
-        model._tt_runtime_config = lookup_ttnn_tuning(model)
+        runtime = lookup_ttnn_tuning(model)
+        runtime["ttnn_replicated_footprint_bytes"] = _ttnn_replicated_weight_footprint_bytes(model)
+        runtime["ttnn_swap_skipped"] = _ttnn_swap_exceeds_chip_budget(model)
+        model._tt_runtime_config = runtime
 
     # ``make_kv_cache`` is intentionally not implemented. The
     # ``register_recipe`` decorator installs a no-op default which

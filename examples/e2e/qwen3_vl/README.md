@@ -38,7 +38,10 @@ to the Gemma-4 demos except for the model id, mesh shape, and fabric
 config. See [`../gemma4/README.md`](../gemma4/README.md) "Shared
 shape" for the full sequence.
 
-The per-script `_coverage.json` artefacts aggregate into
+Each demo writes a `<script>_coverage.json` next to itself. Phase 8.5
+made these JSONs runtime-only artefacts: gitignored, regenerated on
+every run, read locally to confirm `regressions == []`. The
+aggregated textual summary across all variants lives in
 [`docs/cpu_vs_device_coverage.md`](../../../docs/cpu_vs_device_coverage.md).
 
 ## Note on semantic check
