@@ -1,9 +1,10 @@
 from typing import Dict, Optional
 
 import ttnn
-from tt_symbiote.integrations.ttnn_linear import TTNNLinear
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
+
 from tt_symbiote.core.module import deallocate_weights_after
+from tt_symbiote.integrations.ttnn_linear import TTNNLinear
 
 
 class SmartTTNNLinear(TTNNLinear):

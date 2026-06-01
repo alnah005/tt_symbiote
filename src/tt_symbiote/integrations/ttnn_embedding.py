@@ -4,14 +4,11 @@
 
 """Embedding layer implementations for TTNN."""
 
+import ttnn
 from torch import nn
 
-import ttnn
-from tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
-from tt_symbiote.core.run_config import (
-    DistributedTensorConfig,
-    trace_enabled,
-)
+from tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices
+from tt_symbiote.core.run_config import DistributedTensorConfig, trace_enabled
 from tt_symbiote.utils.math_utils import next_power_of_2 as _next_power_of_2
 
 

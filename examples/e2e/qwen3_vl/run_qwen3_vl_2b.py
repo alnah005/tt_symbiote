@@ -72,9 +72,7 @@ model = AutoModelForImageTextToText.from_pretrained(
 # for execution. Disable the graph viz — it would render a 28-layer
 # decoder + vision tower in one PNG, which is noisy for this run.
 set_device(model, mesh_device, dump_visualization=False)
-assert hasattr(model, "_tt_runtime_config"), (
-    "Qwen3VLRecipe.post_register should have attached _tt_runtime_config"
-)
+assert hasattr(model, "_tt_runtime_config"), "Qwen3VLRecipe.post_register should have attached _tt_runtime_config"
 
 model.eval()
 torch.set_grad_enabled(False)

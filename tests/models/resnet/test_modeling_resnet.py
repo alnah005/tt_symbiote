@@ -61,9 +61,9 @@ def test_resnet50(mesh_device):
         torch_dtype=torch.bfloat16,
     )
     set_device(model, mesh_device)
-    assert hasattr(model, "_tt_runtime_config"), (
-        "ResNetRecipe.post_register should have stashed model._tt_runtime_config"
-    )
+    assert hasattr(
+        model, "_tt_runtime_config"
+    ), "ResNetRecipe.post_register should have stashed model._tt_runtime_config"
 
     model.eval()
     torch.set_grad_enabled(False)
@@ -72,7 +72,8 @@ def test_resnet50(mesh_device):
     outputs = model(pixel_values=pixel_values)
 
     assert hasattr(outputs, "logits"), "ImageClassifierOutput should expose `.logits`"
-    assert outputs.logits.shape == (1, model.config.num_labels), (
-        f"Expected logits shape (1, {model.config.num_labels}); got {tuple(outputs.logits.shape)}"
-    )
+    assert outputs.logits.shape == (
+        1,
+        model.config.num_labels,
+    ), f"Expected logits shape (1, {model.config.num_labels}); got {tuple(outputs.logits.shape)}"
     assert torch.isfinite(outputs.logits).all(), "logits should be all-finite"

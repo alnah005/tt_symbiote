@@ -85,9 +85,7 @@ def test_top_level_auto_model_import(name):
     # Every Auto* class must subclass _BaseAutoModelClass.
     from tt_symbiote.auto.auto_factory import _BaseAutoModelClass
 
-    assert issubclass(cls, _BaseAutoModelClass), (
-        f"tt_symbiote.{name} must subclass _BaseAutoModelClass"
-    )
+    assert issubclass(cls, _BaseAutoModelClass), f"tt_symbiote.{name} must subclass _BaseAutoModelClass"
     assert cls._HF_AUTO_CLASS is not None, f"tt_symbiote.{name}._HF_AUTO_CLASS is unset"
 
 

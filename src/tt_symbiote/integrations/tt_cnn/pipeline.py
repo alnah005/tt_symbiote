@@ -9,9 +9,8 @@
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from loguru import logger
-
 import ttnn
+from loguru import logger
 
 from .executor import (
     Executor,

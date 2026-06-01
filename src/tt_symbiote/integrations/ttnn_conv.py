@@ -5,14 +5,14 @@
 """Linear layer implementations for TTNN."""
 
 import torch
+import ttnn
 from torch import nn
 
-import ttnn
-from tt_symbiote.integrations.tt_cnn.builder import Conv2dConfiguration, MaxPool2dConfiguration, TtConv2d, TtMaxPool2d
 from tt_symbiote.core.module import TTNNModule
+from tt_symbiote.core.run_config import trace_enabled
+from tt_symbiote.integrations.tt_cnn.builder import Conv2dConfiguration, MaxPool2dConfiguration, TtConv2d, TtMaxPool2d
 from tt_symbiote.integrations.ttnn_activation import TTNNReLU
 from tt_symbiote.integrations.ttnn_tensor import TTNNPermute, TTNNReshape
-from tt_symbiote.core.run_config import trace_enabled
 
 
 def fold_batch_norm2d_into_conv2d(weight, bias, scale, shift, running_mean, running_var, eps):

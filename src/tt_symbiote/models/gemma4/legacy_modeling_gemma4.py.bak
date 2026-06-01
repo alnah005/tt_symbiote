@@ -1740,4 +1740,3 @@ class TTNNGemma4TextMLP(TTNNModule):
         ttnn.deallocate(gate_up_mul)
 
         return output
-

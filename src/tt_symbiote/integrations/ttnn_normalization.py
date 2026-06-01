@@ -4,10 +4,11 @@
 
 """Normalization layer implementations for TTNN."""
 
-from torch import nn
 import torch
 import ttnn
-from tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
+from torch import nn
+
+from tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices
 from tt_symbiote.core.run_config import trace_enabled
 
 

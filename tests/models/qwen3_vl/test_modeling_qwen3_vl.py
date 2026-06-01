@@ -51,8 +51,7 @@ def test_recipe_has_phase8_wave_b_wrappers(qwen3_vl_recipe):
         "Qwen3VLTextMLP",
     }
     assert len(qwen3_vl_recipe.cpu_fallback) >= 9, (
-        "cpu_fallback should still enumerate the vision tower (5), "
-        "text decoder (4) deferred to later waves"
+        "cpu_fallback should still enumerate the vision tower (5), " "text decoder (4) deferred to later waves"
     )
     assert len(qwen3_vl_recipe.host_glue) >= 3, (
         "host_glue should cover the top-level composites (PreTrainedModel, "
@@ -90,21 +89,13 @@ def test_compatibility_report_shape_for_qwen3_vl():
         "summary",
     ):
         assert top_key in out, f"report missing top-level key {top_key!r}"
-    assert "design_time" not in out, (
-        "Phase 8.5 dropped the design_time block from the runtime artefact"
-    )
+    assert "design_time" not in out, "Phase 8.5 dropped the design_time block from the runtime artefact"
 
     for swapped_key in ("by_class", "by_module"):
-        assert swapped_key in out["modules_swapped"], (
-            f"report['modules_swapped'] missing {swapped_key!r}"
-        )
+        assert swapped_key in out["modules_swapped"], f"report['modules_swapped'] missing {swapped_key!r}"
 
     for runtime_key in ("successes_by_class", "fallbacks_by_class", "fallbacks_by_module"):
-        assert runtime_key in out["runtime_observed"], (
-            f"report['runtime_observed'] missing {runtime_key!r}"
-        )
+        assert runtime_key in out["runtime_observed"], f"report['runtime_observed'] missing {runtime_key!r}"
 
-    assert out["summary"]["runtime_fallbacks"] == 0, (
-        "no forward was run; runtime ledger should be empty"
-    )
+    assert out["summary"]["runtime_fallbacks"] == 0, "no forward was run; runtime ledger should be empty"
     assert out["regressions"] == []

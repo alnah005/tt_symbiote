@@ -147,9 +147,7 @@ def test_set_device_swaps_unsupported_arch_module(reset_mesh_env):
 
     assert parent.tt_child is fallback, "module should be swapped to fallback when arch unsupported"
     messages = [str(w.message) for w in captured]
-    assert any("not supported" in m for m in messages), (
-        f"Expected 'not supported' warning; got {messages}"
-    )
+    assert any("not supported" in m for m in messages), f"Expected 'not supported' warning; got {messages}"
 
 
 def test_set_device_keeps_supported_arch_module(reset_mesh_env):
@@ -169,6 +167,4 @@ def test_module_call_before_set_device_raises_with_set_device_message():
     mod._fallback_torch_layer = nn.Identity()
     with pytest.raises(AssertionError) as info:
         mod(torch.zeros(1))
-    assert "set_device" in str(info.value), (
-        f"AssertionError must mention set_device; got: {info.value!r}"
-    )
+    assert "set_device" in str(info.value), f"AssertionError must mention set_device; got: {info.value!r}"

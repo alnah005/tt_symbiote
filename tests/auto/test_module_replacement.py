@@ -68,9 +68,7 @@ def test_deprecated_alias_emits_warning_and_delegates():
         replacements = register_module_replacement_dict(model, {nn.Linear: _TTNNLinear})
     # Warning was emitted and the swap still happened.
     assert any(
-        issubclass(w.category, DeprecationWarning)
-        and "register_modules" in str(w.message)
-        for w in captured
+        issubclass(w.category, DeprecationWarning) and "register_modules" in str(w.message) for w in captured
     ), f"Expected DeprecationWarning mentioning register_modules; got {[str(w.message) for w in captured]}"
     assert len(replacements) == 2
     assert isinstance(model[0], _TTNNLinear)

@@ -89,9 +89,7 @@ def register_recipe(hf_class_name: str) -> Callable[[type], type]:
     def decorator(cls):
         instance = cls()
         if not hasattr(instance, "build_module_dict"):
-            raise TypeError(
-                f"Recipe {cls.__name__} is missing required method build_module_dict(model)"
-            )
+            raise TypeError(f"Recipe {cls.__name__} is missing required method build_module_dict(model)")
         if not hasattr(instance, "post_register"):
             instance.post_register = lambda model: None  # noqa: E731
         if not hasattr(instance, "make_kv_cache"):

@@ -10,36 +10,28 @@
 
 import os
 from typing import Optional
+
 import torch
 import torch.nn.functional as F
 import ttnn
-from tt_symbiote.core.module import TTNNModule, tree_map
-from tt_symbiote.core.tensor import TorchTTNNTensor
+
+from tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices, tree_map
 from tt_symbiote.core.run_config import DistributedTensorConfig
-from tt_symbiote.integrations.ttnn_attention import (
-    TTNNPagedAttentionKVCache,
-    PagedAttentionConfig,
-    TTNNSDPAAttention,
-)
-from tt_symbiote.integrations.ttnn_linear import (
-    TTNNLinear,
-    TTNNLinearIReplicatedWColSharded,
-)
-from tt_symbiote.integrations.ttnn_rope import (
-    TTNNRotaryPositionEmbedding,
-)
-from tt_symbiote.core.module import run_on_devices, DeviceArch, tree_map
+from tt_symbiote.core.tensor import TorchTTNNTensor
+from tt_symbiote.integrations.ttnn_attention import PagedAttentionConfig, TTNNPagedAttentionKVCache, TTNNSDPAAttention
+from tt_symbiote.integrations.ttnn_linear import TTNNLinear, TTNNLinearIReplicatedWColSharded
 from tt_symbiote.integrations.ttnn_moe import (
-    TTNNMoERouterDecode,
-    TTNNExperts,
-    TTNNMoE,
-    TTNNGlm4MoeTopkRouter,
-    TTNNGlm4MoeMLP,
-    Glm4MoeRouteTokenToExperts,
-    even_int_div,
-    _make_sparse_matmul_program_config,
     SPARSITY_BLOCK_SIZE,
+    Glm4MoeRouteTokenToExperts,
+    TTNNExperts,
+    TTNNGlm4MoeMLP,
+    TTNNGlm4MoeTopkRouter,
+    TTNNMoE,
+    TTNNMoERouterDecode,
+    _make_sparse_matmul_program_config,
+    even_int_div,
 )
+from tt_symbiote.integrations.ttnn_rope import TTNNRotaryPositionEmbedding
 
 # === content from models/experimental/tt_symbiote/modules/qwen_attention.py ===
 """Qwen3.5-35B-A3B Attention implementations for TTNN.
@@ -49,9 +41,6 @@ This module provides TTNN-accelerated attention mechanisms specific to Qwen3.5-3
 - TTNNQwen3FullAttention: Full GQA attention with Q gating and Q/K normalization
 - TTNNQwen3LinearAttention: Linear attention (DeltaNet) with TTNN-accelerated projections
 """
-
-
-
 
 
 class CallableBool:
@@ -1786,6 +1775,7 @@ class TTNNQwen3LinearAttention(TTNNModule):
         # out_proj returns TorchTTNNTensor already, return it directly
         return output_ttnn
 
+
 # === content from models/experimental/tt_symbiote/modules/qwen_moe.py ===
 """Qwen3.5-35B-A3B specific MoE implementations for TTNN.
 
@@ -1799,8 +1789,6 @@ Environment Variables:
 - TT_QWEN_CPU_EXPERTS: Set to "1" to use CPU fallback for experts (for debugging).
   When enabled, TTNNQwenExperts is NOT created and the PyTorch experts are used instead.
 """
-
-
 
 
 class TTNNQwenMoERouterDecode(TTNNMoERouterDecode):
@@ -2695,4 +2683,3 @@ class TTNNQwen3MoE(TTNNMoE):
         output = ttnn.squeeze(output, 1)  # Remove experts dimension
 
         return output
-

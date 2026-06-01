@@ -72,9 +72,7 @@ model = AutoModelForImageTextToText.from_pretrained(
 # for execution. Disable the graph viz — it would render a 35-layer
 # decoder + vision tower in one PNG, which is noisy for this run.
 set_device(model, mesh_device, dump_visualization=False)
-assert hasattr(model, "_tt_runtime_config"), (
-    "Gemma4Recipe.post_register should have attached _tt_runtime_config"
-)
+assert hasattr(model, "_tt_runtime_config"), "Gemma4Recipe.post_register should have attached _tt_runtime_config"
 
 model.eval()
 torch.set_grad_enabled(False)
@@ -135,8 +133,16 @@ ttnn.close_mesh_device(mesh_device)
 # "Semantic check". Gemma-4 reliably says "dog" but the broader list
 # keeps the assertion shape identical across the VLM demos.
 _DOG_EQUIVALENTS = (
-    "dog", "puppy", "retriever", "labrador", "poodle",
-    "terrier", "spaniel", "shepherd", "husky", "bulldog",
+    "dog",
+    "puppy",
+    "retriever",
+    "labrador",
+    "poodle",
+    "terrier",
+    "spaniel",
+    "shepherd",
+    "husky",
+    "bulldog",
 )
 _lower = answer.lower()
 assert any(term in _lower for term in _DOG_EQUIVALENTS), (

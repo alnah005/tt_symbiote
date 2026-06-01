@@ -149,9 +149,7 @@ def merge(model_dir: str, sources: list[str]) -> None:
     # produced by the codemod rewriting sibling imports to the merge target;
     # after merging, the symbols are defined locally).
     self_module = f"tt_symbiote.models.{model_dir}.modeling_{model_dir}"
-    self_import_re = re.compile(
-        rf"^from\s+{re.escape(self_module)}\s+import\b|^import\s+{re.escape(self_module)}\b"
-    )
+    self_import_re = re.compile(rf"^from\s+{re.escape(self_module)}\s+import\b|^import\s+{re.escape(self_module)}\b")
 
     # Collect + dedupe imports across all sources, dropping self-imports.
     all_imports: list[str] = []
@@ -180,9 +178,11 @@ def merge(model_dir: str, sources: list[str]) -> None:
         pieces.append("\n")
 
     out_path.write_text("".join(pieces))
-    print(f"merged -> {out_path.relative_to(REPO)}  (from {len(sources)} sources, "
-          f"{len(dedupe_preserving_order(all_imports))} unique imports, "
-          f"{dropped_self} self-imports dropped)")
+    print(
+        f"merged -> {out_path.relative_to(REPO)}  (from {len(sources)} sources, "
+        f"{len(dedupe_preserving_order(all_imports))} unique imports, "
+        f"{dropped_self} self-imports dropped)"
+    )
 
 
 def main() -> int:

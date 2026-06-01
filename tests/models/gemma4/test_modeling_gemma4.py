@@ -67,9 +67,9 @@ def test_top_level_compatibility_module_exposed():
     """``import tt_symbiote`` should expose the ``compatibility`` submodule."""
     import tt_symbiote
 
-    assert hasattr(tt_symbiote, "compatibility"), (
-        "tt_symbiote.compatibility is the top-level op-coverage report surface"
-    )
+    assert hasattr(
+        tt_symbiote, "compatibility"
+    ), "tt_symbiote.compatibility is the top-level op-coverage report surface"
     assert callable(tt_symbiote.compatibility.report)
     assert callable(tt_symbiote.compatibility.reset_runtime_observations)
     assert callable(tt_symbiote.compatibility.reset_swapped_registry)
@@ -100,21 +100,13 @@ def test_compatibility_report_shape_for_gemma4():
         "summary",
     ):
         assert top_key in out, f"report missing top-level key {top_key!r}"
-    assert "design_time" not in out, (
-        "Phase 8.5 dropped the design_time block from the runtime artefact"
-    )
+    assert "design_time" not in out, "Phase 8.5 dropped the design_time block from the runtime artefact"
 
     for swapped_key in ("by_class", "by_module"):
-        assert swapped_key in out["modules_swapped"], (
-            f"report['modules_swapped'] missing {swapped_key!r}"
-        )
+        assert swapped_key in out["modules_swapped"], f"report['modules_swapped'] missing {swapped_key!r}"
 
     for runtime_key in ("successes_by_class", "fallbacks_by_class", "fallbacks_by_module"):
-        assert runtime_key in out["runtime_observed"], (
-            f"report['runtime_observed'] missing {runtime_key!r}"
-        )
+        assert runtime_key in out["runtime_observed"], f"report['runtime_observed'] missing {runtime_key!r}"
 
-    assert out["summary"]["runtime_fallbacks"] == 0, (
-        "no forward was run; runtime ledger should be empty"
-    )
+    assert out["summary"]["runtime_fallbacks"] == 0, "no forward was run; runtime ledger should be empty"
     assert out["regressions"] == []

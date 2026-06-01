@@ -38,9 +38,7 @@ class _BaseAutoModelClass:
     def from_pretrained(cls, pretrained_name_or_path: Any, *args: Any, **kwargs: Any) -> Any:
         """Load the HF model, apply the tt_symbiote recipe if one is registered."""
         if cls._HF_AUTO_CLASS is None:
-            raise NotImplementedError(
-                f"{cls.__name__} has no HF counterpart configured (set _HF_AUTO_CLASS)."
-            )
+            raise NotImplementedError(f"{cls.__name__} has no HF counterpart configured (set _HF_AUTO_CLASS).")
 
         # Install compat shims before HF's dynamic remote-code loader runs:
         # Hub modeling files authored against older transformers releases
@@ -72,5 +70,3 @@ class _BaseAutoModelClass:
 
 class _BaseAutoBackboneClass(_BaseAutoModelClass):
     """Backbone-style Autos share the model-class plumbing in v0.1."""
-
-    pass

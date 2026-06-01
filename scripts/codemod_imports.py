@@ -60,7 +60,10 @@ MODULE_REMAP: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\btt_symbiote\.modules\.conv\b"), "tt_symbiote.integrations.ttnn_conv"),
     (re.compile(r"\btt_symbiote\.modules\.tensor\b"), "tt_symbiote.integrations.ttnn_tensor"),
     # Model-specific modules → models/<model>/modeling_<model>.py
-    (re.compile(r"\btt_symbiote\.modules\.decoder_layer\b"), "tt_symbiote.models.bailing_moe_v2.modeling_bailing_moe_v2"),
+    (
+        re.compile(r"\btt_symbiote\.modules\.decoder_layer\b"),
+        "tt_symbiote.models.bailing_moe_v2.modeling_bailing_moe_v2",
+    ),
     (re.compile(r"\btt_symbiote\.modules\.gemma4_attention\b"), "tt_symbiote.models.gemma4.modeling_gemma4"),
     (re.compile(r"\btt_symbiote\.modules\.gemma4_mlp\b"), "tt_symbiote.models.gemma4.modeling_gemma4"),
     (re.compile(r"\btt_symbiote\.modules\.gemma4_modules\b"), "tt_symbiote.models.gemma4.modeling_gemma4"),
@@ -69,8 +72,10 @@ MODULE_REMAP: list[tuple[re.Pattern, str]] = [
     # Top-level model files → per-model subpackage.
     # Negative lookahead avoids double-substitution: if `models.bailing_moe_v2`
     # is already followed by `.modeling_bailing_moe_v2`, skip it.
-    (re.compile(r"\btt_symbiote\.models\.bailing_moe_v2\b(?!\.modeling_)"),
-     "tt_symbiote.models.bailing_moe_v2.modeling_bailing_moe_v2"),
+    (
+        re.compile(r"\btt_symbiote\.models\.bailing_moe_v2\b(?!\.modeling_)"),
+        "tt_symbiote.models.bailing_moe_v2.modeling_bailing_moe_v2",
+    ),
     (re.compile(r"\btt_symbiote\.models\.gemma4_text\b"), "tt_symbiote.models.gemma4.modeling_gemma4"),
 ]
 

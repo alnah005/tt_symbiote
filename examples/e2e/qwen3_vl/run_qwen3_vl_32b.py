@@ -65,12 +65,11 @@ model = AutoModelForImageTextToText.from_pretrained(
 )
 
 set_device(model, mesh_device, dump_visualization=False)
-assert hasattr(model, "_tt_runtime_config"), (
-    "Qwen3VLRecipe.post_register should have attached _tt_runtime_config"
-)
-assert model._tt_runtime_config["mesh_shape"] == (1, 8), (
-    f"32B should target the full T3K mesh; got {model._tt_runtime_config['mesh_shape']}"
-)
+assert hasattr(model, "_tt_runtime_config"), "Qwen3VLRecipe.post_register should have attached _tt_runtime_config"
+assert model._tt_runtime_config["mesh_shape"] == (
+    1,
+    8,
+), f"32B should target the full T3K mesh; got {model._tt_runtime_config['mesh_shape']}"
 
 model.eval()
 torch.set_grad_enabled(False)
@@ -117,12 +116,19 @@ ttnn.close_mesh_device(mesh_device)
 ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 _DOG_EQUIVALENTS = (
-    "dog", "puppy", "retriever", "labrador", "poodle",
-    "terrier", "spaniel", "shepherd", "husky", "bulldog",
+    "dog",
+    "puppy",
+    "retriever",
+    "labrador",
+    "poodle",
+    "terrier",
+    "spaniel",
+    "shepherd",
+    "husky",
+    "bulldog",
 )
 _lower = answer.lower()
 assert any(term in _lower for term in _DOG_EQUIVALENTS), (
-    f"Expected the answer to mention a dog or a dog breed. "
-    f"Got: {answer!r}."
+    f"Expected the answer to mention a dog or a dog breed. " f"Got: {answer!r}."
 )
 print("\nOK: answer correctly identifies the animal as a dog.")

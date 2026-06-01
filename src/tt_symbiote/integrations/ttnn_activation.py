@@ -5,8 +5,8 @@
 """Activation function implementations for TTNN."""
 
 import torch
-
 import ttnn
+
 from tt_symbiote.core.module import TTNNModule
 
 

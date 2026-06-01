@@ -85,8 +85,7 @@ def test_ling_mini_2_0(mesh_device):
 
     set_device(model, mesh_device)
     assert hasattr(model, "_tt_kv_cache"), (
-        "set_device should have invoked BailingMoEV2Recipe.make_kv_cache "
-        "and attached model._tt_kv_cache"
+        "set_device should have invoked BailingMoEV2Recipe.make_kv_cache " "and attached model._tt_kv_cache"
     )
 
     model.eval()

@@ -35,7 +35,7 @@ canonical Microsoft sizing still pick up the right TTNN knobs.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from transformers.models.resnet.configuration_resnet import ResNetConfig
 

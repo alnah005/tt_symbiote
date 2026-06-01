@@ -50,10 +50,8 @@ What's deferred
 
 from __future__ import annotations
 
-import torch
-from torch import nn
-
 import ttnn
+from torch import nn
 
 from tt_symbiote.core.module import TTNNModule
 from tt_symbiote.integrations.ttnn_linear import TTNNLinear
@@ -81,9 +79,7 @@ def _inner_linear(clippable) -> nn.Linear:
     inner = getattr(clippable, "linear", None)
     if isinstance(inner, nn.Linear):
         return inner
-    raise TypeError(
-        f"_inner_linear expected Gemma4ClippableLinear or nn.Linear, got {type(clippable).__name__}"
-    )
+    raise TypeError(f"_inner_linear expected Gemma4ClippableLinear or nn.Linear, got {type(clippable).__name__}")
 
 
 def _clipping_active(clippable) -> bool:

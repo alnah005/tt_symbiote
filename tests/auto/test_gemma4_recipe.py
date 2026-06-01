@@ -114,9 +114,7 @@ def test_design_time_coverage_lists_populated(recipe):
         "Gemma4VisionMLP",
         "Gemma4MultimodalEmbedder",
     ):
-        assert required in recipe.tt_implemented, (
-            f"{required} must be declared in tt_implemented (Phase 8 Wave A)"
-        )
+        assert required in recipe.tt_implemented, f"{required} must be declared in tt_implemented (Phase 8 Wave A)"
 
     # Load-bearing classes still deferred to torch: Phase 8 wraps the
     # element-wise compute (RMSNorm/MLP/embeddings) but leaves the
@@ -139,8 +137,7 @@ def test_design_time_coverage_lists_populated(recipe):
 
     for required in ("Gemma4Model", "Gemma4ForConditionalGeneration"):
         assert required in recipe.host_glue, (
-            f"{required} should be in host_glue (orchestration / "
-            f"output dataclass — no FLOPs to accelerate)."
+            f"{required} should be in host_glue (orchestration / " f"output dataclass — no FLOPs to accelerate)."
         )
 
     for required in (
@@ -148,8 +145,7 @@ def test_design_time_coverage_lists_populated(recipe):
         "Gemma4ForCausalLM",
     ):
         assert required in recipe.out_of_scope, (
-            f"{required} should be in out_of_scope (not exercised by "
-            f"the image-text-to-text demo)."
+            f"{required} should be in out_of_scope (not exercised by " f"the image-text-to-text demo)."
         )
 
 
@@ -165,24 +161,12 @@ def test_design_time_lists_are_disjoint(recipe):
     host_glue = set(recipe.host_glue)
     oos = set(recipe.out_of_scope)
 
-    assert impl.isdisjoint(fallback), (
-        f"tt_implemented and cpu_fallback overlap on {impl & fallback}"
-    )
-    assert impl.isdisjoint(host_glue), (
-        f"tt_implemented and host_glue overlap on {impl & host_glue}"
-    )
-    assert impl.isdisjoint(oos), (
-        f"tt_implemented and out_of_scope overlap on {impl & oos}"
-    )
-    assert fallback.isdisjoint(host_glue), (
-        f"cpu_fallback and host_glue overlap on {fallback & host_glue}"
-    )
-    assert fallback.isdisjoint(oos), (
-        f"cpu_fallback and out_of_scope overlap on {fallback & oos}"
-    )
-    assert host_glue.isdisjoint(oos), (
-        f"host_glue and out_of_scope overlap on {host_glue & oos}"
-    )
+    assert impl.isdisjoint(fallback), f"tt_implemented and cpu_fallback overlap on {impl & fallback}"
+    assert impl.isdisjoint(host_glue), f"tt_implemented and host_glue overlap on {impl & host_glue}"
+    assert impl.isdisjoint(oos), f"tt_implemented and out_of_scope overlap on {impl & oos}"
+    assert fallback.isdisjoint(host_glue), f"cpu_fallback and host_glue overlap on {fallback & host_glue}"
+    assert fallback.isdisjoint(oos), f"cpu_fallback and out_of_scope overlap on {fallback & oos}"
+    assert host_glue.isdisjoint(oos), f"host_glue and out_of_scope overlap on {host_glue & oos}"
 
 
 def test_post_register_patches_device(recipe, fake_gemma4_model):
@@ -198,9 +182,9 @@ def test_post_register_attaches_runtime_config(recipe, fake_gemma4_model):
     """``post_register`` stashes the resolved per-variant TTNN tuning."""
     recipe.post_register(fake_gemma4_model)
 
-    assert hasattr(fake_gemma4_model, "_tt_runtime_config"), (
-        "post_register should attach model._tt_runtime_config from lookup_ttnn_tuning"
-    )
+    assert hasattr(
+        fake_gemma4_model, "_tt_runtime_config"
+    ), "post_register should attach model._tt_runtime_config from lookup_ttnn_tuning"
     cfg = fake_gemma4_model._tt_runtime_config
     assert isinstance(cfg, dict)
     # E2B targets a single-chip mesh.
@@ -213,8 +197,7 @@ def test_make_kv_cache_is_noop(recipe):
     """Phase 7 keeps HF ``DynamicCache``; the decorator should install a no-op."""
     result = recipe.make_kv_cache(model=None, device=None)
     assert result is None, (
-        f"Gemma4Recipe.make_kv_cache should be the @register_recipe no-op "
-        f"in Phase 7; got {result!r}"
+        f"Gemma4Recipe.make_kv_cache should be the @register_recipe no-op " f"in Phase 7; got {result!r}"
     )
 
 
@@ -295,9 +278,7 @@ def test_compatibility_report_shape(recipe, fake_gemma4_model):
         "the fake stand-in shadows the real class on purpose to keep the "
         "test hardware-free; ``report`` must still surface that class name"
     )
-    assert "design_time" not in out, (
-        "Phase 8.5 dropped the design_time block from the runtime artefact"
-    )
+    assert "design_time" not in out, "Phase 8.5 dropped the design_time block from the runtime artefact"
     assert out["modules_swapped"] == {"by_class": {}, "by_module": {}}
     assert out["runtime_observed"] == {
         "successes_by_class": {},

@@ -3,13 +3,11 @@
 
 """GR00T utilities: DPL run modes, distributed config, DiT compatibility, tensor handling."""
 
-import operator
 import os
 import threading
 from dataclasses import dataclass
 from enum import Enum
-from functools import reduce, wraps
-from math import isqrt
+from functools import wraps
 from typing import Any, Dict, Optional
 
 _DPL_TORCH_REF_RUNNING = threading.local()
@@ -26,17 +24,13 @@ from torch import nn
 from torch.utils._pytree import tree_map
 
 from tt_symbiote.core.module import TTNNModule
-
 from tt_symbiote.core.run_config import (
-    DispatchManager,
     NormalRun,
     compose_transforms,
     copy_to_ttnn,
-    no_dispatch,
     set_device_wrap,
     to_ttnn_wrap,
     unwrap_to_torch,
-    wrap_from_torch,
     wrap_to_torch_ttnn_tensor,
 )
 from tt_symbiote.core.tensor import TorchTTNNTensor
@@ -1284,8 +1278,8 @@ def _patch_module_replacement_for_gr00t():
 
 
 def _patch_tensor_for_gr00t():
-    from tt_symbiote.core.tensor import TorchTTNNTensor
     from tt_symbiote.core.run_config import DistributedTensorConfig
+    from tt_symbiote.core.tensor import TorchTTNNTensor
 
     def _shape_patched(self):
         if self.ttnn_distributed_tensor_config is not None and self.ttnn_tensor is not None:
@@ -1321,8 +1315,8 @@ def _patch_tensor_for_gr00t():
 
 
 def patch_run_config_for_gr00t():
-    from tt_symbiote.core import run_config
     from tt_symbiote.core import module as module_module
+    from tt_symbiote.core import run_config
     from tt_symbiote.core import tensor as tensor_module
 
     run_config.compare_fn_outputs = compare_fn_outputs

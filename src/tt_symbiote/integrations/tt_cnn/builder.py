@@ -10,9 +10,8 @@ from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
 import torch
-from ttnn.model_preprocessing import Conv2dArgs
-
 import ttnn
+from ttnn.model_preprocessing import Conv2dArgs
 
 
 @dataclass

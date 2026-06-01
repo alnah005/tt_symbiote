@@ -23,11 +23,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Tuple
 
-from transformers.models.qwen3_vl.configuration_qwen3_vl import (
-    Qwen3VLConfig,
-    Qwen3VLTextConfig,
-    Qwen3VLVisionConfig,
-)
+from transformers.models.qwen3_vl.configuration_qwen3_vl import Qwen3VLConfig, Qwen3VLTextConfig, Qwen3VLVisionConfig
 
 __all__ = [
     "Qwen3VLConfig",

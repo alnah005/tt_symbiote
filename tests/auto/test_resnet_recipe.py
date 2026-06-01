@@ -70,9 +70,9 @@ def test_build_module_dict_shape(recipe, fake_resnet_model):
     """Option 1 contract: ``build_module_dict`` returns a single flat dict."""
     module_dict = recipe.build_module_dict(fake_resnet_model)
 
-    assert isinstance(module_dict, dict), (
-        f"build_module_dict must return a flat dict (Option 1), got {type(module_dict).__name__}"
-    )
+    assert isinstance(
+        module_dict, dict
+    ), f"build_module_dict must return a flat dict (Option 1), got {type(module_dict).__name__}"
     assert not isinstance(module_dict, list)
 
     for key, value in module_dict.items():
@@ -135,23 +135,20 @@ def test_post_register_attaches_runtime_config(recipe, fake_resnet_model):
     """``post_register`` stashes the per-variant TTNN tuning on the model."""
     recipe.post_register(fake_resnet_model)
 
-    assert hasattr(fake_resnet_model, "_tt_runtime_config"), (
-        "post_register should attach model._tt_runtime_config from lookup_ttnn_tuning"
-    )
+    assert hasattr(
+        fake_resnet_model, "_tt_runtime_config"
+    ), "post_register should attach model._tt_runtime_config from lookup_ttnn_tuning"
     cfg = fake_resnet_model._tt_runtime_config
     assert isinstance(cfg, dict), f"_tt_runtime_config must be a dict; got {type(cfg).__name__}"
     assert "l1_small_size" in cfg, "_tt_runtime_config should expose l1_small_size"
-    assert cfg.get("hw_verified") is True, (
-        "microsoft/resnet-50 should resolve to the hw-verified tuning entry"
-    )
+    assert cfg.get("hw_verified") is True, "microsoft/resnet-50 should resolve to the hw-verified tuning entry"
 
 
 def test_make_kv_cache_is_noop(recipe):
     """ResNet has no KV cache; the decorator should have installed a no-op."""
     result = recipe.make_kv_cache(model=None, device=None)
     assert result is None, (
-        f"ResNetRecipe.make_kv_cache should be the @register_recipe no-op "
-        f"(returns None); got {result!r}"
+        f"ResNetRecipe.make_kv_cache should be the @register_recipe no-op " f"(returns None); got {result!r}"
     )
 
 

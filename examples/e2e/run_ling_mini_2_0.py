@@ -62,7 +62,10 @@ torch.set_grad_enabled(False)
 
 inputs = tokenizer.apply_chat_template(
     [{"role": "user", "content": "Explain the difference between Python and C++ Programming Languages."}],
-    add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt",
+    add_generation_prompt=True,
+    tokenize=True,
+    return_dict=True,
+    return_tensors="pt",
 ).to(model.device)
 inputs.pop("token_type_ids", None)
 
@@ -76,7 +79,7 @@ out = model.generate(
     use_cache=True,
     past_key_values=model._tt_kv_cache,
 )
-print(tokenizer.decode(out[0][inputs["input_ids"].shape[-1]:]))
+print(tokenizer.decode(out[0][inputs["input_ids"].shape[-1] :]))
 
 # Persist compatibility.report next to the script. Phase 8.5: the
 # JSON is a pure runtime observation artefact (gitignored, regenerated

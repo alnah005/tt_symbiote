@@ -17,10 +17,7 @@ from typing import Optional
 
 import torch
 
-from tt_symbiote.core.run_config import (
-    DistributedTensorConfig,
-    get_tensor_run_implementation,
-)
+from tt_symbiote.core.run_config import DistributedTensorConfig, get_tensor_run_implementation
 
 TENSOR_RUN_IMPLEMENTATION = get_tensor_run_implementation()
 

@@ -201,9 +201,7 @@ def test_ttnn_swap_skipped_reflected_from_runtime_config():
     out = compatibility.report(model)
 
     assert out["ttnn_swap_skipped"] is True
-    assert out["ttnn_swap_skipped_reason"] == (
-        "Replicated weight footprint exceeds DRAM budget"
-    )
+    assert out["ttnn_swap_skipped_reason"] == ("Replicated weight footprint exceeds DRAM budget")
 
 
 def test_gate_fired_produces_empty_modules_swapped(monkeypatch):

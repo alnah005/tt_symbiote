@@ -12,7 +12,7 @@ Open questions Q1, Q2, Q3, Q4, Q5, Q9 are resolved in
 `docs/migration_notes.md` Phase 2–8 sections; Q6 (CI runner topology),
 Q7 (auto-sync of vendored ccl.py), Q8 (recursive recipes), and Q10
 (multi-version in one checkout) remain deferred.
-**Owner:** Suhail Alnahari / Adam Roberge 
+**Owner:** Suhail Alnahari / Adam Roberge
 **Target first release:** `tt_symbiote 0.1.0` pinned to `transformers v5.9.0`
 **Migration source:** the directory `models/experimental/tt_symbiote/` on the `alnah005/tt_symbiote_v2` branch of the `tt-metal` repo. This is *source material to copy*, not a branch to fork — see §13 for the exact workflow.
 **Build target:** the new standalone repo at `github.com/alnah005/tt_symbiote` (currently empty). All new work happens here.

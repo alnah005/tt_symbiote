@@ -53,14 +53,8 @@ import torch
 
 from tt_symbiote.auto.auto_mappings import register_recipe
 from tt_symbiote.models.qwen3_vl.configuration_qwen3_vl import lookup_ttnn_tuning
-from tt_symbiote.models.qwen3_vl.modeling_qwen3_vl_text import (
-    TTNNQwen3VLTextMLP,
-    TTNNQwen3VLTextRMSNorm,
-)
-from tt_symbiote.models.qwen3_vl.modeling_qwen3_vl_vision import (
-    TTNNQwen3VLVisionMLP,
-    TTNNQwen3VLVisionPatchMerger,
-)
+from tt_symbiote.models.qwen3_vl.modeling_qwen3_vl_text import TTNNQwen3VLTextMLP, TTNNQwen3VLTextRMSNorm
+from tt_symbiote.models.qwen3_vl.modeling_qwen3_vl_vision import TTNNQwen3VLVisionMLP, TTNNQwen3VLVisionPatchMerger
 
 __all__ = ["Qwen3VLRecipe"]
 
@@ -80,16 +74,16 @@ _TT_IMPLEMENTED: list[str] = [
 
 _CPU_FALLBACK: list[str] = [
     # ----- Vision tower (Qwen3VLVisionModel) -----
-    "Qwen3VLVisionPatchEmbed",       # Conv3d + bilinear positional embed — deferred.
+    "Qwen3VLVisionPatchEmbed",  # Conv3d + bilinear positional embed — deferred.
     "Qwen3VLVisionRotaryEmbedding",  # 2-D RoPE precompute — deferred.
-    "Qwen3VLVisionAttention",        # varlen-packed SDPA — deferred.
+    "Qwen3VLVisionAttention",  # varlen-packed SDPA — deferred.
     "Qwen3VLVisionBlock",
     "Qwen3VLVisionModel",
     # ----- Text decoder (Qwen3VLTextModel) -----
-    "Qwen3VLTextRotaryEmbedding",    # M-RoPE 3-axis precompute — deferred.
-    "Qwen3VLTextAttention",          # Q/K head-norms + M-RoPE — deferred.
-    "Qwen3VLTextDecoderLayer",       # depends on attention.
-    "Qwen3VLTextModel",              # DeepStack injection — deferred.
+    "Qwen3VLTextRotaryEmbedding",  # M-RoPE 3-axis precompute — deferred.
+    "Qwen3VLTextAttention",  # Q/K head-norms + M-RoPE — deferred.
+    "Qwen3VLTextDecoderLayer",  # depends on attention.
+    "Qwen3VLTextModel",  # DeepStack injection — deferred.
 ]
 
 
