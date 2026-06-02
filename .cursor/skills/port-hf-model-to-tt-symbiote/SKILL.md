@@ -178,7 +178,7 @@ If any of the above fails, do **not** edit the recipe to mask the failure. Itera
 
 1. **`docs/supported_models.md`** — append a row under the right task section. Use the same `TT / CPU / OOS` count column the Gemma-4 row uses. If the model has multiple variants, list all of them with `⏳ structurally supported` and mark the verified one `✅ verified`.
 
-2. **`docs/internal/migration_notes.md`** — append a section titled `## Phase 7 — <Model> port via porting skill`. Mirror the Gemma-4 section's structure: pivot rationale, what shipped, follow-ups. **Cite the skill** at `.cursor/skills/port-hf-model-to-tt-symbiote/SKILL.md`.
+2. **`docs/development/migration_notes.md`** — append a section titled `## Phase 7 — <Model> port via porting skill`. Mirror the Gemma-4 section's structure: pivot rationale, what shipped, follow-ups. **Cite the skill** at `.cursor/skills/port-hf-model-to-tt-symbiote/SKILL.md`.
 
 3. **`examples/e2e/README.md`** — append a row with the script path, task type, and verified hardware target.
 
@@ -206,8 +206,8 @@ All must pass; do not commit otherwise:
 [ ] compatibility.report(model)["runtime_observed"]["unexpected"] == []
 [ ] examples/e2e/<NAME>/<MODEL>_coverage.json exists (real if run on HW; design-time stub otherwise)
 [ ] docs/supported_models.md row exists with the right status flag
-[ ] docs/cpu_vs_device_coverage.md has a section for the new model
-[ ] docs/internal/migration_notes.md Phase 7 section exists and cites this skill
+[ ] docs/development/cpu_vs_device_coverage.md has a section for the new model
+[ ] docs/development/migration_notes.md Phase 7 section exists and cites this skill
 [ ] git status (after staging) lists every artefact; no surprise files
 ```
 

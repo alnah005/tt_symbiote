@@ -271,7 +271,7 @@ removes both problems:
 
 - [`install_prerequisites.md`](install_prerequisites.md) — the
   `(ttnn, sfpi)` story the release inherits.
-- [`internal/migration_notes.md`](internal/migration_notes.md) — the
+- [`development/migration_notes.md`](development/migration_notes.md) — the
   phase history that the version numbers track (internal-only,
   excluded from sdist).
 - [`../scripts/bootstrap_venv.sh`](../scripts/bootstrap_venv.sh) —

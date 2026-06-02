@@ -7,7 +7,7 @@ original (frozen) design intent — for live status, see
 [`docs/migration_notes.md`](docs/migration_notes.md), and the
 per-variant verification state in
 [`docs/supported_models.md`](docs/supported_models.md) +
-[`docs/cpu_vs_device_coverage.md`](docs/cpu_vs_device_coverage.md).
+[`docs/development/cpu_vs_device_coverage.md`](docs/development/cpu_vs_device_coverage.md).
 Open questions Q1, Q2, Q3, Q4, Q5, Q9 are resolved in
 `docs/migration_notes.md` Phase 2–8 sections; Q6 (CI runner topology),
 Q7 (auto-sync of vendored ccl.py), Q8 (recursive recipes), and Q10
@@ -353,7 +353,7 @@ What is retained:
 |---|---|---|---|---|
 | P0 | Ling-mini-2.0 (`bailing_moe_v2`) | `tests/test_ling_mini_2_0.py`, `modules/decoder_layer.py`, `models/bailing_moe_v2.py` | ✅ Phase 5 (full TTNN, T3K) | Reference port. Defines the recipe pattern. |
 | P1 | GLM-4 family (`glm4_moe`) | `tests/test_glm.py`, `test_glm_4_7.py`, `test_glm_5.py`, `test_glm_flash.py`, `modules/moe.py::Glm4MoeConfig` | ⏳ deferred | Shares decoder shape with Ling. Verify shared-module factorization is correct. |
-| P1 | Gemma4 | `tests/test_gemma4.py`, `models/gemma4_text.py`, `modules/gemma4_*` | ✅ Phase 7 (CPU-first) + Phase 8 Wave A (5 on-device wrappers, 4 variants verified — see [`docs/cpu_vs_device_coverage.md`](docs/cpu_vs_device_coverage.md)) | Recipe + budget/MoE gate landed; full text decoder still on CPU pending Wave A+1. |
+| P1 | Gemma4 | `tests/test_gemma4.py`, `models/gemma4_text.py`, `modules/gemma4_*` | ✅ Phase 7 (CPU-first) + Phase 8 Wave A (5 on-device wrappers, 4 variants verified — see [`docs/development/cpu_vs_device_coverage.md`](docs/development/cpu_vs_device_coverage.md)) | Recipe + budget/MoE gate landed; full text decoder still on CPU pending Wave A+1. |
 | P2 | Qwen3-VL (dense) | `transformers/src/transformers/models/qwen3_vl/` | ✅ Phase 7 follow-up (skill-driven CPU-first port, 2B verified) + Phase 8 Wave B (4 on-device wrappers) | Landed via the [`port-hf-model-to-tt-symbiote`](.cursor/skills/port-hf-model-to-tt-symbiote/SKILL.md) skill. |
 | P2 | Qwen3 family (`qwen3_moe`, `qwen3_coder_next`) | `tests/test_qwen3_5_35b_a3b.py`, `test_qwen3_coder_next.py`, `modules/qwen_*` | ⏳ deferred | |
 | P2 | GPT-OSS, Olmo3, LLaMA, Molmo2, Qwen-Omni | corresponding `tests/test_*.py` | ⏳ deferred | |

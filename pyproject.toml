@@ -13,7 +13,7 @@ name = "tt_symbiote"
 # tt_symbiote does NOT use git tags. To cut a new release, bump this
 # version in a one-line commit on the release branch, push, then
 # trigger the publish workflow (`workflow_dispatch`) from the GitHub
-# Actions UI. See `docs/release_process.md`.
+# Actions UI. See `docs/development/release_process.md`.
 #
 # `setuptools-scm` is intentionally NOT used: with no tags it falls
 # back to noisy `0.0.1.dev<n>+<sha>` strings that PyPI rejects as
@@ -42,7 +42,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-# Pinning policy (per docs/internal/PROJECT_PROPOSAL.md §10):
+# Pinning policy (per docs/development/PROJECT_PROPOSAL.md §10):
 #
 # - `transformers` is pinned to a single EXACT version per tt_symbiote branch.
 #   Different transformers versions can ship model code or config schemas that
@@ -128,7 +128,7 @@ dev = [
   "autoflake==2.3.1",
   "ruff",
   "yamllint==1.35.1",
-  # Release tooling — matches `make dist` and `docs/release_process.md`'s
+  # Release tooling — matches `make dist` and `docs/development/release_process.md`'s
   # pre-tag gate (`python -m build && twine check dist/*`).
   "build>=1.0",
   "twine>=4.0",

@@ -10,7 +10,7 @@ optional post-replacement model-specific patches). Recipes are registered
 at import time using the :func:`register_recipe` decorator and looked up
 by Auto* factories via the HF model class name (e.g. ``"BailingMoeV2ForCausalLM"``).
 
-Per ``docs/internal/PROJECT_PROPOSAL.md`` §4.2 this module imports **nothing** from
+Per ``docs/development/PROJECT_PROPOSAL.md`` §4.2 this module imports **nothing** from
 ``transformers`` so model recipes can populate the registry without a
 runtime HF dependency.
 """
@@ -39,7 +39,7 @@ class Recipe(Protocol):
       model-specific KV cache object (e.g. a paged attention cache). Called
       by :func:`tt_symbiote.utils.device_management.set_device` once every
       module has been bound to ``device`` and weights have been moved.
-      Resolves Q9 from ``docs/internal/PROJECT_PROPOSAL.md`` (the model owns its KV
+      Resolves Q9 from ``docs/development/PROJECT_PROPOSAL.md`` (the model owns its KV
       cache, mirroring the ``tt_transformers`` constructor pattern but
       delayed to ``set_device`` time so the device is known).
 

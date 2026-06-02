@@ -4,21 +4,23 @@
 # under version control. The rules below shape the sdist explicitly so
 # that internal-only material does not ship to PyPI users:
 #
-#   * `docs/internal/` holds design proposals and migration history
-#     that are interesting for contributors but not for downstream
-#     consumers (PROJECT_PROPOSAL.md, migration_notes.md).
+#   * `docs/development/` holds maintainer / release / internal-design
+#     material (release_process.md, release_checklist.md,
+#     cpu_vs_device_coverage.md, PROJECT_PROPOSAL.md, migration_notes.md).
+#     User-facing docs stay at the `docs/` root.
 #   * `tests/experimental/` holds quarantined model tests for
 #     unregistered recipes (see tests/experimental/README.md).
-#   * `.cursor/` and `CLAUDE.md` are agent/IDE configuration, also
-#     dev-only.
+#   * `.cursor/`, `.claude/`, and `CLAUDE.md` are agent/IDE
+#     configuration, also dev-only.
 #
 # The wheel is unaffected (it is built from `src/` per
 # `[tool.setuptools.packages.find]` in pyproject.toml).
 
-prune docs/internal
+prune docs/development
 prune tests/experimental
 prune src/tt_symbiote/_experimental
 prune .cursor
+prune .claude
 exclude CLAUDE.md
 
 # Stale build artifacts that sometimes end up next to a working tree:

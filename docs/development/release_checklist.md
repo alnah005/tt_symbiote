@@ -1,6 +1,6 @@
 # PyPI release checklist (v0.1.0)
 
-Companion to [`release_process.md`](release_process.md). That doc is the
+Companion to [`release_process.md`](development/release_process.md). That doc is the
 canonical recipe for **every** release; this checklist is a tactical,
 one-time worksheet for the very first PyPI publication on the
 branch-driven model, tracking which items already shipped in commits
@@ -32,13 +32,13 @@ release.
   unregistered modeling code stays out of the wheel; see
   `src/tt_symbiote/_experimental/__init__.py`.
 - [x] **`MANIFEST.in` prunes internal docs / experimental trees** —
-  `docs/internal/`, `tests/experimental/`,
+  `docs/development/`, `tests/experimental/`,
   `src/tt_symbiote/_experimental/`, `.cursor/`, `CLAUDE.md`, plus a
   global exclude for `.bak` / `.orig` / `.rej` / `__pycache__` / `.pyc`
   so the sdist is as clean as the wheel.
 - [x] **Literal `version = "0.1.0"` (no `setuptools-scm`)** — tt_symbiote
   is branch-driven; the release branch is the release marker. See
-  `docs/release_process.md` §Versioning model.
+  `docs/development/release_process.md` §Versioning model.
 - [x] **`src/tt_symbiote/__init__.py` exposes `__version__`** — via
   `importlib.metadata.version("tt_symbiote")`, so installed users can
   introspect the version.
@@ -53,7 +53,7 @@ release.
   bootstrap script as the contributor path.
 - [x] **`docs/install_prerequisites.md`** — what sfpi is, how to install
   + verify it, the `(ttnn, sfpi)` compatibility table, troubleshooting.
-- [x] **`docs/release_process.md`** — branch-driven recipe, one-time
+- [x] **`docs/development/release_process.md`** — branch-driven recipe, one-time
   Trusted Publisher setup, rollback policy, API-token fallback.
 - [x] **`docs/supported_models.md` links to install_prerequisites** —
   one-line callout above the model tables.

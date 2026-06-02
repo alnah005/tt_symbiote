@@ -7,7 +7,7 @@
 Hub modeling files loaded via ``trust_remote_code=True`` are pinned to
 whatever ``transformers`` release their author was using when the file
 was uploaded. When ``tt_symbiote`` pins ``transformers`` to a *newer*
-release (per ``docs/internal/PROJECT_PROPOSAL.md`` §10), older Hub files may import
+release (per ``docs/development/PROJECT_PROPOSAL.md`` §10), older Hub files may import
 symbols that have since been removed or moved.
 
 Each shim below documents exactly one such removal and installs a

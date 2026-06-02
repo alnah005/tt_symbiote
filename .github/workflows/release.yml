@@ -11,7 +11,7 @@ name: release
 #
 # tt_symbiote does NOT use git tags. The release branch (currently
 # `transformers5.9.0`) IS the release marker. See
-# `docs/release_process.md` for the full recipe.
+# `docs/development/release_process.md` for the full recipe.
 on:
   workflow_dispatch:
     inputs:

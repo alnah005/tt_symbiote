@@ -158,10 +158,10 @@ The decoder layers, the final RMS norm, `nn.Embedding`, and the rotary
 embedding are **not** in this dict — `TTNNBailingMoeV2Model.from_torch`
 owns the conversion of everything inside its own subtree (see A.4).
 
-This is the **Option 1 / single-pass** contract resolved in docs/internal/PROJECT_PROPOSAL.md
+This is the **Option 1 / single-pass** contract resolved in docs/development/PROJECT_PROPOSAL.md
 OQ-2: each TTNN wrapper class is responsible for the conversion of its
 own children. Recipes only declare outer-level swaps. See
-[`docs/internal/migration_notes.md`](./internal/migration_notes.md) §Phase 5 for the
+[`docs/development/migration_notes.md`](./development/migration_notes.md) §Phase 5 for the
 options that were considered and why Option 1 won.
 
 ### `post_register(model)` — patch the model
@@ -182,7 +182,7 @@ without complaint.
 
 ### `make_kv_cache(model, device, **kwargs)` — paged attention
 
-Optional hook (docs/internal/PROJECT_PROPOSAL.md OQ-9 resolution). Returns a
+Optional hook (docs/development/PROJECT_PROPOSAL.md OQ-9 resolution). Returns a
 `TTNNPagedAttentionKVCache` configured from `model.config`:
 
 - `num_layers = config.num_hidden_layers`
@@ -287,7 +287,7 @@ mandatory final step. It does six things in order:
    previously had to write by hand.
 5. **`make_kv_cache(...)`**: if a recipe is registered for
    `type(obj).__name__` and exposes `make_kv_cache`, the result is
-   built and attached as `obj._tt_kv_cache` (docs/internal/PROJECT_PROPOSAL.md Q9).
+   built and attached as `obj._tt_kv_cache` (docs/development/PROJECT_PROPOSAL.md Q9).
 6. **Marks the model**: `_tt_symbiote_device_set = True` on the root
    and on every visited TTNN module.
 
@@ -684,6 +684,6 @@ To add a new model `Foo` (HF class `FooForCausalLM`):
 - [`src/tt_symbiote/utils/hf_compat.py`](../src/tt_symbiote/utils/hf_compat.py) — `is_torch_fx_available` + `ROPE_INIT_FUNCTIONS["default"]` shims.
 
 For deeper background on why each piece looks the way it does, see
-[`docs/internal/migration_notes.md`](./internal/migration_notes.md) §Phase 5 and
-[`docs/internal/PROJECT_PROPOSAL.md`](../docs/internal/PROJECT_PROPOSAL.md) §§4 (public API) and §10
+[`docs/development/migration_notes.md`](./development/migration_notes.md) §Phase 5 and
+[`docs/development/PROJECT_PROPOSAL.md`](../docs/development/PROJECT_PROPOSAL.md) §§4 (public API) and §10
 (dependency policy).

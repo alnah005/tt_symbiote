@@ -112,7 +112,7 @@ answer = processor.batch_decode(out[:, prompt_len:], skip_special_tokens=True)[0
 print(f"Qwen3-VL-2B-Instruct answer: {answer!r}")
 
 # Compatibility report drives the docs/supported_models.md "TT-implemented vs
-# CPU" status column and the per-script row in docs/cpu_vs_device_coverage.md.
+# CPU" status column and the per-script row in docs/development/cpu_vs_device_coverage.md.
 # Phase 8.5: any class in ``regressions`` is an actionable signal — it means
 # a TTNN wrapper hit the fallback path on a class the recipe expected to
 # succeed on. ``modules_swapped`` shows what actually ran on device.

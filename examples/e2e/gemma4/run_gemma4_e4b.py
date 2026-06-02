@@ -98,7 +98,7 @@ prompt_len = inputs["input_ids"].shape[-1]
 answer = processor.batch_decode(out[:, prompt_len:], skip_special_tokens=True)[0].strip()
 print(f"Gemma-4 E4B answer: {answer!r}")
 
-# Compatibility report drives docs/cpu_vs_device_coverage.md.
+# Compatibility report drives docs/development/cpu_vs_device_coverage.md.
 report = compatibility.report(model)
 print("\n=== tt_symbiote.compatibility.report(model) ===")
 print(json.dumps(report, indent=2))

@@ -36,8 +36,8 @@ time — but only to compute a single derived field, ``regressions`` =
 the "is this fallback expected?" signal without serializing the design-
 time lists into the JSON.
 
-See ``docs/cpu_vs_device_coverage.md`` for the operational write-up and
-``docs/internal/migration_notes.md`` for the Phase 8.5 design notes.
+See ``docs/development/cpu_vs_device_coverage.md`` for the operational write-up and
+``docs/development/migration_notes.md`` for the Phase 8.5 design notes.
 """
 
 from __future__ import annotations

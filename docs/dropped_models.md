@@ -4,7 +4,7 @@ The following items existed in
 `tt-metal/models/experimental/tt_symbiote/` on the
 `alnah005/tt_symbiote_v2` branch (commit `43d758d`) but were **not migrated**
 into the new repo. Each entry records why and when, so a future Claude porting
-skill (see [`docs/internal/PROJECT_PROPOSAL.md`](../docs/internal/PROJECT_PROPOSAL.md) §7.3) can revive them
+skill (see [`docs/development/PROJECT_PROPOSAL.md`](../docs/development/PROJECT_PROPOSAL.md) §7.3) can revive them
 if appropriate.
 
 | Item                       | Reason for drop                                              | Dropped at | Could be revived? |

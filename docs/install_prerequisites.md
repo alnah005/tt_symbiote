@@ -138,6 +138,6 @@ upgrade with `pip install -U tt_symbiote`.
   validated end-to-end install flow for contributors.
 - [`scripts/ttnn-pin.txt`](../scripts/ttnn-pin.txt) — the canonical
   `(ttnn, sfpi)` pair.
-- [`docs/release_process.md`](release_process.md) — how a new
+- [`docs/development/release_process.md`](development/release_process.md) — how a new
   `tt_symbiote` release rolls out, including how the `[ttnn]` extra
   pin gets bumped.

@@ -1009,7 +1009,7 @@ coverage_path.write_text(json.dumps(report, indent=2) + "\n")
 
 The 14 resulting JSON artefacts (one per script, committed alongside)
 are the source of truth for the new
-[`docs/cpu_vs_device_coverage.md`](cpu_vs_device_coverage.md) page,
+[`docs/development/cpu_vs_device_coverage.md`](development/cpu_vs_device_coverage.md) page,
 which aggregates them into per-family CPU/device tables. The two
 already-verified VLM demos (`run_gemma4_e2b.py`,
 `run_qwen3_vl_2b.py`) and ResNet-50 were re-run on N150 to capture
@@ -1160,7 +1160,7 @@ is a small follow-up.
 - `examples/e2e/gemma4/*_coverage.json` — all four refreshed to the
   4-bucket shape (E2B has runtime data; the other three are
   design-time stubs).
-- `docs/cpu_vs_device_coverage.md` — Gemma-4 rows updated.
+- `docs/development/cpu_vs_device_coverage.md` — Gemma-4 rows updated.
 
 ## What's deferred to Wave A+1 / Wave B
 
@@ -1228,7 +1228,7 @@ Wave A.
 - `src/tt_symbiote/models/qwen3_vl/__init__.py` — docstring updated.
 - `examples/e2e/qwen3_vl/*_coverage.json` — all four refreshed to the
   4-bucket shape (2B has runtime data; 4B/8B/32B are design-time stubs).
-- `docs/cpu_vs_device_coverage.md`, `docs/supported_models.md` —
+- `docs/development/cpu_vs_device_coverage.md`, `docs/supported_models.md` —
   Qwen3-VL rows updated.
 
 ## What's deferred (Wave B+1)
@@ -1510,7 +1510,7 @@ new recipes:
   populated design-time lists; replaces the previous all-zero
   stubs).
 
-The aggregated tables in `docs/cpu_vs_device_coverage.md` and the
+The aggregated tables in `docs/development/cpu_vs_device_coverage.md` and the
 "Coverage by model" sections were updated to match.
 
 # Phase 8.5 — `_coverage.json` as a pure runtime artefact
@@ -1530,7 +1530,7 @@ Phase 8.5 splits the two cleanly:
 - **Intent stays in code.** Each recipe keeps its four design-time
   lists (`tt_implemented` / `cpu_fallback` / `host_glue` /
   `out_of_scope`). The budget gate, the porting skill, and the
-  textual breakdown in `docs/cpu_vs_device_coverage.md` continue to
+  textual breakdown in `docs/development/cpu_vs_device_coverage.md` continue to
   consume them — they are *the* shared vocabulary for talking about
   what the recipe is supposed to do.
 - **Observation moves to runtime.** The new `compatibility.report`

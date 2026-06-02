@@ -7,7 +7,7 @@ addition to [`SKILL.md`](SKILL.md).
 
 The canonical CPU-first VLM port is
 [`google/gemma-4-E2B-it`](../../src/tt_symbiote/models/gemma4/) (committed
-in Phase 7; see [`docs/internal/migration_notes.md`](../../docs/internal/migration_notes.md)).
+in Phase 7; see [`docs/development/migration_notes.md`](../../docs/development/migration_notes.md)).
 Copy its shape exactly; only the deltas listed below need attention per
 model. Phase 8 Wave A added 5 on-device TTNN swaps on top of the
 CPU-first scaffolding (RMSNorm, scaled word embedding, text MLP, vision

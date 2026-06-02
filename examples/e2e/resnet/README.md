@@ -44,7 +44,7 @@ Every script in this folder is the same ~70-line template:
 7. `ttnn.close_mesh_device(mesh_device)`
 
 The aggregated textual summary across all variants lives in
-[`docs/cpu_vs_device_coverage.md`](../../../docs/cpu_vs_device_coverage.md).
+[`docs/development/cpu_vs_device_coverage.md`](../../../docs/development/cpu_vs_device_coverage.md).
 The ResNet recipe was originally written in Phase 6 before the
 compatibility-list convention existed; the four design-time lists
 (`tt_implemented` / `cpu_fallback` / `host_glue` / `out_of_scope`)

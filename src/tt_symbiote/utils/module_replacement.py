@@ -7,7 +7,7 @@
 The canonical entry point is :func:`register_modules` (Phase 4 rename of
 ``register_module_replacement_dict``). The old name is retained as a thin
 ``DeprecationWarning``-emitting alias for one release per
-``docs/internal/PROJECT_PROPOSAL.md`` §4.1.
+``docs/development/PROJECT_PROPOSAL.md`` §4.1.
 """
 
 import warnings
@@ -176,7 +176,7 @@ def register_module_replacement_dict(
     """Deprecated alias for :func:`register_modules`.
 
     Will be removed in the next ``tt_symbiote`` release per
-    ``docs/internal/PROJECT_PROPOSAL.md`` §4.1.
+    ``docs/development/PROJECT_PROPOSAL.md`` §4.1.
     """
     warnings.warn(
         "register_module_replacement_dict is deprecated and will be removed "

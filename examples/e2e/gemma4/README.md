@@ -91,7 +91,7 @@ Every script in this folder is the same 100-line template:
 8. Permissive dog-equivalents semantic assertion.
 
 The aggregated textual summary across all variants lives in
-[`docs/cpu_vs_device_coverage.md`](../../../docs/cpu_vs_device_coverage.md).
+[`docs/development/cpu_vs_device_coverage.md`](../../../docs/development/cpu_vs_device_coverage.md).
 
 ## Reproducing a clean run
 

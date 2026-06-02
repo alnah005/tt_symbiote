@@ -18,7 +18,7 @@ Each script is intended to be:
   teardown) stays identical unless your model truly needs something
   different.
 - **Outside the installed package.** Per
-  [`docs/internal/PROJECT_PROPOSAL.md`](../../docs/internal/PROJECT_PROPOSAL.md) P10 these scripts
+  [`docs/development/PROJECT_PROPOSAL.md`](../../docs/development/PROJECT_PROPOSAL.md) P10 these scripts
   ship with the repo, not with `pip install tt_symbiote`. They are
   reference material, not installed entry points.
 
@@ -29,7 +29,7 @@ After every successful run, each script writes a
 *actually* executed on device. Phase 8.5 made these JSONs a **pure
 runtime artefact**: they're gitignored, regenerated on every run, and
 read locally. The aggregated textual summary lives in
-[`docs/cpu_vs_device_coverage.md`](../../docs/cpu_vs_device_coverage.md).
+[`docs/development/cpu_vs_device_coverage.md`](../../docs/development/cpu_vs_device_coverage.md).
 
 ## Layout
 
@@ -92,7 +92,7 @@ are what the skill automates:
 
 1. Land the model's recipe under `src/tt_symbiote/models/<name>/` and a
    pytest-based hardware smoke under `tests/models/<name>/` (per
-   [`docs/internal/PROJECT_PROPOSAL.md`](../../docs/internal/PROJECT_PROPOSAL.md) §6).
+   [`docs/development/PROJECT_PROPOSAL.md`](../../docs/development/PROJECT_PROPOSAL.md) §6).
 2. Copy an existing script from the appropriate family folder as a
    starting point.
    - LLM (causal LM): start from [`run_ling_mini_2_0.py`](run_ling_mini_2_0.py).
@@ -128,7 +128,7 @@ are what the skill automates:
 5. Add a row to the index table above. Every demo writes a local
    `_coverage.json` next to itself (Phase 8.5: gitignored, regenerated
    on every run — don't commit it). Update
-   [`docs/cpu_vs_device_coverage.md`](../../docs/cpu_vs_device_coverage.md)
+   [`docs/development/cpu_vs_device_coverage.md`](../../docs/development/cpu_vs_device_coverage.md)
    if the per-model textual breakdown changed.
 
 ## Running

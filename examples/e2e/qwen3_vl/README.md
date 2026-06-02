@@ -42,7 +42,7 @@ Each demo writes a `<script>_coverage.json` next to itself. Phase 8.5
 made these JSONs runtime-only artefacts: gitignored, regenerated on
 every run, read locally to confirm `regressions == []`. The
 aggregated textual summary across all variants lives in
-[`docs/cpu_vs_device_coverage.md`](../../../docs/cpu_vs_device_coverage.md).
+[`docs/development/cpu_vs_device_coverage.md`](../../../docs/development/cpu_vs_device_coverage.md).
 
 ## Note on semantic check
 

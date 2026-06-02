@@ -59,7 +59,7 @@ that list empty.
 
 For the *full* CPU-vs-device split per demo (which exact classes run
 where, and on what hardware), see
-[`docs/cpu_vs_device_coverage.md`](cpu_vs_device_coverage.md). Each
+[`docs/development/cpu_vs_device_coverage.md`](development/cpu_vs_device_coverage.md). Each
 demo script also writes a `<script>_coverage.json` next to itself
 after every run. **Phase 8.5** made these JSONs pure runtime
 observation artefacts — gitignored, regenerated on every run, read
@@ -146,7 +146,7 @@ was skipped. The runtime JSON reflects this cleanly:
 `ttnn_swap_skipped == true`, `modules_swapped == {by_class: {},
 by_module: {}}`, `regressions == []`, and the model produces the same
 semantically correct answer as the smaller variants. See
-[`docs/cpu_vs_device_coverage.md`](cpu_vs_device_coverage.md)
+[`docs/development/cpu_vs_device_coverage.md`](development/cpu_vs_device_coverage.md)
 "Budget and MoE gating" for the data behind the 9 GB threshold and
 the per-variant headline numbers.
 
@@ -220,5 +220,5 @@ If you'd rather do it by hand, the manual checklist is:
    [tracking table](../examples/e2e/README.md).
 6. Add a row here, in the appropriate task section.
 
-See [`docs/internal/migration_notes.md`](internal/migration_notes.md) for the design
+See [`docs/development/migration_notes.md`](development/migration_notes.md) for the design
 rationale behind each Phase.

@@ -2,7 +2,7 @@
 
 This directory holds standalone example scripts that exercise the `tt_symbiote`
 package. The contents are intentionally **outside the installed package** (per
-[`docs/internal/PROJECT_PROPOSAL.md`](../docs/internal/PROJECT_PROPOSAL.md) P10):
+[`docs/development/PROJECT_PROPOSAL.md`](../docs/development/PROJECT_PROPOSAL.md) P10):
 
 - `pip install tt_symbiote` does **not** ship these files.
 - They live in the repository for reference and inspiration only.
