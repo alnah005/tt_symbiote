@@ -10,17 +10,83 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, Type
 
 import torch
-from tt_symbiote.core.utils import tree_map, flat_map_bypass
-from tracy import signpost
-
 import ttnn
+
+try:
+    from tracy import signpost
+except ImportError:
+    # tracy is Tenstorrent's profiler. It ships only via a tt-metal build
+    # and is not on PyPI, so users who pip-install tt_symbiote cannot
+    # resolve it. signpost is only invoked when TT_SYMBIOTE_SIGNPOST_MODE
+    # is set in the environment, so a no-op fallback is safe — the
+    # default code path never calls it.
+    def signpost(*args, **kwargs):  # noqa: D401 — fallback shim, matches tracy API shape
+        return None
+
+
+from tt_symbiote.core.ccl import TT_CCL
 from tt_symbiote.core.utils import (
     TORCH_TO_TTNN,
     compare_fn_outputs,
+    flat_map_bypass,
     torch_dtype_to_ttnn_dtype,
+    tree_map,
     ttnn_dtype_to_torch_dtype,
 )
-from tt_symbiote.core.ccl import TT_CCL
+
+
+def _source_class_name(module: Any) -> str:
+    """Resolve the HF source class name for a TTNNModule for observability hooks.
+
+    Reads ``_fallback_torch_layer`` first so the recorded name matches
+    the recipe's ``tt_implemented`` / ``cpu_fallback`` / ``host_glue`` /
+    ``out_of_scope`` lists (all of which use HF class names). Falls back
+    to the TTNN wrapper's own class name when no fallback layer is
+    attached.
+    """
+    fallback_layer = getattr(module, "_fallback_torch_layer", None)
+    if fallback_layer is not None:
+        return type(fallback_layer).__name__
+    return type(module).__name__
+
+
+def _record_runtime_fallback(module: Any) -> None:
+    """Best-effort runtime hook for :mod:`tt_symbiote.utils.compatibility`.
+
+    Called from every site that issues a "running torch fallback" warning.
+    The import is lazy and exceptions are swallowed so observability never
+    interferes with the actual fallback path: a broken ledger must not be
+    able to bring down inference.
+    """
+    try:
+        from tt_symbiote.utils.compatibility import record_runtime_fallback
+
+        record_runtime_fallback(
+            getattr(module, "module_name", type(module).__name__),
+            _source_class_name(module),
+        )
+    except Exception:
+        pass
+
+
+def _record_runtime_success(module: Any) -> None:
+    """Best-effort success hook mirroring :func:`_record_runtime_fallback`.
+
+    Fires on the success path of every TTNN-attempting ``Run.module_run``
+    so :func:`tt_symbiote.utils.compatibility.report` can distinguish
+    "module is wrapped" from "module actually executed on device this
+    run". The import is lazy and exceptions are swallowed for the same
+    "observability must not break inference" reason as the fallback hook.
+    """
+    try:
+        from tt_symbiote.utils.compatibility import record_runtime_success
+
+        record_runtime_success(
+            getattr(module, "module_name", type(module).__name__),
+            _source_class_name(module),
+        )
+    except Exception:
+        pass
 
 
 @dataclass
@@ -563,6 +629,7 @@ class NormalRun:
                 result = self.forward(*func_args, **func_kwargs)
             else:
                 result = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
+            _record_runtime_success(self)
         except Exception as e:
             if self._fallback_torch_layer is None:
                 raise
@@ -570,6 +637,7 @@ class NormalRun:
                 f"TTNN forward failed for {self.module_name}: {e!r}; running torch fallback",
                 stacklevel=2,
             )
+            _record_runtime_fallback(self)
             result = self._fallback_torch_layer(*args, **kwds)
         end = time.time()
         DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
@@ -609,6 +677,7 @@ class NormalRunWithFallback(NormalRun):
                 f"Call `tt_symbiote.set_device(model, device)` to enable TTNN execution.",
                 stacklevel=2,
             )
+            _record_runtime_fallback(self)
             return self._fallback_torch_layer(*args, **kwds)
         bypass = getattr(self, "_bypass_tensor_wrapping", False)
         if bypass:
@@ -624,6 +693,7 @@ class NormalRunWithFallback(NormalRun):
                 result = self.forward(*func_args, **func_kwargs)
             else:
                 result = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
+            _record_runtime_success(self)
         except Exception as e:
             assert (
                 self._fallback_torch_layer is not None
@@ -632,6 +702,7 @@ class NormalRunWithFallback(NormalRun):
                 f"TTNN forward failed for {self.module_name}: {e!r}; running torch fallback",
                 stacklevel=2,
             )
+            _record_runtime_fallback(self)
             result = self._fallback_torch_layer(*args, **kwds)
         return result
 
@@ -752,8 +823,7 @@ class DPLRunNoErrorProp(NormalRun):
                 )
             except Exception as e:
                 warnings.warn(
-                    f"TTNN forward failed for {self.module_name}: {e!r}; "
-                    f"DPLRunNoErrorProp returning torch result",
+                    f"TTNN forward failed for {self.module_name}: {e!r}; " f"DPLRunNoErrorProp returning torch result",
                     stacklevel=2,
                 )
         return result

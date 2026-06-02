@@ -75,9 +75,9 @@ def test_build_module_dict_shape(recipe, fake_hf_model):
     """
     module_dict = recipe.build_module_dict(fake_hf_model)
 
-    assert isinstance(module_dict, dict), (
-        f"build_module_dict must return a flat dict (Option 1), got {type(module_dict).__name__}"
-    )
+    assert isinstance(
+        module_dict, dict
+    ), f"build_module_dict must return a flat dict (Option 1), got {type(module_dict).__name__}"
     assert not isinstance(module_dict, list)
     assert len(module_dict) >= 1
 

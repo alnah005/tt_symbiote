@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-
 import ttnn
 
 TTNN_TO_TORCH = {
@@ -163,6 +162,7 @@ def optimized_tree_map_with_only_dict_list(*args, **kwargs):
 
 def tree_map(*args, **kwargs):
     import time
+
     from tt_symbiote.core.run_config import DispatchManager
 
     start_time = time.time()

@@ -10,7 +10,7 @@ optional post-replacement model-specific patches). Recipes are registered
 at import time using the :func:`register_recipe` decorator and looked up
 by Auto* factories via the HF model class name (e.g. ``"BailingMoeV2ForCausalLM"``).
 
-Per ``PROJECT_PROPOSAL.md`` §4.2 this module imports **nothing** from
+Per ``docs/internal/PROJECT_PROPOSAL.md`` §4.2 this module imports **nothing** from
 ``transformers`` so model recipes can populate the registry without a
 runtime HF dependency.
 """
@@ -39,7 +39,7 @@ class Recipe(Protocol):
       model-specific KV cache object (e.g. a paged attention cache). Called
       by :func:`tt_symbiote.utils.device_management.set_device` once every
       module has been bound to ``device`` and weights have been moved.
-      Resolves Q9 from ``PROJECT_PROPOSAL.md`` (the model owns its KV
+      Resolves Q9 from ``docs/internal/PROJECT_PROPOSAL.md`` (the model owns its KV
       cache, mirroring the ``tt_transformers`` constructor pattern but
       delayed to ``set_device`` time so the device is known).
 
@@ -89,9 +89,7 @@ def register_recipe(hf_class_name: str) -> Callable[[type], type]:
     def decorator(cls):
         instance = cls()
         if not hasattr(instance, "build_module_dict"):
-            raise TypeError(
-                f"Recipe {cls.__name__} is missing required method build_module_dict(model)"
-            )
+            raise TypeError(f"Recipe {cls.__name__} is missing required method build_module_dict(model)")
         if not hasattr(instance, "post_register"):
             instance.post_register = lambda model: None  # noqa: E731
         if not hasattr(instance, "make_kv_cache"):

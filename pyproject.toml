@@ -1,13 +1,25 @@
 [build-system]
 requires = [
   "setuptools==70.1.0",
-  "setuptools-scm==8.1.0",
   "wheel",
 ]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "tt_symbiote"
+# Versioning policy: literal, branch-driven.
+#
+# The release branch (`transformers5.9.0`) IS the release marker —
+# tt_symbiote does NOT use git tags. To cut a new release, bump this
+# version in a one-line commit on the release branch, push, then
+# trigger the publish workflow (`workflow_dispatch`) from the GitHub
+# Actions UI. See `docs/release_process.md`.
+#
+# `setuptools-scm` is intentionally NOT used: with no tags it falls
+# back to noisy `0.0.1.dev<n>+<sha>` strings that PyPI rejects as
+# pre-releases. The literal pin below is the source of truth that
+# `importlib.metadata.version("tt_symbiote")` returns.
+version = "0.1.0"
 authors = [
     {name = "Tenstorrent"},
     {email = "info@tenstorrent.com"},
@@ -17,8 +29,20 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 keywords = ["tenstorrent", "ttnn", "transformers", "huggingface", "tt-metal", "machine learning"]
-dynamic = ["version"]
-# Pinning policy (per PROJECT_PROPOSAL.md §10):
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+# Pinning policy (per docs/internal/PROJECT_PROPOSAL.md §10):
 #
 # - `transformers` is pinned to a single EXACT version per tt_symbiote branch.
 #   Different transformers versions can ship model code or config schemas that
@@ -79,6 +103,22 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# UX-convenience extra for users whose system sfpi already matches the pin
+# below. `pip install "tt_symbiote[ttnn]"` pulls the exact ttnn wheel that
+# Phase-8 demos are validated against. The pin here MUST stay in lockstep
+# with `scripts/ttnn-pin.txt` (canonical source of truth: the bootstrap
+# script reads it to probe the system sfpi).
+#
+# IMPORTANT: this extra is intentionally NOT in the hard `dependencies`
+# above. Picking the wrong ttnn for the host's sfpi makes every
+# `open_mesh_device(...)` fail with "unrecognized command-line option".
+# Users without a matching sfpi should either install ttnn manually after
+# verifying the pair (see `docs/install_prerequisites.md`) or use
+# `scripts/bootstrap_venv.sh`, which validates the sfpi *before* pip-
+# installing.
+ttnn = [
+  "ttnn==0.68.0",
+]
 dev = [
   "pre-commit",
   "pytest",
@@ -88,6 +128,10 @@ dev = [
   "autoflake==2.3.1",
   "ruff",
   "yamllint==1.35.1",
+  # Release tooling — matches `make dist` and `docs/release_process.md`'s
+  # pre-tag gate (`python -m build && twine check dist/*`).
+  "build>=1.0",
+  "twine>=4.0",
 ]
 
 [project.urls]
@@ -97,16 +141,16 @@ Issues = "https://github.com/alnah005/tt_symbiote/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+# `_experimental/` holds unregistered modeling code that survives from
+# earlier phases. It is NOT shipped to PyPI users; see
+# src/tt_symbiote/_experimental/__init__.py.
+exclude = ["tt_symbiote._experimental*"]
 
-[tool.setuptools_scm]
-fallback_version = "0.0.0.dev0"
-tag_regex = '^(?:v)?(?P<version>\d+\.\d+\.\d+(?:-rc\d+)?)$'
-git_describe_command = [
-  "git", "describe", "--dirty", "--tags", "--long",
-  "--match", "v[0-9]*.[0-9]*.[0-9]*",
-  "--match", "v[0-9]*.[0-9]*.[0-9]*-rc[0-9]*",
-  "--exclude", "*-dev*",
-]
+# Keep migration-era backups (`*.bak`, `*.orig`) out of the published
+# sdist/wheel. They live next to live modules for traceability but are
+# not part of the runtime surface.
+[tool.setuptools.exclude-package-data]
+"*" = ["*.bak", "*.orig", "*.rej", "*~"]
 
 [tool.black]
 line-length = 120
@@ -122,5 +166,9 @@ skip = ["__init__.py"]
 line-length = 120
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-q"
+# Default collection paths. `tests/experimental/` is deliberately excluded
+# (see tests/experimental/README.md) — those tests target models whose
+# `src/tt_symbiote/models/<name>/` package is NOT in the supported
+# `_RECIPE_BEARING_SUBPACKAGES` registry and are not guaranteed to import.
+testpaths = ["tests/auto", "tests/capabilities", "tests/models"]
+addopts = "-q --ignore=tests/experimental"

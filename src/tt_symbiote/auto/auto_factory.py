@@ -4,7 +4,7 @@
 
 """Base ``Auto*`` factory shared by every ``tt_symbiote.AutoModel*`` class.
 
-Per ``PROJECT_PROPOSAL.md`` §4.2 each ``Auto*`` class is a thin wrapper over
+Per ``docs/internal/PROJECT_PROPOSAL.md`` §4.2 each ``Auto*`` class is a thin wrapper over
 the corresponding ``transformers.Auto*`` class that, after HF loading,
 applies the registered tt_symbiote recipe (if any) and returns the
 TTNN-augmented model. When no recipe is registered for the loaded model
@@ -36,11 +36,31 @@ class _BaseAutoModelClass:
 
     @classmethod
     def from_pretrained(cls, pretrained_name_or_path: Any, *args: Any, **kwargs: Any) -> Any:
-        """Load the HF model, apply the tt_symbiote recipe if one is registered."""
+        """Load the HF model, apply the tt_symbiote recipe if one is registered.
+
+        tt_symbiote-specific keyword arguments (popped before the call
+        reaches HF's ``transformers.Auto*.from_pretrained``):
+
+        - ``kv_cache_kwargs`` (default ``None``): mapping that the recipe's
+          ``make_kv_cache`` hook receives at :func:`set_device` time. The
+          cache shape is a model-config decision (capacity, block size,
+          batch budget), so it pairs naturally with ``from_pretrained``
+          rather than the device-binding call. Stored on the returned
+          model as ``model._tt_kv_cache_kwargs``; ``set_device`` reads it
+          and applies any per-key override that may also be passed at
+          the bind site.
+
+          For Ling-mini-2.0 the recipe consumes
+          ``{"block_size": 64, "max_num_blocks": 512, "batch_size": 1}``.
+          For Gemma-4 / Qwen3-VL / ResNet the recipe's ``make_kv_cache``
+          is a no-op (HF ``DynamicCache`` is sufficient), so the kwarg
+          is silently ignored.
+        """
         if cls._HF_AUTO_CLASS is None:
-            raise NotImplementedError(
-                f"{cls.__name__} has no HF counterpart configured (set _HF_AUTO_CLASS)."
-            )
+            raise NotImplementedError(f"{cls.__name__} has no HF counterpart configured (set _HF_AUTO_CLASS).")
+
+        # Pop tt_symbiote-only kwargs before they reach HF.
+        kv_cache_kwargs = kwargs.pop("kv_cache_kwargs", None)
 
         # Install compat shims before HF's dynamic remote-code loader runs:
         # Hub modeling files authored against older transformers releases
@@ -60,6 +80,9 @@ class _BaseAutoModelClass:
                 f"set_device() will be a no-op for this model.",
                 stacklevel=2,
             )
+            # Still attach the kv_cache_kwargs in case the user later
+            # re-registers a recipe and calls set_device.
+            model._tt_kv_cache_kwargs = dict(kv_cache_kwargs) if kv_cache_kwargs else {}
             return model
 
         module_dict = recipe.build_module_dict(model)
@@ -67,10 +90,11 @@ class _BaseAutoModelClass:
         recipe.post_register(model)
         # Marker read by tt_symbiote.set_device for the hard-error contract.
         model._tt_symbiote_has_recipe = True
+        # Stash the cache-shape intent for set_device to consume; default
+        # to an empty dict so set_device can always splat it unconditionally.
+        model._tt_kv_cache_kwargs = dict(kv_cache_kwargs) if kv_cache_kwargs else {}
         return model
 
 
 class _BaseAutoBackboneClass(_BaseAutoModelClass):
     """Backbone-style Autos share the model-class plumbing in v0.1."""
-
-    pass

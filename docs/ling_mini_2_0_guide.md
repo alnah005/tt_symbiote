@@ -1,13 +1,16 @@
-/# Ling-mini-2.0 in `tt_symbiote`
+# Ling-mini-2.0 in `tt_symbiote`
 
 A complete guide to **(A)** how `inclusionAI/Ling-mini-2.0` is implemented as
 the first reference port in `tt_symbiote`, and **(B)** how to run it on a
 Tenstorrent T3K through the public `from tt_symbiote import
 AutoModelForCausalLM` API.
 
-> Audience: someone who has `tt_symbiote` installed in a `tt-metal` Python
-> environment, has access to T3K hardware, and wants to either run the model
-> or add a new one following the same pattern.
+> Audience: someone who has bootstrapped the standalone `tt_symbiote`
+> venv via [`scripts/bootstrap_venv.sh`](../scripts/bootstrap_venv.sh) (or
+> who develops against tt-metal HEAD per §B.1), has access to T3K
+> hardware, and wants to either run the model or add a new one following
+> the same pattern. No `tt-metal` source checkout is required for the
+> standalone path.
 
 ---
 
@@ -155,10 +158,10 @@ The decoder layers, the final RMS norm, `nn.Embedding`, and the rotary
 embedding are **not** in this dict — `TTNNBailingMoeV2Model.from_torch`
 owns the conversion of everything inside its own subtree (see A.4).
 
-This is the **Option 1 / single-pass** contract resolved in PROJECT_PROPOSAL.md
+This is the **Option 1 / single-pass** contract resolved in docs/internal/PROJECT_PROPOSAL.md
 OQ-2: each TTNN wrapper class is responsible for the conversion of its
 own children. Recipes only declare outer-level swaps. See
-[`docs/migration_notes.md`](./migration_notes.md) §Phase 5 for the
+[`docs/internal/migration_notes.md`](./internal/migration_notes.md) §Phase 5 for the
 options that were considered and why Option 1 won.
 
 ### `post_register(model)` — patch the model
@@ -179,7 +182,7 @@ without complaint.
 
 ### `make_kv_cache(model, device, **kwargs)` — paged attention
 
-Optional hook (PROJECT_PROPOSAL.md OQ-9 resolution). Returns a
+Optional hook (docs/internal/PROJECT_PROPOSAL.md OQ-9 resolution). Returns a
 `TTNNPagedAttentionKVCache` configured from `model.config`:
 
 - `num_layers = config.num_hidden_layers`
@@ -191,6 +194,17 @@ Optional hook (PROJECT_PROPOSAL.md OQ-9 resolution). Returns a
 `set_device` calls this *after* the device is bound and weights are
 moved, then attaches the result as `model._tt_kv_cache`. The user
 passes it as `past_key_values=model._tt_kv_cache` to `model.generate`.
+
+The `**kwargs` that reach `make_kv_cache` are sourced (in order, last
+wins per-key) from:
+
+1. `model._tt_kv_cache_kwargs`, which `AutoModelForCausalLM.from_pretrained`
+   populates from its `kv_cache_kwargs=` keyword. This is the
+   recommended path — the cache shape is a model-config decision that
+   pairs naturally with model loading.
+2. `kwargs["kv_cache_kwargs"]` on the `set_device` call site, kept as
+   an escape hatch for A/B-testing different cache budgets without
+   reloading the model.
 
 If a recipe has no `make_kv_cache` (most non-LM models), the no-op
 default installed by the `@register_recipe` decorator quietly returns
@@ -273,7 +287,7 @@ mandatory final step. It does six things in order:
    previously had to write by hand.
 5. **`make_kv_cache(...)`**: if a recipe is registered for
    `type(obj).__name__` and exposes `make_kv_cache`, the result is
-   built and attached as `obj._tt_kv_cache` (PROJECT_PROPOSAL.md Q9).
+   built and attached as `obj._tt_kv_cache` (docs/internal/PROJECT_PROPOSAL.md Q9).
 6. **Marks the model**: `_tt_symbiote_device_set = True` on the root
    and on every visited TTNN module.
 
@@ -458,8 +472,8 @@ root.
 
 ## B.2 — The runnable script
 
-The canonical runnable example is at
-[`/home/aroberge/scratch/run_ling.py`](../../scratch/run_ling.py):
+The canonical runnable example is in the repo at
+[`examples/e2e/run_ling_mini_2_0.py`](../examples/e2e/run_ling_mini_2_0.py):
 
 ```python
 import os
@@ -514,8 +528,8 @@ ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 Run it (assumes you've already bootstrapped a venv per §B.1):
 
 ```bash
-source /home/aroberge/tt_symbiote/.venv/bin/activate
-python /home/aroberge/scratch/run_ling.py
+source /home/<you>/tt_symbiote/.venv/bin/activate
+python examples/e2e/run_ling_mini_2_0.py
 ```
 
 ## B.3 — Line-by-line walkthrough
@@ -670,6 +684,6 @@ To add a new model `Foo` (HF class `FooForCausalLM`):
 - [`src/tt_symbiote/_hf_compat.py`](../src/tt_symbiote/_hf_compat.py) — `is_torch_fx_available` + `ROPE_INIT_FUNCTIONS["default"]` shims.
 
 For deeper background on why each piece looks the way it does, see
-[`docs/migration_notes.md`](./migration_notes.md) §Phase 5 and
-[`PROJECT_PROPOSAL.md`](../PROJECT_PROPOSAL.md) §§4 (public API) and §10
+[`docs/internal/migration_notes.md`](./internal/migration_notes.md) §Phase 5 and
+[`docs/internal/PROJECT_PROPOSAL.md`](../docs/internal/PROJECT_PROPOSAL.md) §§4 (public API) and §10
 (dependency policy).

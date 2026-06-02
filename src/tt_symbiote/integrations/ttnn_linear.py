@@ -4,11 +4,12 @@
 
 """Linear layer implementations for TTNN."""
 
-from torch import nn
 import torch
-from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 import ttnn
-from tt_symbiote.core.module import TTNNModule, deallocate_weights_after, run_on_devices, DeviceArch
+from torch import nn
+from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
+
+from tt_symbiote.core.module import DeviceArch, TTNNModule, deallocate_weights_after, run_on_devices
 from tt_symbiote.core.run_config import trace_disabled, trace_enabled
 
 

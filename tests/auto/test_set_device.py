@@ -147,9 +147,7 @@ def test_set_device_swaps_unsupported_arch_module(reset_mesh_env):
 
     assert parent.tt_child is fallback, "module should be swapped to fallback when arch unsupported"
     messages = [str(w.message) for w in captured]
-    assert any("not supported" in m for m in messages), (
-        f"Expected 'not supported' warning; got {messages}"
-    )
+    assert any("not supported" in m for m in messages), f"Expected 'not supported' warning; got {messages}"
 
 
 def test_set_device_keeps_supported_arch_module(reset_mesh_env):
@@ -169,6 +167,130 @@ def test_module_call_before_set_device_raises_with_set_device_message():
     mod._fallback_torch_layer = nn.Identity()
     with pytest.raises(AssertionError) as info:
         mod(torch.zeros(1))
-    assert "set_device" in str(info.value), (
-        f"AssertionError must mention set_device; got: {info.value!r}"
+    assert "set_device" in str(info.value), f"AssertionError must mention set_device; got: {info.value!r}"
+
+
+# ---------------------------------------------------------------------------
+# kv_cache_kwargs resolution: from_pretrained-declared vs set_device-override
+# ---------------------------------------------------------------------------
+#
+# The cache shape (capacity, block size, batch budget) is a model-config
+# decision, so the recommended path is to pass it at load time
+# (``AutoModelForCausalLM.from_pretrained(..., kv_cache_kwargs={...})``)
+# which stashes it on ``model._tt_kv_cache_kwargs``. ``set_device`` reads
+# that and merges any per-key override the caller passes at the bind site.
+# The merge resolution (override wins) is the contract these tests pin
+# down.
+
+
+class _RecipeStub:
+    """Recipe stand-in that records the kwargs passed to ``make_kv_cache``."""
+
+    def __init__(self):
+        self.received: dict = {}
+        self.called: int = 0
+
+    def build_module_dict(self, model):  # pragma: no cover - never called by set_device
+        return {}
+
+    def post_register(self, model):  # pragma: no cover - never called by set_device
+        return None
+
+    def make_kv_cache(self, model, device, **kwargs):
+        self.called += 1
+        self.received = dict(kwargs)
+        # Return a sentinel so ``set_device`` attaches it as ``model._tt_kv_cache``.
+        return ("stub-kv-cache", kwargs)
+
+
+class _ModelStub(nn.Module):
+    """Plain ``nn.Module`` whose class name is what ``set_device`` looks up in the registry."""
+
+
+def _register_stub_recipe(monkeypatch):
+    """Insert ``_RecipeStub`` into ``TT_MODEL_REGISTRY`` under ``_ModelStub`` for one test."""
+    from tt_symbiote.auto import auto_mappings
+
+    stub = _RecipeStub()
+    original = dict(auto_mappings.TT_MODEL_REGISTRY)
+    monkeypatch.setattr(
+        auto_mappings,
+        "TT_MODEL_REGISTRY",
+        {**original, "_ModelStub": stub},
     )
+    return stub
+
+
+def test_kv_cache_kwargs_from_pretrained_flows_to_make_kv_cache(monkeypatch, reset_mesh_env):
+    """``model._tt_kv_cache_kwargs`` (set by from_pretrained) should reach make_kv_cache."""
+    stub_recipe = _register_stub_recipe(monkeypatch)
+    model = _ModelStub()
+    model._tt_kv_cache_kwargs = {"max_num_blocks": 512, "block_size": 64}
+    device = _StubMeshDevice(num_devices=1)
+
+    set_device(model, device, dump_visualization=False, register_forward_hook=False)
+
+    assert stub_recipe.called == 1, "make_kv_cache should be invoked exactly once"
+    assert stub_recipe.received == {
+        "max_num_blocks": 512,
+        "block_size": 64,
+    }, f"from_pretrained kwargs should propagate verbatim; got {stub_recipe.received}"
+    assert hasattr(model, "_tt_kv_cache"), "set_device should attach the returned cache"
+
+
+def test_set_device_override_wins_per_key(monkeypatch, reset_mesh_env):
+    """An override passed to ``set_device`` should win over the stashed kwargs per-key."""
+    stub_recipe = _register_stub_recipe(monkeypatch)
+    model = _ModelStub()
+    model._tt_kv_cache_kwargs = {"max_num_blocks": 512, "block_size": 64}
+    device = _StubMeshDevice(num_devices=1)
+
+    set_device(
+        model,
+        device,
+        dump_visualization=False,
+        register_forward_hook=False,
+        # Override one key, leave the other to fall through from the stash.
+        kv_cache_kwargs={"max_num_blocks": 1024},
+    )
+
+    assert stub_recipe.received == {
+        "max_num_blocks": 1024,  # overridden
+        "block_size": 64,  # inherited from from_pretrained
+    }, f"override should win per-key; got {stub_recipe.received}"
+
+
+def test_missing_stash_falls_back_to_empty_dict(monkeypatch, reset_mesh_env):
+    """If the model was *not* loaded via from_pretrained, make_kv_cache should still be called.
+
+    Backward-compat path: pre-refactor callers built the model themselves
+    (no ``_tt_kv_cache_kwargs`` attribute) and passed kwargs at the bind
+    site only. That continues to work.
+    """
+    stub_recipe = _register_stub_recipe(monkeypatch)
+    model = _ModelStub()
+    # Intentionally do not set ``model._tt_kv_cache_kwargs``.
+    device = _StubMeshDevice(num_devices=1)
+
+    set_device(
+        model,
+        device,
+        dump_visualization=False,
+        register_forward_hook=False,
+        kv_cache_kwargs={"max_num_blocks": 256},
+    )
+
+    assert stub_recipe.received == {"max_num_blocks": 256}, stub_recipe.received
+
+
+def test_set_device_with_no_kv_cache_kwargs_anywhere_uses_recipe_defaults(monkeypatch, reset_mesh_env):
+    """No-op-kwarg path: neither from_pretrained nor set_device declared anything."""
+    stub_recipe = _register_stub_recipe(monkeypatch)
+    model = _ModelStub()
+    device = _StubMeshDevice(num_devices=1)
+
+    set_device(model, device, dump_visualization=False, register_forward_hook=False)
+
+    assert (
+        stub_recipe.received == {}
+    ), f"With nothing declared, make_kv_cache should see an empty kwargs dict; got {stub_recipe.received}"

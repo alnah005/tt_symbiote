@@ -5,22 +5,23 @@
 """Mixture of Experts implementations for TTNN."""
 
 
-import torch
-from torch import nn
-import ttnn
-from transformers.configuration_utils import PretrainedConfig
-from torch.nn import functional as F
-from tt_symbiote.core.module import TTNNModule
-from tt_symbiote.core.tensor import TorchTTNNTensor
-from ttnn.model_preprocessing import preprocess_linear_weight
-from tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
-from tt_symbiote.integrations.ttnn_linear import (
-    TTNNLinearSilu,
-    TTNNLinearLLamaIColShardedWRowSharded,
-    TTNNLinearIColShardedWRowSharded,
-)
-from tt_symbiote.core.run_config import disable_trace
 import math
+
+import torch
+import ttnn
+from torch import nn
+from torch.nn import functional as F
+from transformers.configuration_utils import PretrainedConfig
+from ttnn.model_preprocessing import preprocess_linear_weight
+
+from tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices
+from tt_symbiote.core.run_config import disable_trace
+from tt_symbiote.core.tensor import TorchTTNNTensor
+from tt_symbiote.integrations.ttnn_linear import (
+    TTNNLinearIColShardedWRowSharded,
+    TTNNLinearLLamaIColShardedWRowSharded,
+    TTNNLinearSilu,
+)
 
 
 # Helper to robustly convert various tensor types to a torch.Tensor

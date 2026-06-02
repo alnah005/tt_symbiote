@@ -5,8 +5,8 @@
 """Tensor function implementations for TTNN."""
 
 import torch
-
 import ttnn
+
 from tt_symbiote.core.module import TTNNModule
 from tt_symbiote.core.utils import ensure_tile_layout
 

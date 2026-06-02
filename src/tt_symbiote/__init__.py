@@ -26,6 +26,13 @@ Example::
     out = model.generate(**inputs, max_new_tokens=128)
 """
 
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
+try:
+    __version__ = _pkg_version("tt_symbiote")
+except PackageNotFoundError:  # editable install before pip resolves metadata
+    __version__ = "0.0.0+unknown"
+
 from tt_symbiote.auto import (
     AutoBackbone,
     AutoConfig,
@@ -82,6 +89,7 @@ from tt_symbiote.auto import (
     register_recipe,
 )
 from tt_symbiote.core.run_config import DispatchManager, TracedRun
+from tt_symbiote.utils import compatibility
 from tt_symbiote.utils.device_management import set_device
 from tt_symbiote.utils.module_replacement import register_modules
 
@@ -160,6 +168,7 @@ __all__ = [
     "Recipe",
     "TT_MODEL_REGISTRY",
     "TracedRun",
+    "compatibility",
     "register_modules",
     "register_recipe",
     "set_device",

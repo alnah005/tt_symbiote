@@ -662,34 +662,34 @@ When invoking a skill, spawn a fresh sub-agent via the Agent tool:
 Agent tool call:
   prompt: |
     You are a specialized agent for the '<skill_name>' skill.
-    
+
     ## SKILL INSTRUCTIONS
     <full content of the skill's SKILL.md, obtained in step 3a>
-    
+
     ## CONTEXT
     Model: <model_name>
     Model ID: <hf_model_id>
     Device: <device_arch>
     TT_METAL_COMMIT: <commit_hash>
     Integration path: <recipe|manual>
-    
+
     ## CURRENT STATE
     <content of bringup_status.json>
-    
+
     ## AUTONOMOUS DECISIONS (from user decision profile)
     - trust_remote_code: always True
     - PCC failure: use NORMAL mode only (no DPL/SEL)
     - Missing ops: integration module if reusable by 2+ models, inline otherwise
     - Do NOT ask any questions. Make all decisions autonomously.
     - Log every decision with rationale.
-    
+
     ## YOUR TASK
     Execute the skill following its instructions. Complete the plan-verify-execute loop.
-    
+
     IMPORTANT: The skill's SKILL.md contains "ASK the user" prompts. IGNORE those.
     Instead, make all decisions autonomously using the decision profile above
     and the model context provided.
-    
+
     Report back: what you did, what passed, what failed, what artifacts were created.
 ```
 

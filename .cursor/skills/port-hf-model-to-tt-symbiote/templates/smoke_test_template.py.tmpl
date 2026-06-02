@@ -1,0 +1,66 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""Smoke test for the <MODEL_HUMAN_NAME> CPU-first port.
+
+Verifies that the recipe loads cleanly through the new public API
+without needing live hardware or multi-GB weight downloads:
+
+1. The recipe is registered under ``"<HF_CLASS>"``.
+2. The recipe's ``build_module_dict`` is empty (CPU-first contract).
+3. The compatibility report reads the design-time lists and reports
+   an empty runtime ledger.
+
+The end-to-end demo lives in ``examples/e2e/<NAME>/run_<MODEL_FILENAME>.py``.
+That script pulls weights and requires a live mesh device, so it
+intentionally does not run under pytest.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+
+@pytest.fixture(scope="module")
+def model_recipe():
+    """Side-effect import: load the modeling package, get the recipe."""
+    import tt_symbiote.models.<NAME>  # noqa: F401
+    from tt_symbiote.auto.auto_mappings import TT_MODEL_REGISTRY
+
+    assert "<HF_CLASS>" in TT_MODEL_REGISTRY
+    return TT_MODEL_REGISTRY["<HF_CLASS>"]
+
+
+def test_recipe_is_cpu_first_phase(model_recipe):
+    """CPU-first contract: empty build_module_dict, populated coverage lists."""
+    assert model_recipe.build_module_dict(None) == {}
+    assert model_recipe.tt_implemented == []
+    assert len(model_recipe.cpu_fallback) >= <MIN_CPU_FALLBACK_COUNT>
+
+
+def test_recipe_make_kv_cache_is_noop(model_recipe):
+    """HF DynamicCache handles short generation; CPU-first commit keeps it."""
+    assert model_recipe.make_kv_cache(model=None, device=None) is None
+
+
+def test_compatibility_report_shape():
+    """``compatibility.report`` returns the JSON-friendly Phase 7 shape."""
+    from tt_symbiote.utils.compatibility import report, reset_runtime_observations
+
+    class <HF_CLASS>:  # noqa: N801 — match HF class name
+        pass
+
+    reset_runtime_observations()
+    out = report(<HF_CLASS>())
+
+    for top_key in ("model_class", "design_time", "runtime_observed", "summary"):
+        assert top_key in out, f"report missing top-level key {top_key!r}"
+
+    for design_key in ("tt_implemented", "cpu_fallback", "out_of_scope"):
+        assert design_key in out["design_time"]
+
+    for runtime_key in ("by_class", "by_module", "unexpected"):
+        assert runtime_key in out["runtime_observed"]
+
+    assert out["summary"]["runtime_fallback_count"] == 0

@@ -1,7 +1,3 @@
-import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
-
-
 def draw_model_graph(model, max_depth=None, output_file="model_graph.png"):
     """Create a clean tree visualization showing module nesting.
 
@@ -9,7 +5,26 @@ def draw_model_graph(model, max_depth=None, output_file="model_graph.png"):
         model: The PyTorch model to visualize
         max_depth: Maximum depth to traverse. If None, auto-determined based on model structure
         output_file: Path to save the visualization
+
+    Notes:
+        `matplotlib` is imported lazily here so the package import chain
+        does not require it. If matplotlib is not installed, the call is
+        a soft no-op with a warning rather than a hard failure: most
+        runtime callers (`set_device` with `dump_visualization=True`)
+        consider the diagram a nice-to-have, not a correctness signal.
     """
+    try:
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Rectangle
+    except ImportError:
+        import warnings
+
+        warnings.warn(
+            "draw_model_graph: matplotlib not installed; skipping visualization. "
+            "Install with `pip install matplotlib` to re-enable.",
+            stacklevel=2,
+        )
+        return
 
     # Auto-determine max_depth if not provided
     if max_depth is None:

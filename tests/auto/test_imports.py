@@ -6,7 +6,7 @@
 
 import pytest
 
-# The hand-listed 43 AutoModel* classes per ``PROJECT_PROPOSAL.md`` §4.3
+# The hand-listed 43 AutoModel* classes per ``docs/internal/PROJECT_PROPOSAL.md`` §4.3
 # plus the processor / config autos and TTNN-specific public API.
 EXPECTED_AUTO_MODEL_CLASSES = [
     "AutoModel",
@@ -85,9 +85,7 @@ def test_top_level_auto_model_import(name):
     # Every Auto* class must subclass _BaseAutoModelClass.
     from tt_symbiote.auto.auto_factory import _BaseAutoModelClass
 
-    assert issubclass(cls, _BaseAutoModelClass), (
-        f"tt_symbiote.{name} must subclass _BaseAutoModelClass"
-    )
+    assert issubclass(cls, _BaseAutoModelClass), f"tt_symbiote.{name} must subclass _BaseAutoModelClass"
     assert cls._HF_AUTO_CLASS is not None, f"tt_symbiote.{name}._HF_AUTO_CLASS is unset"
 
 
@@ -106,7 +104,7 @@ def test_top_level_tt_public_symbol(name):
 
 
 def test_count_matches_proposal():
-    # Sanity check that we ship at least 43 AutoModel* classes (PROJECT_PROPOSAL.md §4.3).
+    # Sanity check that we ship at least 43 AutoModel* classes (docs/internal/PROJECT_PROPOSAL.md §4.3).
     assert len(EXPECTED_AUTO_MODEL_CLASSES) >= 43
 
 

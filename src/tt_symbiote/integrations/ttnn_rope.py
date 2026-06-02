@@ -5,10 +5,11 @@
 """Rotary Position Embedding (RoPE) implementations for TTNN."""
 
 from typing import Any, Tuple, Union
+
 import torch
 import torch.nn as nn
-
 import ttnn
+
 from tt_symbiote.core.module import TTNNModule
 
 

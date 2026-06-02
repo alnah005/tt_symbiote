@@ -319,26 +319,26 @@ Do not manually edit this file -- it is managed by the model-bringup skill.
 
 ## Autonomous Orchestration Pattern
 
-The model-bringup skill implements the deep-work pattern (plan -> evaluate -> execute -> 
+The model-bringup skill implements the deep-work pattern (plan -> evaluate -> execute ->
 re-plan on failure) as an autonomous orchestrator. Key properties:
 
 1. **Single input**: Only a HuggingFace model ID is required. Everything else is derived.
-2. **Decision profile**: All decisions are pre-encoded (integration path, PCC handling, 
+2. **Decision profile**: All decisions are pre-encoded (integration path, PCC handling,
    retry limits, validation samples, etc.). The orchestrator never stops to ask the user.
-3. **Stage isolation**: Each stage (scaffold, pcc-test-gen, op-sweep, tracy-profiling, 
-   perf-analysis, config-optimize, traced-execution) runs as a separate deep-work cycle 
+3. **Stage isolation**: Each stage (scaffold, pcc-test-gen, op-sweep, tracy-profiling,
+   perf-analysis, config-optimize, traced-execution) runs as a separate deep-work cycle
    with its own planner, evaluator, and executor sub-agents.
-4. **Curated context**: Planners receive CLAUDE.md + the relevant skill SKILL.md + curated 
-   tech reports + bringup_status.json. They do NOT receive raw deep-plan files, prior 
+4. **Curated context**: Planners receive CLAUDE.md + the relevant skill SKILL.md + curated
+   tech reports + bringup_status.json. They do NOT receive raw deep-plan files, prior
    iteration plans, or the full 49 tech report dump. The orchestrator explicitly reads each
    skill's SKILL.md file before composing the planner prompt.
-5. **State tracking**: bringup_status.json records phase status, artifacts, test results, 
+5. **State tracking**: bringup_status.json records phase status, artifacts, test results,
    decision log, and retry counts. It is the single source of truth for orchestration state.
-6. **Failure handling**: Each stage retries up to 3 times (outer loop). Within each retry, 
-   the evaluator may reject the plan up to 2 times (inner loop). After 3 outer failures, the 
-   stage is skipped and noted in the final report. The orchestrator continues to the next 
+6. **Failure handling**: Each stage retries up to 3 times (outer loop). Within each retry,
+   the evaluator may reject the plan up to 2 times (inner loop). After 3 outer failures, the
+   stage is skipped and noted in the final report. The orchestrator continues to the next
    feasible stage.
-7. **Semantic validation**: The final step generates actual model output and checks for 
+7. **Semantic validation**: The final step generates actual model output and checks for
    coherence (not just PCC numbers).
 
 ## Available Skills

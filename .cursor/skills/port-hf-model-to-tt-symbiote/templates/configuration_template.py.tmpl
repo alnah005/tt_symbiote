@@ -1,0 +1,93 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""<MODEL_HUMAN_NAME> configuration — HF re-export plus TTNN-side tuning lookup.
+
+Mirrors :mod:`tt_symbiote.models.gemma4.configuration_gemma4`: the
+upstream :class:`transformers.<NAME>.<HF_CONFIG_CLASS>` fully describes
+the architecture so we re-export it untouched. What lives here is the
+per-checkpoint TTNN runtime knobs — mesh shape, ``l1_small_size``,
+device dtype, hardware-verification flag — that the recipe needs at
+``set_device`` time and that aren't part of HF's hyperparameter surface.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, Tuple
+
+from transformers.models.<NAME>.configuration_<NAME> import (
+    <CONFIG_REEXPORTS>,
+)
+
+__all__ = [
+    <CONFIG_REEXPORTS_QUOTED>,
+    "<NAME_UPPER>_TTNN_TUNING",
+    "lookup_ttnn_tuning",
+]
+
+
+_DEFAULT_TUNING: Dict[str, Any] = {
+    # Mesh shape recommended for this variant. Demo scripts pass it
+    # straight to ``ttnn.open_mesh_device``; users with non-default
+    # hardware can override.
+    "mesh_shape": <MESH_SHAPE>,
+    # ``l1_small_size`` for ``ttnn.open_mesh_device``. The CPU-first port
+    # does not exercise any TTNN kernels, so the conservative ResNet
+    # value carries no real cost while leaving headroom for the first
+    # TTNN wrappers to land.
+    "l1_small_size": 245760,
+    # Target dtype used by the demos when calling ``from_pretrained``.
+    "dtype": "bfloat16",
+    # ``True`` once a real end-to-end run has produced semantically
+    # correct outputs on the listed mesh shape.
+    "hw_verified": False,
+    # Notes consumed by ``docs/supported_models.md`` for status flags
+    # that aren't a simple yes/no.
+    "notes": "",
+}
+
+
+<NAME_UPPER>_TTNN_TUNING: Dict[str, Dict[str, Any]] = {
+    # One entry per canonical instruction-tuned checkpoint. The demo
+    # target gets ``hw_verified=True`` once Phase D passes; all others
+    # ship ``False`` until exercised on hardware.
+    <VARIANT_TABLE>
+}
+
+
+_SHAPE_TO_CHECKPOINT: Dict[Tuple[int, ...], str] = {
+    # Maps a discriminating shape tuple to the canonical checkpoint id.
+    # Used by ``lookup_ttnn_tuning`` for finetunes whose
+    # ``_name_or_path`` isn't in the table above but whose architecture
+    # matches a known variant.
+    <SHAPE_LOOKUP>
+}
+
+
+def lookup_ttnn_tuning(model: Any) -> Dict[str, Any]:
+    """Resolve the TTNN tuning dict for a loaded <MODEL_HUMAN_NAME> model.
+
+    Lookup ladder:
+
+    1. Exact match on ``model.config._name_or_path``.
+    2. Shape match against the canonical variants.
+    3. ``_DEFAULT_TUNING`` fallback (``hw_verified=False``).
+
+    A *copy* is returned so downstream mutation in
+    :meth:`<CLASS_NAME_PASCAL>.post_register` does not pollute the table
+    for the next ``from_pretrained`` call.
+    """
+    config = getattr(model, "config", None)
+
+    name = getattr(config, "_name_or_path", None) if config is not None else None
+    if isinstance(name, str) and name in <NAME_UPPER>_TTNN_TUNING:
+        return dict(<NAME_UPPER>_TTNN_TUNING[name])
+
+    if config is not None:
+        shape_key = <SHAPE_KEY_BUILDER>
+        canonical = _SHAPE_TO_CHECKPOINT.get(shape_key)
+        if canonical is not None:
+            return dict(<NAME_UPPER>_TTNN_TUNING[canonical])
+
+    return dict(_DEFAULT_TUNING)
