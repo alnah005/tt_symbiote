@@ -28,7 +28,7 @@ Fine-tune configuration for one specific module.
   - Compute config: override `move_weights_to_device_impl()`
   - Memory layout: override `forward()` with appropriate memory_config
 
-**CRITICAL**: Do NOT modify shared integration modules in `src/tt_symbiote/integrations/`.
+**CRITICAL**: Do NOT modify shared integration modules in `src/tt_symbiote/modules/`.
 
 **TT_METAL_COMMIT Hash**: When modifying `modeling_<model_name>.py`, ensure
   `TT_METAL_COMMIT = '<hash>'` is present and current.

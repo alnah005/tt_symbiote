@@ -16,7 +16,7 @@ fully anticipate.
 
 The same SHA is recorded as a "Vendored from" comment in every vendored file
 (`src/tt_symbiote/core/{ccl.py, arch.py}` and
-`src/tt_symbiote/integrations/tt_cnn/{builder, executor, pipeline}.py`).
+`src/tt_symbiote/modules/tt_cnn/{builder, executor, pipeline}.py`).
 
 ## Dependency pinning policy
 
@@ -74,12 +74,12 @@ scratch if a problem is discovered.
 ## `tt_cnn` vendoring (extra to plan)
 
 Discovered during the codemod that
-`src/tt_symbiote/integrations/ttnn_conv.py` (originally `modules/conv.py`) and
+`src/tt_symbiote/modules/ttnn_conv.py` (originally `modules/conv.py`) and
 `tests/models/{vit,resnet}/...` referenced
 `models.tt_cnn.tt.builder.{Conv2dConfiguration, MaxPool2dConfiguration, TtConv2d, TtMaxPool2d}`.
 `tt_cnn` is another tt-metal-only source tree (3 files, ~1858 LOC,
 self-contained on `ttnn`/`torch`). Same situation as `TT_CCL`, so it was
-vendored identically into `src/tt_symbiote/integrations/tt_cnn/` and the
+vendored identically into `src/tt_symbiote/modules/tt_cnn/` and the
 codemod was extended with the rule
 `models.tt_cnn.tt` → `tt_symbiote.modules.tt_cnn`.
 
@@ -109,7 +109,7 @@ code does not exist yet and is part of Phase 7's work.
 | `_staging/` files inspected | 124 (66 `*.py`) |
 | Import lines rewritten by the codemod | 382 |
 | Dispatcher import lines dropped | 43 |
-| Files copied to `src/tt_symbiote/integrations/` | 10 (generic) + 3 (`tt_cnn/`) = 13 |
+| Files copied to `src/tt_symbiote/modules/` | 10 (generic) + 3 (`tt_cnn/`) = 13 |
 | Files copied to `src/tt_symbiote/core/` | 6 + dispatchers/{__init__, 5} = 12 + 2 vendored (ccl, arch) |
 | Files copied to `src/tt_symbiote/utils/` | 4 |
 | Merged `modeling_<model>.py` files | 3 (bailing_moe_v2, gemma4, qwen3_moe; total 8 input files → 3 output files) |
@@ -197,7 +197,7 @@ this attribute to make the proactive fallback-swap decision.
 
 ### Model recipe registry
 
-- `src/tt_symbiote/auto/auto_mappings.py` defines a `Recipe` protocol,
+- `src/tt_symbiote/models/auto/auto_mappings.py` defines a `Recipe` protocol,
   a `TT_MODEL_REGISTRY: dict[str, Recipe]` keyed by HF model class name,
   and the `@register_recipe(hf_class_name="…")` class decorator that
   instantiates the recipe and inserts it into the registry.
@@ -206,19 +206,19 @@ this attribute to make the proactive fallback-swap decision.
 
 ### Auto* factory + 43 classes
 
-- `src/tt_symbiote/auto/auto_factory.py` defines `_BaseAutoModelClass` and
+- `src/tt_symbiote/models/auto/auto_factory.py` defines `_BaseAutoModelClass` and
   `_BaseAutoBackboneClass`. `from_pretrained` delegates to the corresponding
   HF Auto class, looks the loaded model up in `TT_MODEL_REGISTRY`, runs
   `register_modules` with the recipe-provided dict, calls `post_register`,
   and sets `model._tt_symbiote_has_recipe = True` so `set_device` knows to
   enforce the contract on this model.
-- `src/tt_symbiote/auto/modeling_auto.py` hand-lists every `AutoModel*`
+- `src/tt_symbiote/models/auto/modeling_auto.py` hand-lists every `AutoModel*`
   from `transformers.models.auto.modeling_auto` v5.9.0 (43 classes). Each
   is a 3-line subclass setting `_HF_AUTO_CLASS = transformers.AutoModelForX`.
 - Processor / config Autos (`AutoConfig`, `AutoTokenizer`,
   `AutoImageProcessor`, `AutoFeatureExtractor`, `AutoProcessor`,
   `AutoVideoProcessor`) are thin re-exports from `transformers`.
-- `src/tt_symbiote/auto/__init__.py` and the top-level
+- `src/tt_symbiote/models/auto/__init__.py` and the top-level
   `src/tt_symbiote/__init__.py` re-export the public surface (the 43
   `Auto*` classes plus `set_device`, `register_modules`, `register_recipe`,
   `TT_MODEL_REGISTRY`, `DispatchManager`, `TracedRun`).
@@ -381,9 +381,9 @@ Hub modeling files loaded via `trust_remote_code=True` are pinned to the
 `transformers` release the *model author* used at upload time. When
 `tt_symbiote` pins a newer release (5.9.0, per `PROJECT_PROPOSAL.md` §10),
 those Hub files can import symbols that have since been removed or moved
-upstream. [`src/tt_symbiote/_hf_compat.py`](../src/tt_symbiote/_hf_compat.py)
+upstream. [`src/tt_symbiote/utils/hf_compat.py`](../src/tt_symbiote/utils/hf_compat.py)
 holds a small, idempotent shim catalog that
-[`_BaseAutoModelClass.from_pretrained`](../src/tt_symbiote/auto/auto_factory.py)
+[`_BaseAutoModelClass.from_pretrained`](../src/tt_symbiote/models/auto/auto_factory.py)
 installs once before invoking the HF auto factory, restoring the legacy
 API surface those files were written against. Today's catalog:
 
@@ -516,7 +516,7 @@ TTNN-only tuning: a sibling `configuration_<model>.py` next to
 ### `TTNNResNetBottleNeckLayer` lives in `modeling_resnet.py`, not in `integrations/`
 
 There is already a `TTNNBottleneck` in
-[`integrations/ttnn_conv.py`](../src/tt_symbiote/integrations/ttnn_conv.py)
+[`integrations/ttnn_conv.py`](../src/tt_symbiote/modules/ttnn_conv.py)
 that walks torchvision's flat `conv1/bn1/conv2/bn2/conv3/bn3` shape.
 HF's `ResNetBottleNeckLayer` is structurally identical (same three
 convs, same residual add) but its weight tree is nested:

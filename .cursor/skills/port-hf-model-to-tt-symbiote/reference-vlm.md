@@ -224,7 +224,7 @@ Most stock transformers VLMs (Gemma-4, Qwen3-VL) live inside the
 transformers package proper — `trust_remote_code` is **not** required
 and should not be set. Older or community VLMs (e.g. some
 `internlm/internvl-*`) need `trust_remote_code=True`; that's also when
-[`_hf_compat.py`](../../src/tt_symbiote/_hf_compat.py) shims become
+[`hf_compat.py`](../../src/tt_symbiote/utils/hf_compat.py) shims become
 relevant.
 
 ## Worked example: Qwen3-VL

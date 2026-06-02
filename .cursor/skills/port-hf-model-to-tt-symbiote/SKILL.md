@@ -170,7 +170,7 @@ If any of the above fails, do **not** edit the recipe to mask the failure. Itera
 
 - `GatedRepoError` -> ask user to accept the HF license on the model card.
 - `Missing key` errors from `from_pretrained` -> check whether the HF source uses `trust_remote_code=True` (some models do) and add it to the demo.
-- `KeyError`/`AttributeError` deep inside `transformers` -> probably needs a [_hf_compat.py](../../src/tt_symbiote/_hf_compat.py) shim; add one and document the reason.
+- `KeyError`/`AttributeError` deep inside `transformers` -> probably needs a [hf_compat.py](../../src/tt_symbiote/utils/hf_compat.py) shim; add one and document the reason.
 - Image decode failure on AVIF inputs -> install `pillow-heif` (`pip install pillow-heif`).
 - Unexpected runtime fallback -> add the class to the recipe's `cpu_fallback` (or move from `out_of_scope` if applicable), commit-blocking until empty.
 

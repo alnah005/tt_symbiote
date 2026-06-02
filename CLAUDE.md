@@ -228,7 +228,7 @@ failure back to the orchestrator rather than continuing indefinitely.
 ### Naming
 - Model directories: `src/tt_symbiote/models/<model_name>/modeling_<model_name>.py`
 - `<model_name>` MUST match `transformers.models.<model_name>` where an HF equivalent exists.
-- Integration modules: `src/tt_symbiote/integrations/ttnn_<capability>.py` (NOT per-model)
+- Integration modules: `src/tt_symbiote/modules/ttnn_<capability>.py` (NOT per-model)
 - TTNN classes: `TTNN<ModelName><Component>` (e.g., `TTNNGemma4Attention`)
 - Completed renames: owlvit (not owl_vit), speecht5 (not speech_t5), qwen3_omni_moe (not qwen_omni). gr00t: DELETED, do not reference.
 

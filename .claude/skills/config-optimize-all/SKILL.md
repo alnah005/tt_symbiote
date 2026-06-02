@@ -30,7 +30,7 @@ Apply the best-known configurations to every module in a model.
   - Compute config: override `move_weights_to_device_impl()`
   - Memory layout: override `forward()` with appropriate `memory_config`
 
-**CRITICAL**: Do NOT modify shared integration modules in `src/tt_symbiote/integrations/`.
+**CRITICAL**: Do NOT modify shared integration modules in `src/tt_symbiote/modules/`.
   These are shared across ALL models.
 
 **TT_METAL_COMMIT Hash**: When modifying `modeling_<model_name>.py`, ensure
@@ -99,7 +99,7 @@ This skill follows a mandatory loop structure. If the loop fails 5 times, report
 1. Verify recommendation.json exists and is valid JSON
 2. Verify all overridden `forward()` methods use only `ttnn.*` ops (pure TTNN constraint)
 3. Verify all overridden `forward()` methods have `@run_on_devices` decorator
-4. Verify no shared integration modules in `src/tt_symbiote/integrations/` are modified
+4. Verify no shared integration modules in `src/tt_symbiote/modules/` are modified
 5. Verify license headers are present on all generated files
 6. Verify `TT_METAL_COMMIT` constant is present in the modeling file
 7. If ANY verification fails, return to PLAN with failure details and re-plan

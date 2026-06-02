@@ -73,7 +73,7 @@ modeling files outside the transformers package. They require
 `trust_remote_code=True` on both `AutoTokenizer.from_pretrained` and
 `AutoModelForCausalLM.from_pretrained`. They also frequently trip on
 API drift between the Hub modeling file and the installed transformers
-version — see [`_hf_compat.py`](../../src/tt_symbiote/_hf_compat.py) for
+version — see [`hf_compat.py`](../../src/tt_symbiote/utils/hf_compat.py) for
 the shim pattern (Ling needed two shims: `is_torch_fx_available` and
 `ROPE_INIT_FUNCTIONS["default"]`).
 

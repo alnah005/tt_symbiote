@@ -80,7 +80,7 @@ make that possible:
 
 | Concept | Where it lives | Job |
 | --- | --- | --- |
-| **`Auto*` factory** | `tt_symbiote/auto/auto_factory.py` | Mirrors every `transformers.Auto*` class. After HF loads the model, looks up the registered recipe and applies it. |
+| **`Auto*` factory** | `tt_symbiote/models/auto/auto_factory.py` | Mirrors every `transformers.Auto*` class. After HF loads the model, looks up the registered recipe and applies it. |
 | **`Recipe`** | One per model, decorated with `@register_recipe(hf_class_name=...)` | Declares **which** PyTorch classes to swap for **which** TTNN classes, plus optional post-load patches and an optional KV-cache builder. |
 | **`set_device`** | `tt_symbiote/utils/device_management.py` | Mandatory device-binding step. Walks the model graph, binds TTNN modules to the mesh, calls `preprocess_weights` / `move_weights_to_device`, and invokes `Recipe.make_kv_cache` if present. |
 
@@ -328,7 +328,7 @@ populating `TT_MODEL_REGISTRY["BailingMoeV2ForCausalLM"]` =
 
 Everything wired together:
 
-```37:70:src/tt_symbiote/auto/auto_factory.py
+```37:70:src/tt_symbiote/models/auto/auto_factory.py
     @classmethod
     def from_pretrained(cls, pretrained_name_or_path: Any, *args: Any, **kwargs: Any) -> Any:
         """Load the HF model, apply the tt_symbiote recipe if one is registered."""
@@ -340,7 +340,7 @@ Everything wired together:
         # Install compat shims before HF's dynamic remote-code loader runs:
         # Hub modeling files authored against older transformers releases
         # frequently import symbols (e.g. ``is_torch_fx_available``) that
-        # have since been removed. See ``tt_symbiote/_hf_compat.py``.
+        # have since been removed. See ``tt_symbiote/utils/hf_compat.py``.
         from tt_symbiote.utils.hf_compat import install_transformers_shims
 
         install_transformers_shims()
@@ -383,7 +383,7 @@ The Ling-mini-2.0 Hub modeling file (loaded via
 `trust_remote_code=True`) was authored against `transformers ≈ 4.x`,
 but `tt_symbiote` pins `transformers == 5.9.0`. Two symbols the Hub
 file imports were removed upstream between those versions. Rather than
-asking the Hub author to update the file, `tt_symbiote/_hf_compat.py`
+asking the Hub author to update the file, `tt_symbiote/utils/hf_compat.py`
 re-installs the missing symbols **before** HF's dynamic remote-code
 loader runs.
 
@@ -399,7 +399,7 @@ back. The installer is also idempotent — gated by a module-level
 
 **Extension point**: when porting a new remote-code model that fails
 on a missing/moved upstream symbol, add a guarded entry to
-`install_transformers_shims` in `_hf_compat.py` — that's the entire
+`install_transformers_shims` in `hf_compat.py` — that's the entire
 escape hatch.
 
 ---
@@ -632,12 +632,12 @@ the exit code.
 
 | Symbol | Source | Purpose |
 | --- | --- | --- |
-| `tt_symbiote.AutoModelForCausalLM` (and 42 other `Auto*` classes) | `tt_symbiote/auto/auto_factory.py` | Drop-in replacement for `transformers.Auto*`; applies a recipe if one is registered for the loaded HF class. |
+| `tt_symbiote.AutoModelForCausalLM` (and 42 other `Auto*` classes) | `tt_symbiote/models/auto/auto_factory.py` | Drop-in replacement for `transformers.Auto*`; applies a recipe if one is registered for the loaded HF class. |
 | `tt_symbiote.set_device(model, device, **kwargs)` | `tt_symbiote/utils/device_management.py` | Mandatory device-binding step. Binds, preprocesses weights, allocates KV cache. |
 | `tt_symbiote.register_modules(model, dict, model_config=None)` | `tt_symbiote/utils/module_replacement.py` | Lower-level utility used by both the recipe dispatch and wrappers like `TTNNBailingMoeV2Model.from_torch`. |
-| `tt_symbiote.register_recipe(hf_class_name)` | `tt_symbiote/auto/auto_mappings.py` | Decorator. Installs a recipe class instance in `TT_MODEL_REGISTRY`. |
-| `tt_symbiote.Recipe` | `tt_symbiote/auto/auto_mappings.py` | Runtime-checkable Protocol describing what a recipe must expose. |
-| `tt_symbiote.TT_MODEL_REGISTRY` | `tt_symbiote/auto/auto_mappings.py` | Read-only-ish dict mapping HF class name → recipe instance. |
+| `tt_symbiote.register_recipe(hf_class_name)` | `tt_symbiote/models/auto/auto_mappings.py` | Decorator. Installs a recipe class instance in `TT_MODEL_REGISTRY`. |
+| `tt_symbiote.Recipe` | `tt_symbiote/models/auto/auto_mappings.py` | Runtime-checkable Protocol describing what a recipe must expose. |
+| `tt_symbiote.TT_MODEL_REGISTRY` | `tt_symbiote/models/auto/auto_mappings.py` | Read-only-ish dict mapping HF class name → recipe instance. |
 
 ## C.2 — Where to extend
 
@@ -667,7 +667,7 @@ To add a new model `Foo` (HF class `FooForCausalLM`):
    `src/tt_symbiote/models/__init__.py`.
 4. If the Hub modeling file fails to import on transformers 5.9.0,
    add a guarded entry to
-   [`src/tt_symbiote/_hf_compat.py::install_transformers_shims`](../src/tt_symbiote/_hf_compat.py).
+   [`src/tt_symbiote/utils/hf_compat.py::install_transformers_shims`](../src/tt_symbiote/utils/hf_compat.py).
 5. Add a hardware-free test
    `tests/auto/test_foo_recipe.py` along the lines of
    `tests/auto/test_ling_recipe.py`, and a hardware smoke test
@@ -679,9 +679,9 @@ To add a new model `Foo` (HF class `FooForCausalLM`):
 - [`src/tt_symbiote/models/__init__.py`](../src/tt_symbiote/models/__init__.py) — imports each recipe subpackage.
 - [`src/tt_symbiote/models/bailing_moe_v2/__init__.py`](../src/tt_symbiote/models/bailing_moe_v2/__init__.py) — fires `@register_recipe`.
 - [`src/tt_symbiote/models/bailing_moe_v2/modeling_bailing_moe_v2.py`](../src/tt_symbiote/models/bailing_moe_v2/modeling_bailing_moe_v2.py) — TTNN modules + `BailingMoEV2Recipe` (lines 610–633).
-- [`src/tt_symbiote/auto/auto_factory.py`](../src/tt_symbiote/auto/auto_factory.py) — `Auto*.from_pretrained` recipe dispatch.
+- [`src/tt_symbiote/models/auto/auto_factory.py`](../src/tt_symbiote/models/auto/auto_factory.py) — `Auto*.from_pretrained` recipe dispatch.
 - [`src/tt_symbiote/utils/device_management.py`](../src/tt_symbiote/utils/device_management.py) — `set_device` (the six-step mandatory binding pass).
-- [`src/tt_symbiote/_hf_compat.py`](../src/tt_symbiote/_hf_compat.py) — `is_torch_fx_available` + `ROPE_INIT_FUNCTIONS["default"]` shims.
+- [`src/tt_symbiote/utils/hf_compat.py`](../src/tt_symbiote/utils/hf_compat.py) — `is_torch_fx_available` + `ROPE_INIT_FUNCTIONS["default"]` shims.
 
 For deeper background on why each piece looks the way it does, see
 [`docs/internal/migration_notes.md`](./internal/migration_notes.md) §Phase 5 and
