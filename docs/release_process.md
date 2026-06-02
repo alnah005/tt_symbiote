@@ -220,7 +220,7 @@ hardware-free so the pipeline doesn't depend on Tenstorrent runners.
 
 - [`install_prerequisites.md`](install_prerequisites.md) — the
   `(ttnn, sfpi)` story the release inherits.
-- [`migration_notes.md`](migration_notes.md) — the phase history that
+- [`migration_notes.md`](internal/migration_notes.md) — the phase history that
   the version numbers track.
 - [`../scripts/bootstrap_venv.sh`](../scripts/bootstrap_venv.sh) —
   the contributor install path that runs *against* the same pin the

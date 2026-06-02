@@ -600,7 +600,7 @@ class TTNNBailingMoEDecoderLayerPadded(TTNNModule):
 #     raise ``StopIteration``).
 #   * ``make_kv_cache`` allocates the paged-attention KV cache; it is
 #     invoked by ``set_device`` once a device is bound and the result is
-#     attached as ``model._tt_kv_cache`` (resolves PROJECT_PROPOSAL.md Q9).
+#     attached as ``model._tt_kv_cache`` (resolves docs/internal/PROJECT_PROPOSAL.md Q9).
 #
 # Design-time coverage manifests (backfilled post-Phase 8 to keep
 # ``tt_symbiote.compatibility.report`` informative for the reference

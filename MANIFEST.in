@@ -1,0 +1,28 @@
+# MANIFEST.in for the tt_symbiote sdist.
+#
+# Defaults (via setuptools-scm or git tracking) include every file
+# under version control. The rules below shape the sdist explicitly so
+# that internal-only material does not ship to PyPI users:
+#
+#   * `docs/internal/` holds design proposals and migration history
+#     that are interesting for contributors but not for downstream
+#     consumers (PROJECT_PROPOSAL.md, migration_notes.md).
+#   * `tests/experimental/` holds quarantined model tests for
+#     unregistered recipes (see tests/experimental/README.md).
+#   * `.cursor/` and `CLAUDE.md` are agent/IDE configuration, also
+#     dev-only.
+#
+# The wheel is unaffected (it is built from `src/` per
+# `[tool.setuptools.packages.find]` in pyproject.toml).
+
+prune docs/internal
+prune tests/experimental
+prune src/tt_symbiote/_experimental
+prune .cursor
+exclude CLAUDE.md
+
+# Stale build artifacts that sometimes end up next to a working tree:
+prune build
+global-exclude *.bak *.orig *.rej *~
+global-exclude __pycache__
+global-exclude *.py[cod]

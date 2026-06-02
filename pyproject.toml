@@ -31,7 +31,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-# Pinning policy (per PROJECT_PROPOSAL.md §10):
+# Pinning policy (per docs/internal/PROJECT_PROPOSAL.md §10):
 #
 # - `transformers` is pinned to a single EXACT version per tt_symbiote branch.
 #   Different transformers versions can ship model code or config schemas that

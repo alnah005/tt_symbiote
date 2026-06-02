@@ -5,7 +5,7 @@
 """Device management utilities for TTNN modules.
 
 The single public entry point is :func:`set_device`. It is the mandatory
-final step of the ``tt_symbiote`` loading flow (per ``PROJECT_PROPOSAL.md``
+final step of the ``tt_symbiote`` loading flow (per ``docs/internal/PROJECT_PROPOSAL.md``
 §4.4) and does six things in order:
 
 1. Walks the model graph.
@@ -20,7 +20,7 @@ final step of the ``tt_symbiote`` loading flow (per ``PROJECT_PROPOSAL.md``
    previously wrote by hand).
 5. If a recipe is registered for ``type(obj).__name__`` and exposes
    ``make_kv_cache``, builds the model-specific KV cache and attaches it as
-   ``obj._tt_kv_cache`` (resolves ``PROJECT_PROPOSAL.md`` Q9 — see Phase 5).
+   ``obj._tt_kv_cache`` (resolves ``docs/internal/PROJECT_PROPOSAL.md`` Q9 — see Phase 5).
    The kwargs passed to ``make_kv_cache`` come from
    ``obj._tt_kv_cache_kwargs`` (set by ``AutoModel*.from_pretrained``'s
    ``kv_cache_kwargs=``) merged with any ``kv_cache_kwargs=`` override
@@ -158,7 +158,7 @@ def _swap_module(parent: Any, key: Any, fallback: Any) -> None:
 def set_device(obj, device, device_init=DeviceInit, **kwargs) -> None:
     """Bind every ``TTNNModule`` in ``obj`` to ``device``.
 
-    Per ``PROJECT_PROPOSAL.md`` §4.4 this is **mandatory** before any model
+    Per ``docs/internal/PROJECT_PROPOSAL.md`` §4.4 this is **mandatory** before any model
     invocation. See the module docstring for the full contract.
 
     Keyword arguments:

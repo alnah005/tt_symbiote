@@ -4,7 +4,7 @@
 
 """Base ``Auto*`` factory shared by every ``tt_symbiote.AutoModel*`` class.
 
-Per ``PROJECT_PROPOSAL.md`` §4.2 each ``Auto*`` class is a thin wrapper over
+Per ``docs/internal/PROJECT_PROPOSAL.md`` §4.2 each ``Auto*`` class is a thin wrapper over
 the corresponding ``transformers.Auto*`` class that, after HF loading,
 applies the registered tt_symbiote recipe (if any) and returns the
 TTNN-augmented model. When no recipe is registered for the loaded model

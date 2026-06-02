@@ -220,5 +220,5 @@ If you'd rather do it by hand, the manual checklist is:
    [tracking table](../examples/e2e/README.md).
 6. Add a row here, in the appropriate task section.
 
-See [`docs/migration_notes.md`](migration_notes.md) for the design
+See [`docs/internal/migration_notes.md`](internal/migration_notes.md) for the design
 rationale behind each Phase.

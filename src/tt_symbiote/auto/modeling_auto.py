@@ -4,7 +4,7 @@
 
 """``tt_symbiote.AutoModel*`` classes mirroring ``transformers`` v5.9.0.
 
-Per ``PROJECT_PROPOSAL.md`` §4.3 we ship full ``Auto*`` coverage even for
+Per ``docs/internal/PROJECT_PROPOSAL.md`` §4.3 we ship full ``Auto*`` coverage even for
 tasks where we have no TTNN recipe yet. Classes with no recipe just fall
 back to "load HF, warn, return unmodified HF model" — that path is
 implemented in :class:`tt_symbiote.auto.auto_factory._BaseAutoModelClass`.

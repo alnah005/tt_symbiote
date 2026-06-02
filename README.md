@@ -21,8 +21,8 @@ implementations of HF model architectures.
 > with `compatibility.report(...)["regressions"] == []`.
 > See [`docs/cpu_vs_device_coverage.md`](docs/cpu_vs_device_coverage.md)
 > for the per-variant CPU/device split,
-> [`docs/migration_notes.md`](docs/migration_notes.md) for the per-phase
-> design rationale, and [`PROJECT_PROPOSAL.md`](PROJECT_PROPOSAL.md) for
+> [`docs/internal/migration_notes.md`](docs/internal/migration_notes.md) for the per-phase
+> design rationale, and [`docs/internal/PROJECT_PROPOSAL.md`](docs/internal/PROJECT_PROPOSAL.md) for
 > the original (frozen) design intent.
 
 ## Target user-facing API
@@ -62,7 +62,7 @@ src/tt_symbiote/
 ```
 
 Examples and tests live at the repo root (not inside the package) — see
-[`PROJECT_PROPOSAL.md`](PROJECT_PROPOSAL.md) §3 for the full layout.
+[`docs/internal/PROJECT_PROPOSAL.md`](docs/internal/PROJECT_PROPOSAL.md) §3 for the full layout.
 
 ## Installation
 
@@ -147,13 +147,13 @@ in the environment.
 
 `transformers==5.9.0` is the strict pin for this branch; every other dep in
 `pyproject.toml` mirrors the specifier used by HF transformers v5.9.0's own
-`setup.py`. See `docs/migration_notes.md` for the bump procedure when moving
+`setup.py`. See `docs/internal/migration_notes.md` for the bump procedure when moving
 to a different transformers release.
 
 ## Versioning
 
 One `transformers` version per `tt_symbiote` branch. First branch targets
-`transformers==5.9.0`. See `PROJECT_PROPOSAL.md` §10 for the branching policy.
+`transformers==5.9.0`. See `docs/internal/PROJECT_PROPOSAL.md` §10 for the branching policy.
 
 ## License
 

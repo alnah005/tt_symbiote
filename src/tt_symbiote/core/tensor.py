@@ -5,7 +5,7 @@
 """TorchTTNNTensor: A torch.Tensor subclass that wraps a TTNN tensor.
 
 After Phase 3, the per-op ``__torch_dispatch__`` routing layer was removed
-(``PROJECT_PROPOSAL.md`` §6). This class is now a thin container that holds
+(``docs/internal/PROJECT_PROPOSAL.md`` §6). This class is now a thin container that holds
 both a torch view (``elem``) and an optional ``ttnn_tensor`` backing store.
 Torch ops fall back to plain torch execution on ``elem`` (no TTNN routing).
 Module forwards that need TTNN must call ``ttnn.*`` directly on the

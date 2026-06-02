@@ -18,7 +18,7 @@ Each script is intended to be:
   teardown) stays identical unless your model truly needs something
   different.
 - **Outside the installed package.** Per
-  [`PROJECT_PROPOSAL.md`](../../PROJECT_PROPOSAL.md) P10 these scripts
+  [`docs/internal/PROJECT_PROPOSAL.md`](../../docs/internal/PROJECT_PROPOSAL.md) P10 these scripts
   ship with the repo, not with `pip install tt_symbiote`. They are
   reference material, not installed entry points.
 
@@ -92,7 +92,7 @@ are what the skill automates:
 
 1. Land the model's recipe under `src/tt_symbiote/models/<name>/` and a
    pytest-based hardware smoke under `tests/models/<name>/` (per
-   [`PROJECT_PROPOSAL.md`](../../PROJECT_PROPOSAL.md) §6).
+   [`docs/internal/PROJECT_PROPOSAL.md`](../../docs/internal/PROJECT_PROPOSAL.md) §6).
 2. Copy an existing script from the appropriate family folder as a
    starting point.
    - LLM (causal LM): start from [`run_ling_mini_2_0.py`](run_ling_mini_2_0.py).
