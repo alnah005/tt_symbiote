@@ -1,13 +1,25 @@
 [build-system]
 requires = [
   "setuptools==70.1.0",
-  "setuptools-scm==8.1.0",
   "wheel",
 ]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "tt_symbiote"
+# Versioning policy: literal, branch-driven.
+#
+# The release branch (`transformers5.9.0`) IS the release marker —
+# tt_symbiote does NOT use git tags. To cut a new release, bump this
+# version in a one-line commit on the release branch, push, then
+# trigger the publish workflow (`workflow_dispatch`) from the GitHub
+# Actions UI. See `docs/release_process.md`.
+#
+# `setuptools-scm` is intentionally NOT used: with no tags it falls
+# back to noisy `0.0.1.dev<n>+<sha>` strings that PyPI rejects as
+# pre-releases. The literal pin below is the source of truth that
+# `importlib.metadata.version("tt_symbiote")` returns.
+version = "0.1.0"
 authors = [
     {name = "Tenstorrent"},
     {email = "info@tenstorrent.com"},
@@ -17,7 +29,6 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 keywords = ["tenstorrent", "ttnn", "transformers", "huggingface", "tt-metal", "machine learning"]
-dynamic = ["version"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
@@ -140,16 +151,6 @@ exclude = ["tt_symbiote._experimental*"]
 # not part of the runtime surface.
 [tool.setuptools.exclude-package-data]
 "*" = ["*.bak", "*.orig", "*.rej", "*~"]
-
-[tool.setuptools_scm]
-fallback_version = "0.0.0.dev0"
-tag_regex = '^(?:v)?(?P<version>\d+\.\d+\.\d+(?:-rc\d+)?)$'
-git_describe_command = [
-  "git", "describe", "--dirty", "--tags", "--long",
-  "--match", "v[0-9]*.[0-9]*.[0-9]*",
-  "--match", "v[0-9]*.[0-9]*.[0-9]*-rc[0-9]*",
-  "--exclude", "*-dev*",
-]
 
 [tool.black]
 line-length = 120

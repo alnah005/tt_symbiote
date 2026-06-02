@@ -6,29 +6,40 @@ release. The goals are:
 - Reproducibility: anyone with repo-admin + PyPI-owner access can cut
   a release end-to-end from this document alone.
 - Safety: a typo, a missing file, or a broken import never makes it
-  to PyPI — the local pre-tag gate and the CI smoke step catch them.
-- Auditability: every published wheel is traceable to a signed git
-  tag, an OIDC-authenticated GitHub Actions run, and a PyPI release.
+  to PyPI — the local pre-publish gate and the CI smoke step catch
+  them.
+- Auditability: every published wheel is traceable to a commit on the
+  release branch and an OIDC-authenticated GitHub Actions run.
 
 ## Versioning model
 
-- `setuptools-scm` derives the version from the most recent git tag
-  matching `v[0-9]+.[0-9]+.[0-9]+*`. Between tags, the dev version
-  looks like `0.1.1.dev3+gabcdef0`.
-- Tag format: `vMAJOR.MINOR.PATCH` for stable, `vMAJOR.MINOR.PATCH-rcN`
-  for release candidates.
-- The release workflow publishes RC tags **only** to TestPyPI; stable
-  tags go to TestPyPI *and* PyPI.
+tt_symbiote uses **branch-driven, literal versioning** — no git tags.
+
+- The single source of truth is the literal `version = "..."` string
+  in [`pyproject.toml`](../pyproject.toml) under `[project]`.
+  `importlib.metadata.version("tt_symbiote")` reads that string after
+  install; `tt_symbiote.__version__` re-exports it.
+- The release branch (currently `transformers5.9.0`) **is** the
+  release marker. Cutting a release means: bump the version on the
+  release branch, push, then trigger the publish workflow.
+- Version format: `MAJOR.MINOR.PATCH`, plus an optional `rcN` suffix
+  for release candidates (`0.1.0`, `0.2.0rc1`, `0.2.0`, `0.2.1`, ...).
+- RCs publish to TestPyPI only. Stable versions publish to TestPyPI
+  *and* PyPI. Routing is controlled by the `target` input on
+  `release.yml`'s `workflow_dispatch`, not by the version string —
+  but by convention you bump to an `rcN` suffix before dispatching
+  with `target=testpypi` and to the plain version before dispatching
+  with `target=pypi`.
 
 ## One-time setup: Trusted Publishers on PyPI / TestPyPI
 
 PyPI's recommended publish path is [Trusted Publishers
 (OIDC)](https://docs.pypi.org/trusted-publishers/) — GitHub Actions
-exchanges an OIDC ID token for a short-lived API token, no long-lived
+exchanges an OIDC ID token for a short-lived API token; no long-lived
 secret ever lives in the repo.
 
-Do this *once* per environment (you need both because we publish to
-TestPyPI first and then PyPI):
+Do this *once* per index (you need both because we publish to TestPyPI
+first and then PyPI):
 
 1. Register the project name. PyPI normalizes `tt_symbiote` →
    `tt-symbiote`; both forms address the same project.
@@ -60,16 +71,18 @@ TestPyPI first and then PyPI):
 
 ## Per-release recipe
 
-### Phase 1 — local pre-tag gate
+### Phase 1 — local pre-publish gate
 
 Run **on the maintainer's machine**, on a clean tree, *before*
-creating the tag. Catches packaging errors that would otherwise leave
-a half-published version on PyPI.
+committing the version bump. Catches packaging errors that would
+otherwise leave a half-published version on PyPI (which is
+irreversible — see Rollback policy).
 
 ```bash
 # 1. Sanity-check the working tree.
+git checkout transformers5.9.0
+git pull --ff-only
 git status                         # must be clean
-git pull --ff-only                 # be on tip of main
 git log -1 --oneline               # confirm head SHA
 
 # 2. Build sdist + wheel.
@@ -118,28 +131,50 @@ disagree:
 
 Then rerun Phase 1.
 
-### Phase 3 — tag and push
+### Phase 3 — bump the version and push
 
 ```bash
-# Pick a version per the rules at the top of this doc.
-TAG=v0.1.0
-git tag -a "$TAG" -m "tt_symbiote $TAG"
-git push origin "$TAG"
+# Edit pyproject.toml: change `version = "0.1.0"` to the new value.
+# For an RC: `version = "0.2.0rc1"`.
+# For stable: `version = "0.2.0"`.
+$EDITOR pyproject.toml
+
+# Verify the bump shows up.
+git diff pyproject.toml
+
+# Commit on the release branch.
+git add pyproject.toml
+git commit -m "release: tt_symbiote 0.2.0"
+git push origin transformers5.9.0
 ```
 
-GitHub Actions picks up the tag, runs `release.yml`:
+### Phase 4 — dispatch the publish workflow
+
+The release workflow has **no automatic triggers** — pushing to the
+release branch does NOT publish. You publish explicitly from the
+GitHub Actions UI:
+
+1. Navigate to *Actions → release → Run workflow*.
+2. Choose the branch: `transformers5.9.0`.
+3. Choose `target`:
+   - `testpypi` — uploads to <https://test.pypi.org/>. **Always do
+     this first.**
+   - `pypi` — uploads to <https://pypi.org/>. Only after TestPyPI
+     succeeded and you've manually smoke-installed from there
+     (Phase 5).
+
+The workflow runs:
 
 1. `build` — `python -m build` + `twine check`.
 2. `smoke` — installs the wheel in a clean ubuntu-latest venv and
-   imports `tt_symbiote` with stubbed `ttnn` / `tracy`.
-3. `publish-testpypi` — OIDC upload to <https://test.pypi.org/>.
-4. `publish-pypi` — OIDC upload to <https://pypi.org/>, **only** if
-   the tag doesn't contain `-rc`.
+   imports `tt_symbiote` with `ttnn` stubbed (CI is hardware-free).
+3. `publish-testpypi` *or* `publish-pypi`, gated by the `target`
+   input.
 
-### Phase 4 — post-publish verification
+### Phase 5 — post-publish verification
 
 ```bash
-# TestPyPI first (always populated).
+# After dispatch with target=testpypi:
 python -m venv /tmp/tt_test
 /tmp/tt_test/bin/pip install \
   -i https://test.pypi.org/simple/ \
@@ -148,7 +183,7 @@ python -m venv /tmp/tt_test
 /tmp/tt_test/bin/python -c "import tt_symbiote; print(tt_symbiote.__version__)"
 rm -rf /tmp/tt_test
 
-# Then PyPI (skip for -rc tags).
+# After dispatch with target=pypi (skip for rcN versions):
 python -m venv /tmp/tt_prod
 /tmp/tt_prod/bin/pip install "tt_symbiote[ttnn]==$VERSION"
 /tmp/tt_prod/bin/python -c "import tt_symbiote, ttnn; print(tt_symbiote.__version__, ttnn.__version__)"
@@ -170,13 +205,14 @@ published versions as immutable:
 
 - **Found a packaging bug after publish.** Yank the bad version on
   PyPI (project settings → release → yank) so resolvers stop picking
-  it. Cut a `+1` patch release (`v0.1.1`, `v0.1.2`, ...).
+  it. Cut a `+1` patch release (bump `pyproject.toml` to `0.1.1`,
+  push, dispatch).
 - **Found a hardware regression after publish.** Yank, then cut a
-  patch with the fix. Do *not* try to retag — `setuptools-scm` will
-  refuse to build a duplicate version.
-- **Aborted release (CI failed before publish).** Delete the tag
-  locally (`git tag -d v0.1.0`) and on the remote
-  (`git push origin :refs/tags/v0.1.0`), fix, retag.
+  patch with the fix.
+- **Aborted release (CI failed before publish).** Just push a follow-up
+  commit on the release branch — there is no tag to delete because we
+  don't use tags. The previously bumped version string never reached
+  PyPI, so it can simply be left in place or bumped further.
 
 ## Fallback: API token (only if Trusted Publishers can't be configured)
 
@@ -208,20 +244,36 @@ Job graph:
 ```text
 build (sdist + wheel)
   └── smoke (stubbed ttnn import)
-        └── publish-testpypi (every v* tag)
-              └── publish-pypi (every v* tag without -rc)
+        ├── publish-testpypi (only when target=testpypi)
+        └── publish-pypi     (only when target=pypi)
 ```
 
 `id-token: write` and `environment: pypi` are both required for OIDC
 Trusted Publishers to work; the smoke step is intentionally
 hardware-free so the pipeline doesn't depend on Tenstorrent runners.
 
+## Why branch-driven (not tag-driven)?
+
+Tag-driven releases (the classic `setuptools-scm` flow) couple the
+release marker to a git ref that can be deleted, retagged, or
+force-overwritten — and at the same time leak interim builds with
+ugly versions like `0.1.1.dev3+gabcdef0` to anyone running
+`python -m build` on a non-tagged commit. The branch-driven model
+removes both problems:
+
+- The version is whatever `pyproject.toml` says, end of story.
+  `python -m build` on any commit produces a clean version string.
+- Releasing requires an intentional commit (the version bump) plus an
+  intentional dispatch (the workflow run). There is no way to
+  accidentally publish by retagging or by force-pushing a tag.
+
 ## Related docs
 
 - [`install_prerequisites.md`](install_prerequisites.md) — the
   `(ttnn, sfpi)` story the release inherits.
-- [`migration_notes.md`](internal/migration_notes.md) — the phase history that
-  the version numbers track.
+- [`internal/migration_notes.md`](internal/migration_notes.md) — the
+  phase history that the version numbers track (internal-only,
+  excluded from sdist).
 - [`../scripts/bootstrap_venv.sh`](../scripts/bootstrap_venv.sh) —
   the contributor install path that runs *against* the same pin the
   PyPI extra ships.

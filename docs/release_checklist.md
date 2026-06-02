@@ -2,8 +2,9 @@
 
 Companion to [`release_process.md`](release_process.md). That doc is the
 canonical recipe for **every** release; this checklist is a tactical,
-one-time worksheet for the very first PyPI publication, tracking which
-items already shipped in commits and which still require human action.
+one-time worksheet for the very first PyPI publication on the
+branch-driven model, tracking which items already shipped in commits
+and which still require human action.
 
 Tick items with `- [x]`. The format is:
 
@@ -18,76 +19,81 @@ All in-repo deliverables required to build, smoke-test, and publish a
 release.
 
 - [x] **`pyproject.toml` PEP 621 metadata** — name, description, license,
-  authors, URLs, dependencies, dynamic version. (Pre-existing.)
+  authors, URLs, dependencies, literal `version = "0.1.0"`.
 - [x] **`pyproject.toml` Trove classifiers** — `Development Status :: 4 -
-  Beta`, Python 3.10/3.11/3.12, Apache-2.0, Linux, AI/ML topic. (Commit
-  `e2db757`.)
+  Beta`, Python 3.10/3.11/3.12, Apache-2.0, Linux, AI/ML topic.
 - [x] **`pyproject.toml` `[ttnn]` optional extra** — pins `ttnn==0.68.0`
-  to match `scripts/ttnn-pin.txt`. (Commit `e2db757`.)
+  to match `scripts/ttnn-pin.txt`.
 - [x] **`pyproject.toml` `[dev]` extra includes `build`/`twine`** — so
-  `make install` provisions the local pre-tag gate. (Commit `e2db757`.)
+  `make install` provisions the local pre-publish gate.
 - [x] **`pyproject.toml` excludes `*.bak` from packaged data** — keeps
-  migration-era backups out of the published wheel. (Commit `e2db757`.)
+  migration-era backups out of the published wheel.
+- [x] **`pyproject.toml` excludes `_experimental` package** —
+  unregistered modeling code stays out of the wheel; see
+  `src/tt_symbiote/_experimental/__init__.py`.
+- [x] **`MANIFEST.in` prunes internal docs / experimental trees** —
+  `docs/internal/`, `tests/experimental/`,
+  `src/tt_symbiote/_experimental/`, `.cursor/`, `CLAUDE.md`, plus a
+  global exclude for `.bak` / `.orig` / `.rej` / `__pycache__` / `.pyc`
+  so the sdist is as clean as the wheel.
+- [x] **Literal `version = "0.1.0"` (no `setuptools-scm`)** — tt_symbiote
+  is branch-driven; the release branch is the release marker. See
+  `docs/release_process.md` §Versioning model.
 - [x] **`src/tt_symbiote/__init__.py` exposes `__version__`** — via
-  `importlib.metadata`, so users can introspect the installed
-  version. (Commit `e2db757`.)
+  `importlib.metadata.version("tt_symbiote")`, so installed users can
+  introspect the version.
 - [x] **`src/tt_symbiote/utils/graph_visualization.py` lazy-imports
   matplotlib** — otherwise `pip install tt_symbiote` would fail at
   `import tt_symbiote` time because matplotlib is not in dependencies.
-  (Commit `e2db757`.)
 - [x] **`src/tt_symbiote/core/run_config.py` guards `from tracy import
   signpost`** — tracy is not on PyPI; the no-op fallback shim unblocks
-  the happy-path pip install. (Commit `e2db757`.)
+  the happy-path pip install.
 - [x] **`README.md` Installation section** — `pip install
   "tt_symbiote[ttnn]"` as the recommended path, loud sfpi caveat,
-  bootstrap script as the contributor path. (Commit `e2db757`.)
+  bootstrap script as the contributor path.
 - [x] **`docs/install_prerequisites.md`** — what sfpi is, how to install
   + verify it, the `(ttnn, sfpi)` compatibility table, troubleshooting.
-  (Commit `e2db757`.)
-- [x] **`docs/release_process.md`** — one-time Trusted Publisher setup,
-  per-release recipe, rollback policy, API-token fallback. (Commit
-  `e2db757`.)
+- [x] **`docs/release_process.md`** — branch-driven recipe, one-time
+  Trusted Publisher setup, rollback policy, API-token fallback.
 - [x] **`docs/supported_models.md` links to install_prerequisites** —
-  one-line callout above the model tables. (Commit `e2db757`.)
+  one-line callout above the model tables.
 - [x] **`Makefile` cleanup** — `test` target points at `tests/auto`
   (not the nonexistent `tests/capabilities`); new `install-ttnn` and
-  `dist` targets. (Commit `e2db757`.)
-- [x] **`.github/workflows/release.yml`** — build → smoke (ttnn-stubbed
-  import) → publish-testpypi (every tag) → publish-pypi (every non-`-rc`
-  tag), all via OIDC Trusted Publishers. (Commit `e2db757`.)
-- [x] **`LICENSE` present** — Apache-2.0. (Pre-existing.)
+  `dist` targets.
+- [x] **`.github/workflows/release.yml`** — `workflow_dispatch` with a
+  `target` input (testpypi | pypi); jobs: build → smoke → publish-...,
+  all via OIDC Trusted Publishers. **No tag trigger.**
+- [x] **`LICENSE` present** — Apache-2.0.
 - [x] **`scripts/bootstrap_venv.sh` + `scripts/ttnn-pin.txt` consistent
   with `[ttnn]` extra** — both pin `ttnn==0.68.0` ↔ `sfpi 7.35.3`.
 
-## Stage B: local pre-tag gate
+## Stage B: local pre-publish gate
 
-Run these commands on the maintainer's machine before creating the tag.
+Run these commands on the maintainer's machine before bumping the
+version.
 
-- [x] **`python -m build` succeeds** — produces `tt_symbiote-<v>.tar.gz`
-  and `tt_symbiote-<v>-py3-none-any.whl` in `dist/`.
+- [x] **`python -m build` succeeds** — produces `tt_symbiote-0.1.0.tar.gz`
+  and `tt_symbiote-0.1.0-py3-none-any.whl` in `dist/`.
 - [x] **`twine check dist/*` passes** — both sdist and wheel report
   `PASSED`.
+- [x] **Wheel and sdist exclude internal artifacts** — `unzip -l
+  dist/*.whl` shows no `_experimental` / `qwen3_moe` / `.bak`; `tar tzf
+  dist/*.tar.gz` shows no `PROJECT_PROPOSAL.md`, `migration_notes.md`,
+  `tests/experimental/`, `.cursor/`, `CLAUDE.md`.
 - [x] **Fresh venv install of wheel + import succeeds** — with `ttnn`
   stubbed via `MagicMock` (CI has no Tenstorrent hardware), the
   pure-Python surface is reachable: `AutoModelForCausalLM`,
-  `set_device`, `__version__` are all defined.
-- [x] **Hardware-free test suite green** — `pytest tests/auto
-  tests/models/gemma4 tests/models/qwen3_vl` → 127/127 passing.
-- [x] **Sandboxed tag dry-run** — a temporary git worktree with `v0.1.0`
-  tagged at HEAD built `tt_symbiote-0.1.0-py3-none-any.whl`, installed
-  cleanly in a fresh venv, reported `tt_symbiote.__version__ ==
-  "0.1.0"`, and registered all 4 recipes
-  (`BailingMoeV2ForCausalLM`, `Gemma4ForConditionalGeneration`,
-  `Qwen3VLForConditionalGeneration`, `ResNetForImageClassification`).
-  Worktree cleaned up.
-- [x] **`pre-commit run --all-files` is green** — production-cleanup
-  lint sweep (commit `d2f7aad`) landed all of black, isort, autoflake,
-  yamllint, end-of-file, and trailing-whitespace fixes.
+  `set_device`, `__version__` are all defined and the version equals
+  `"0.1.0"`.
+- [x] **Hardware-free test suite green** — `pytest tests/auto` →
+  124/124 passing.
+- [x] **`pre-commit run --all-files` is green** — black, isort,
+  autoflake, yamllint, end-of-file, trailing-whitespace all clean.
 
 ## Stage C: PyPI name availability
 
-- [x] **`tt_symbiote` / `tt-symbiote` free on PyPI** — HTTP 404 from
-  `https://pypi.org/pypi/tt-symbiote/json` and
+- [x] **`tt_symbiote` / `tt-symbiote` free on PyPI** — verified by HTTP
+  404 from `https://pypi.org/pypi/tt-symbiote/json` and
   `https://pypi.org/pypi/tt_symbiote/json`.
 - [x] **`tt-symbiote` free on TestPyPI** — HTTP 404 from
   `https://test.pypi.org/pypi/tt-symbiote/json`.
@@ -109,23 +115,31 @@ exact field values are in
   *Settings → Environments → New environment*. Optionally add a
   required reviewer for production releases.
 
-## Stage E: tag and publish (external, semi-automated)
+## Stage E: publish (external, semi-automated)
 
-- [ ] **HEAD is clean and up-to-date** — `git status` shows no
-  uncommitted work; `git log` shows the two infrastructure commits
-  (`38dfd0a`, `e2db757`) on the integration branch.
-- [ ] **Merge the integration branch to `main`** — Stage D's Trusted
-  Publisher matches *workflow filename + repo*, not branch, so a
-  branch-pushed tag will trigger the workflow; but tagging on `main`
-  is the cleaner convention.
-- [ ] **Create the annotated tag** — `git tag -a v0.1.0 -m "First
-  public preview: Phase 8 Wave A + B (Gemma-4, Qwen3-VL, ResNet,
-  Ling)"`.
-- [ ] **Push the tag** — `git push origin v0.1.0`.
-- [ ] **`release.yml` reaches green** — watch
-  `https://github.com/<owner>/tt_symbiote/actions/workflows/release.yml`;
-  all four jobs (`build`, `smoke`, `publish-testpypi`, `publish-pypi`)
-  should succeed.
+- [ ] **HEAD is the merge commit on `transformers5.9.0`** — that branch
+  IS the release marker; `git log -1 --oneline` should show the merge
+  bringing the cleaned `aroberge/bootstrap` work into
+  `transformers5.9.0`.
+- [ ] **`pyproject.toml` `version` is `0.1.0`** — no `rc` suffix for
+  the stable cut; if doing an RC first, change to `0.1.0rc1`, commit,
+  push, dispatch with `target=testpypi`, smoke-install, then change
+  back to `0.1.0` for the stable cut.
+- [ ] **Dispatch `release.yml` with `target=testpypi`** — from the
+  GitHub Actions UI (`Actions → release → Run workflow`,
+  branch = `transformers5.9.0`, target = `testpypi`). Watch all three
+  jobs (`build`, `smoke`, `publish-testpypi`) reach green.
+- [ ] **Manually smoke-install from TestPyPI**:
+  ```bash
+  python -m venv /tmp/tt_test
+  /tmp/tt_test/bin/pip install \
+    -i https://test.pypi.org/simple/ \
+    --extra-index-url https://pypi.org/simple/ \
+    "tt_symbiote==0.1.0"
+  /tmp/tt_test/bin/python -c "import tt_symbiote; print(tt_symbiote.__version__)"
+  ```
+- [ ] **Dispatch `release.yml` with `target=pypi`** — only after the
+  TestPyPI smoke install reported `0.1.0`.
 
 ## Stage F: post-publish verification
 
