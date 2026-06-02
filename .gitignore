@@ -57,3 +57,12 @@ model_graph.png
 # recent run, so checking it in would be misleading. Re-generate locally
 # by running the per-model demo.
 **/*_coverage.json
+
+# Local test fixtures the VLM e2e demos consume. The repo does not ship
+# any binary image because we don't own redistribution rights to the
+# canonical "dog" photo. Users must drop their own image at
+# tests/images/test-dog.png (any format Pillow can decode) to run the
+# VLM scripts in examples/e2e/{gemma4,qwen3_vl}/. The scripts skip
+# cleanly with a clear message if the file is absent. See
+# examples/e2e/README.md for the contract.
+tests/images/

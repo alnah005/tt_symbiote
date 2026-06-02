@@ -53,6 +53,21 @@ MODEL_ID = "Qwen/Qwen3-VL-2B-Instruct"
 IMAGE_PATH = Path(__file__).resolve().parents[3] / "tests" / "images" / "test-dog.png"
 PROMPT = "What is this animal in the photo?"
 
+
+if not IMAGE_PATH.exists():
+    # The published repo intentionally ships no binary image (license);
+    # see tests/images/.gitignore. Drop any Pillow-readable picture of
+    # a dog at IMAGE_PATH (e.g. `cp ~/Pictures/dog.jpg tests/images/test-dog.png`)
+    # and rerun. The dog-equivalents assertion at the bottom of this
+    # script expects the answer to mention a dog or a dog breed.
+    import sys
+
+    print(
+        f"SKIP: {__file__} needs an input image at {IMAGE_PATH}. "
+        f"The published repo does not ship one. See tests/images/ "
+        f"(gitignored) and examples/e2e/README.md for details."
+    )
+    sys.exit(0)
 ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 mesh_device = ttnn.open_mesh_device(
     mesh_shape=ttnn.MeshShape(1, 1),

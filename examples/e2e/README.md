@@ -154,6 +154,28 @@ the first time):
 pip install Pillow pillow-heif
 ```
 
-(The repo's `tests/images/test-dog.png` is actually AVIF-encoded;
-`Pillow` reads it natively on most distributions but `pillow-heif`
-is a safe fallback if your PIL build lacks AVIF support.)
+### VLM input image (not shipped)
+
+The 0.1.0 release intentionally does **not** ship a binary image. The
+VLM e2e scripts under [`gemma4/`](gemma4/) and [`qwen3_vl/`](qwen3_vl/)
+read a picture from `tests/images/test-dog.png` (gitignored — see
+[`.gitignore`](../../.gitignore)) and ask `"What is this animal in
+the photo?"`. To run them, drop **any** Pillow-readable picture of a
+dog at that path:
+
+```bash
+mkdir -p tests/images
+cp ~/Pictures/your_dog.jpg tests/images/test-dog.png
+# (Any Pillow-decodable format works; the .png extension is just the
+# filename the scripts look for.)
+python examples/e2e/gemma4/run_gemma4_e2b.py
+```
+
+If the image is missing the scripts exit 0 with a clear `SKIP:`
+message before acquiring a TTNN mesh device, so it's safe to run the
+whole `examples/e2e/` tree on a fresh clone — the VLM demos skip,
+the LM and vision demos proceed.
+
+The dog-equivalents semantic check at the bottom of each VLM script
+expects the answer to contain `dog`, `puppy`, `retriever`,
+`labrador`, etc. — any in-distribution dog photo will satisfy it.
