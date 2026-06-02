@@ -130,6 +130,10 @@ Issues = "https://github.com/alnah005/tt_symbiote/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+# `_experimental/` holds unregistered modeling code that survives from
+# earlier phases. It is NOT shipped to PyPI users; see
+# src/tt_symbiote/_experimental/__init__.py.
+exclude = ["tt_symbiote._experimental*"]
 
 # Keep migration-era backups (`*.bak`, `*.orig`) out of the published
 # sdist/wheel. They live next to live modules for traceability but are
