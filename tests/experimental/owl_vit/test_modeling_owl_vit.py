@@ -11,9 +11,9 @@ from torch import nn
 from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
 from transformers.models.vit.modeling_vit import ViTSelfAttention
 
-from tt_symbiote.integrations.ttnn_attention import TTNNViTSelfAttention
-from tt_symbiote.integrations.ttnn_linear import TTNNLinear
-from tt_symbiote.integrations.ttnn_normalization import TTNNLayerNorm
+from tt_symbiote.modules.ttnn_attention import TTNNViTSelfAttention
+from tt_symbiote.modules.ttnn_linear import TTNNLinear
+from tt_symbiote.modules.ttnn_normalization import TTNNLayerNorm
 from tt_symbiote.utils.device_management import set_device
 from tt_symbiote.utils.module_replacement import register_module_replacement_dict
 

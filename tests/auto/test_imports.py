@@ -83,7 +83,7 @@ def test_top_level_auto_model_import(name):
     cls = getattr(tt_symbiote, name)
     assert isinstance(cls, type), f"tt_symbiote.{name} should be a class, got {type(cls)}"
     # Every Auto* class must subclass _BaseAutoModelClass.
-    from tt_symbiote.auto.auto_factory import _BaseAutoModelClass
+    from tt_symbiote.models.auto.auto_factory import _BaseAutoModelClass
 
     assert issubclass(cls, _BaseAutoModelClass), f"tt_symbiote.{name} must subclass _BaseAutoModelClass"
     assert cls._HF_AUTO_CLASS is not None, f"tt_symbiote.{name}._HF_AUTO_CLASS is unset"
@@ -109,9 +109,9 @@ def test_count_matches_proposal():
 
 
 def test_auto_subpackage_reexports_everything():
-    """`tt_symbiote.auto.__all__` covers every AutoModel + processor name."""
-    import tt_symbiote.auto as auto
+    """`tt_symbiote.models.auto.__all__` covers every AutoModel + processor name."""
+    import tt_symbiote.models.auto as auto
 
     for name in EXPECTED_AUTO_MODEL_CLASSES + EXPECTED_PROCESSOR_AUTOS:
-        assert name in auto.__all__, f"{name} missing from tt_symbiote.auto.__all__"
-        assert hasattr(auto, name), f"tt_symbiote.auto.{name} is missing"
+        assert name in auto.__all__, f"{name} missing from tt_symbiote.models.auto.__all__"
+        assert hasattr(auto, name), f"tt_symbiote.models.auto.{name} is missing"

@@ -8,7 +8,7 @@ import warnings
 
 import pytest
 
-from tt_symbiote.auto.auto_mappings import TT_MODEL_REGISTRY, register_recipe
+from tt_symbiote.models.auto.auto_mappings import TT_MODEL_REGISTRY, register_recipe
 
 
 @pytest.fixture(autouse=True)
@@ -79,7 +79,7 @@ def test_register_recipe_rejects_empty_name():
 
 
 def test_recipe_protocol_runtime_checkable():
-    from tt_symbiote.auto.auto_mappings import Recipe
+    from tt_symbiote.models.auto.auto_mappings import Recipe
 
     class _Conforming:
         def build_module_dict(self, model):

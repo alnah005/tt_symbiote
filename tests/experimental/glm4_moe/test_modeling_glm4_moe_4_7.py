@@ -14,8 +14,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
 from tt_symbiote.core.run_config import DispatchManager
-from tt_symbiote.integrations.ttnn_activation import TTNNSilu
-from tt_symbiote.integrations.ttnn_linear import TTNNLinearLLama
+from tt_symbiote.modules.ttnn_activation import TTNNSilu
+from tt_symbiote.modules.ttnn_linear import TTNNLinearLLama
 from tt_symbiote.utils.device_management import set_device
 from tt_symbiote.utils.module_replacement import register_module_replacement_dict
 

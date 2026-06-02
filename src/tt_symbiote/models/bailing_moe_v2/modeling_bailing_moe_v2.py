@@ -19,18 +19,14 @@ from transformers.modeling_attn_mask_utils import (
 )
 from transformers.modeling_outputs import MoeModelOutputWithPast
 
-from tt_symbiote.auto.auto_mappings import register_recipe
 from tt_symbiote.core.module import TTNNModule
 from tt_symbiote.core.run_config import trace_enabled
-from tt_symbiote.integrations.ttnn_attention import (
-    PagedAttentionConfig,
-    TTNNBailingMoEAttention,
-    TTNNPagedAttentionKVCache,
-)
-from tt_symbiote.integrations.ttnn_embedding import TTNNBailingPaddedEmbedding, TTNNBailingRotaryEmbedding
-from tt_symbiote.integrations.ttnn_linear import TTNNLinearIColShardedWRowSharded
-from tt_symbiote.integrations.ttnn_moe import TTNNBailingMoE
-from tt_symbiote.integrations.ttnn_normalization import TTNNDistributedRMSNorm
+from tt_symbiote.models.auto.auto_mappings import register_recipe
+from tt_symbiote.modules.ttnn_attention import PagedAttentionConfig, TTNNBailingMoEAttention, TTNNPagedAttentionKVCache
+from tt_symbiote.modules.ttnn_embedding import TTNNBailingPaddedEmbedding, TTNNBailingRotaryEmbedding
+from tt_symbiote.modules.ttnn_linear import TTNNLinearIColShardedWRowSharded
+from tt_symbiote.modules.ttnn_moe import TTNNBailingMoE
+from tt_symbiote.modules.ttnn_normalization import TTNNDistributedRMSNorm
 from tt_symbiote.utils.module_replacement import register_modules
 
 # === content from models/experimental/tt_symbiote/models/bailing_moe_v2.py ===
@@ -377,7 +373,7 @@ class TTNNBailingMoEDecoderLayer(TTNNModule):
         new_layer._is_dense_layer = is_dense
 
         if is_dense:
-            from tt_symbiote.integrations.ttnn_moe import TTNNBailingMoeV2MLP
+            from tt_symbiote.modules.ttnn_moe import TTNNBailingMoeV2MLP
 
             new_layer.mlp = TTNNBailingMoeV2MLP.from_torch(torch_layer.mlp)
         else:

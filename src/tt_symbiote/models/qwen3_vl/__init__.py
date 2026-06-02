@@ -7,7 +7,7 @@
 Importing this package runs the ``@register_recipe`` decorator in
 :mod:`tt_symbiote.models.qwen3_vl.modeling_qwen3_vl` and inserts
 :class:`Qwen3VLRecipe` into
-:data:`tt_symbiote.auto.auto_mappings.TT_MODEL_REGISTRY` under the key
+:data:`tt_symbiote.models.auto.auto_mappings.TT_MODEL_REGISTRY` under the key
 ``"Qwen3VLForConditionalGeneration"``.
 
 Phase 8 Wave B moves the structurally simple compute classes

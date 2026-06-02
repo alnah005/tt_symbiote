@@ -2,23 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Public ``tt_symbiote.auto`` namespace.
+"""Public ``tt_symbiote.models.auto`` namespace.
 
-Re-exports the 43 ``AutoModel*`` classes from :mod:`tt_symbiote.auto.modeling_auto`,
+Re-exports the 43 ``AutoModel*`` classes from :mod:`tt_symbiote.models.auto.modeling_auto`,
 the processor / tokenizer / config Auto re-exports, and the recipe-registry
 API. Mirrors the layout of ``transformers.models.auto`` so existing HF users
 have no surprises.
 """
 
-from tt_symbiote.auto.auto_mappings import (
+from tt_symbiote.models.auto.auto_mappings import (
     TT_MODEL_REGISTRY,
     Recipe,
     register_recipe,
 )
-from tt_symbiote.auto.configuration_auto import AutoConfig
-from tt_symbiote.auto.feature_extraction_auto import AutoFeatureExtractor
-from tt_symbiote.auto.image_processing_auto import AutoImageProcessor
-from tt_symbiote.auto.modeling_auto import (
+from tt_symbiote.models.auto.configuration_auto import AutoConfig
+from tt_symbiote.models.auto.feature_extraction_auto import AutoFeatureExtractor
+from tt_symbiote.models.auto.image_processing_auto import AutoImageProcessor
+from tt_symbiote.models.auto.modeling_auto import (
     AutoBackbone,
     AutoModel,
     AutoModelForAudioClassification,
@@ -64,9 +64,9 @@ from tt_symbiote.auto.modeling_auto import (
     AutoModelForZeroShotImageClassification,
     AutoModelForZeroShotObjectDetection,
 )
-from tt_symbiote.auto.processing_auto import AutoProcessor
-from tt_symbiote.auto.tokenization_auto import AutoTokenizer
-from tt_symbiote.auto.video_processing_auto import AutoVideoProcessor
+from tt_symbiote.models.auto.processing_auto import AutoProcessor
+from tt_symbiote.models.auto.tokenization_auto import AutoTokenizer
+from tt_symbiote.models.auto.video_processing_auto import AutoVideoProcessor
 
 __all__ = [
     # 43 AutoModel* classes

@@ -51,7 +51,7 @@ from __future__ import annotations
 
 import torch
 
-from tt_symbiote.auto.auto_mappings import register_recipe
+from tt_symbiote.models.auto.auto_mappings import register_recipe
 from tt_symbiote.models.qwen3_vl.configuration_qwen3_vl import lookup_ttnn_tuning
 from tt_symbiote.models.qwen3_vl.modeling_qwen3_vl_text import TTNNQwen3VLTextMLP, TTNNQwen3VLTextRMSNorm
 from tt_symbiote.models.qwen3_vl.modeling_qwen3_vl_vision import TTNNQwen3VLVisionMLP, TTNNQwen3VLVisionPatchMerger

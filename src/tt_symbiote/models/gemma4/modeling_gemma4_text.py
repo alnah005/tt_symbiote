@@ -55,8 +55,8 @@ import math
 import ttnn
 
 from tt_symbiote.core.module import TTNNModule
-from tt_symbiote.integrations.ttnn_embedding import TTNNEmbedding
-from tt_symbiote.integrations.ttnn_linear import TTNNLinear
+from tt_symbiote.modules.ttnn_embedding import TTNNEmbedding
+from tt_symbiote.modules.ttnn_linear import TTNNLinear
 
 __all__ = [
     "TTNNGemma4RMSNorm",

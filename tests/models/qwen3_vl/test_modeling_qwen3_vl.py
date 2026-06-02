@@ -33,7 +33,7 @@ import pytest
 def qwen3_vl_recipe():
     """Side-effect import: load the Qwen3-VL modeling package, get the recipe."""
     import tt_symbiote.models.qwen3_vl  # noqa: F401
-    from tt_symbiote.auto.auto_mappings import TT_MODEL_REGISTRY
+    from tt_symbiote.models.auto.auto_mappings import TT_MODEL_REGISTRY
 
     assert "Qwen3VLForConditionalGeneration" in TT_MODEL_REGISTRY, (
         "Qwen3VLRecipe should be registered after importing "

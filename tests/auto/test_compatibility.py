@@ -13,7 +13,7 @@ accidentally regress to the pre-8.5 design.
 The tests do not require real TTNN: they exercise the public hook API
 (:func:`record_swapped_class`, :func:`record_runtime_success`,
 :func:`record_runtime_fallback`) directly and stub the recipe lookup
-via :data:`tt_symbiote.auto.auto_mappings.TT_MODEL_REGISTRY`.
+via :data:`tt_symbiote.models.auto.auto_mappings.TT_MODEL_REGISTRY`.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ class _StubModel:
 
 def _install_stub_recipe(monkeypatch, model_cls, recipe):
     """Make ``compatibility._recipe_for(model)`` return ``recipe``."""
-    from tt_symbiote.auto import auto_mappings
+    from tt_symbiote.models.auto import auto_mappings
 
     monkeypatch.setitem(auto_mappings.TT_MODEL_REGISTRY, model_cls.__name__, recipe)
 

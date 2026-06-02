@@ -7,7 +7,7 @@
 Per ``docs/internal/PROJECT_PROPOSAL.md`` §4.3 we ship full ``Auto*`` coverage even for
 tasks where we have no TTNN recipe yet. Classes with no recipe just fall
 back to "load HF, warn, return unmodified HF model" — that path is
-implemented in :class:`tt_symbiote.auto.auto_factory._BaseAutoModelClass`.
+implemented in :class:`tt_symbiote.models.auto.auto_factory._BaseAutoModelClass`.
 
 The set of classes below is the v5.9.0 list extracted from
 ``transformers.models.auto.modeling_auto``. The file is hand-listed (not
@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import transformers
 
-from tt_symbiote.auto.auto_factory import _BaseAutoBackboneClass, _BaseAutoModelClass
+from tt_symbiote.models.auto.auto_factory import _BaseAutoBackboneClass, _BaseAutoModelClass
 
 __all__ = [
     "AutoModel",

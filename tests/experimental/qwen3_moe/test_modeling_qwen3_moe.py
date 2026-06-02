@@ -26,7 +26,7 @@ from tt_symbiote.core.run_config import TracedRun
 
 # FIXED IMPORTS: Use Qwen-specific modules from their dedicated files
 from tt_symbiote._experimental.qwen3_moe.modeling_qwen3_moe import TTNNQwen3MoE
-from tt_symbiote.integrations.ttnn_attention import PagedAttentionConfig
+from tt_symbiote.modules.ttnn_attention import PagedAttentionConfig
 from tt_symbiote._experimental.qwen3_moe.modeling_qwen3_moe import (
     TTNNQwen3LinearAttention,
     TTNNQwen3FullAttention,

@@ -17,7 +17,7 @@ from ttnn.model_preprocessing import preprocess_linear_weight
 from tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices
 from tt_symbiote.core.run_config import disable_trace
 from tt_symbiote.core.tensor import TorchTTNNTensor
-from tt_symbiote.integrations.ttnn_linear import (
+from tt_symbiote.modules.ttnn_linear import (
     TTNNLinearIColShardedWRowSharded,
     TTNNLinearLLamaIColShardedWRowSharded,
     TTNNLinearSilu,

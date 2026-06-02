@@ -3,7 +3,7 @@
 """Tests MoE modules with TTNN acceleration."""
 import pytest
 import torch
-from tt_symbiote.integrations.ttnn_moe import (
+from tt_symbiote.modules.ttnn_moe import (
     Glm4MoeConfig,
     Glm4MoeMoE,
     TTNNMoE,

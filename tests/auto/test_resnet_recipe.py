@@ -31,7 +31,7 @@ from torch import nn
 def recipe():
     """Import the ResNet modeling module (registers recipe) and return the instance."""
     import tt_symbiote.models.resnet  # noqa: F401 — side-effect import
-    from tt_symbiote.auto.auto_mappings import TT_MODEL_REGISTRY
+    from tt_symbiote.models.auto.auto_mappings import TT_MODEL_REGISTRY
 
     return TT_MODEL_REGISTRY["ResNetForImageClassification"]
 

@@ -26,7 +26,7 @@ import pytest
 def model_recipe():
     """Side-effect import: load the modeling package, get the recipe."""
     import tt_symbiote.models.<NAME>  # noqa: F401
-    from tt_symbiote.auto.auto_mappings import TT_MODEL_REGISTRY
+    from tt_symbiote.models.auto.auto_mappings import TT_MODEL_REGISTRY
 
     assert "<HF_CLASS>" in TT_MODEL_REGISTRY
     return TT_MODEL_REGISTRY["<HF_CLASS>"]

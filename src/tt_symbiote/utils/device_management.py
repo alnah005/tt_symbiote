@@ -382,7 +382,7 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs) -> None:
     #      against the same loaded model without re-loading.
     # ``override`` wins per-key, mirroring how ``dict.update`` works.
     try:
-        from tt_symbiote.auto.auto_mappings import TT_MODEL_REGISTRY
+        from tt_symbiote.models.auto.auto_mappings import TT_MODEL_REGISTRY
     except Exception:
         TT_MODEL_REGISTRY = {}
     recipe = TT_MODEL_REGISTRY.get(type(obj).__name__)

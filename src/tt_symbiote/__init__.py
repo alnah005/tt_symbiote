@@ -33,7 +33,7 @@ try:
 except PackageNotFoundError:  # editable install before pip resolves metadata
     __version__ = "0.0.0+unknown"
 
-from tt_symbiote.auto import (
+from tt_symbiote.models.auto import (
     AutoBackbone,
     AutoConfig,
     AutoFeatureExtractor,
@@ -95,7 +95,7 @@ from tt_symbiote.utils.module_replacement import register_modules
 
 # HF-style side-effect import: pulling in :mod:`tt_symbiote.models` triggers
 # the per-model ``@register_recipe`` decorators, populating
-# :data:`tt_symbiote.auto.auto_mappings.TT_MODEL_REGISTRY` before the user
+# :data:`tt_symbiote.models.auto.auto_mappings.TT_MODEL_REGISTRY` before the user
 # can call :meth:`AutoModelForCausalLM.from_pretrained`. Guarded with
 # try/except so a broken model file degrades to "no recipe" rather than
 # blowing up the whole import.

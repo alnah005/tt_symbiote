@@ -209,7 +209,7 @@ class _ModelStub(nn.Module):
 
 def _register_stub_recipe(monkeypatch):
     """Insert ``_RecipeStub`` into ``TT_MODEL_REGISTRY`` under ``_ModelStub`` for one test."""
-    from tt_symbiote.auto import auto_mappings
+    from tt_symbiote.models.auto import auto_mappings
 
     stub = _RecipeStub()
     original = dict(auto_mappings.TT_MODEL_REGISTRY)

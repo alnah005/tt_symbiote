@@ -13,7 +13,7 @@ symbols that have since been removed or moved.
 Each shim below documents exactly one such removal and installs a
 replacement when the symbol is missing. :func:`install_transformers_shims`
 is called from
-:meth:`tt_symbiote.auto.auto_factory._BaseAutoModelClass.from_pretrained`
+:meth:`tt_symbiote.models.auto.auto_factory._BaseAutoModelClass.from_pretrained`
 before the HF auto factory triggers the dynamic remote-code import, so
 the shims are in place when the Hub file's top-level ``from
 transformers...import...`` lines execute.

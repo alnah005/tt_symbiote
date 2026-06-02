@@ -9,7 +9,7 @@ import torch
 
 from tt_symbiote.core.tensor import TorchTTNNTensor
 from tt_symbiote.core.utils import compare_fn_outputs
-from tt_symbiote.integrations.ttnn_attention import (
+from tt_symbiote.modules.ttnn_attention import (
     SelfAttention,
     SelfAttentionConfig,
     TTNNSelfAttention,

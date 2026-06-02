@@ -7,7 +7,7 @@
 Importing this package runs the ``@register_recipe`` decorator in
 :mod:`tt_symbiote.models.bailing_moe_v2.modeling_bailing_moe_v2` and
 inserts :class:`BailingMoEV2Recipe` into
-:data:`tt_symbiote.auto.auto_mappings.TT_MODEL_REGISTRY` under the key
+:data:`tt_symbiote.models.auto.auto_mappings.TT_MODEL_REGISTRY` under the key
 ``"BailingMoeV2ForCausalLM"``.
 """
 

@@ -42,7 +42,7 @@ Generate comprehensive tiered PCC tests for a HuggingFace model's TTNN bring-up.
   WARNING: Some existing tests (e.g., gemma4, qwen3_moe) still use the deprecated name. Do NOT copy those patterns.
 
 **Import conventions**:
-  - Integration modules: `from tt_symbiote.integrations.ttnn_<module> import TTNN<Class>`
+  - Integration modules: `from tt_symbiote.modules.ttnn_<module> import TTNN<Class>`
   - Core: `from tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch`
   - Tier 1-3 tests: `from tt_symbiote.utils.device_management import set_device`
   - Tier 4 (full model with Auto API): `from tt_symbiote import AutoModelForCausalLM, set_device`
@@ -127,7 +127,7 @@ This skill follows a mandatory loop structure. If the loop fails 5 times, report
 4. Draft test file contents for each tier
 
 ### VERIFY Phase (no hardware, no user approval needed)
-1. Verify all imports resolve: `python -c "from tt_symbiote.integrations.ttnn_linear import TTNNLinear; ..."`
+1. Verify all imports resolve: `python -c "from tt_symbiote.modules.ttnn_linear import TTNNLinear; ..."`
 2. Verify shapes are consistent with HuggingFace config dimensions
 3. Verify no `torch.*` calls in any generated `forward()` bodies
 4. Verify `@run_on_devices` decorator is present on all generated `forward()` methods
@@ -193,9 +193,9 @@ Write all files (pcc_utils.py, shapes.json, op_map.json, test files).
 3. **Present module hierarchy to user as tree, ASK:** "Does this look correct? Any modules to add/remove?"
 
 4. Map each module to existing tt_symbiote integration classes:
-   - `nn.Linear` -> `TTNNLinear` from `tt_symbiote.integrations.ttnn_linear`
-   - `RMSNorm` -> `TTNNRMSNorm` from `tt_symbiote.integrations.ttnn_normalization`
-   - `LayerNorm` -> `TTNNLayerNorm` from `tt_symbiote.integrations.ttnn_normalization`
+   - `nn.Linear` -> `TTNNLinear` from `tt_symbiote.modules.ttnn_linear`
+   - `RMSNorm` -> `TTNNRMSNorm` from `tt_symbiote.modules.ttnn_normalization`
+   - `LayerNorm` -> `TTNNLayerNorm` from `tt_symbiote.modules.ttnn_normalization`
    - Attention -> Check `ttnn_attention.py` (TTNNSelfAttention, TTNNFusedQKVSelfAttention, etc.)
    - MoE -> Check `ttnn_moe.py` (TTNNMoE, TTNNExperts, etc.)
    - If no integration exists, flag it to the user
@@ -337,13 +337,13 @@ Also create `tests/capabilities/<model_name>/op_map.json`:
   "TTNNLinear": {
     "ttnn_ops": ["ttnn.linear"],
     "used_by": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-    "import_path": "tt_symbiote.integrations.ttnn_linear.TTNNLinear",
+    "import_path": "tt_symbiote.modules.ttnn_linear.TTNNLinear",
     "device_constraint": null
   },
   "TTNNRMSNorm": {
     "ttnn_ops": ["ttnn.rms_norm"],
     "used_by": ["input_layernorm", "post_attention_layernorm", "norm"],
-    "import_path": "tt_symbiote.integrations.ttnn_normalization.TTNNRMSNorm",
+    "import_path": "tt_symbiote.modules.ttnn_normalization.TTNNRMSNorm",
     "device_constraint": null
   }
 }

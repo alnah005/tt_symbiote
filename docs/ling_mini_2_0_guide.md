@@ -341,7 +341,7 @@ Everything wired together:
         # Hub modeling files authored against older transformers releases
         # frequently import symbols (e.g. ``is_torch_fx_available``) that
         # have since been removed. See ``tt_symbiote/_hf_compat.py``.
-        from tt_symbiote._hf_compat import install_transformers_shims
+        from tt_symbiote.utils.hf_compat import install_transformers_shims
 
         install_transformers_shims()
 
@@ -619,7 +619,7 @@ the exit code.
 | --- | --- | --- |
 | `AttributeError: partially initialized module 'ttnn' has no attribute 'global_avg_pool2d'` | Stale `_ttnncpp.so` (built before a Python source update in `tt-metal/ttnn/operations/pool.py`). | `cd /home/aroberge/tt-metal && ninja -C build_Release install` |
 | `TypeError: open_mesh_device() got an unexpected keyword argument 'fabric_config'` | Code uses the old `tt-metal` API. | Use `ttnn.set_fabric_config(...)` **before** `open_mesh_device`, drop `fabric_config=` from the kwargs. |
-| `ImportError: cannot import name 'is_torch_fx_available' from 'transformers.utils.import_utils'` | `_hf_compat.install_transformers_shims()` did not run (e.g. you called `transformers.AutoModelForCausalLM.from_pretrained` directly instead of going through `tt_symbiote`). | Call `from tt_symbiote._hf_compat import install_transformers_shims; install_transformers_shims()` once before any HF auto factory load, **or** use `tt_symbiote.AutoModelForCausalLM` (which installs the shims automatically). |
+| `ImportError: cannot import name 'is_torch_fx_available' from 'transformers.utils.import_utils'` | `_hf_compat.install_transformers_shims()` did not run (e.g. you called `transformers.AutoModelForCausalLM.from_pretrained` directly instead of going through `tt_symbiote`). | Call `from tt_symbiote.utils.hf_compat import install_transformers_shims; install_transformers_shims()` once before any HF auto factory load, **or** use `tt_symbiote.AutoModelForCausalLM` (which installs the shims automatically). |
 | `KeyError: 'default'` inside `BailingMoeV2RotaryEmbedding.__init__` | Same root cause as above (shims not installed). | Same fix as above. |
 | Warning: `No tt_symbiote recipe for 'BailingMoeV2ForCausalLM'; returning unmodified HF model.` | Top-level eager import of `tt_symbiote.models` failed silently. Check `import tt_symbiote` for warnings. | Investigate the warning emitted at import time; it carries the original exception. |
 | `set_device` raises `_device is not None` failure during `model.generate` | `set_device` was never called on this model. | Add `set_device(model, mesh_device)` immediately after `from_pretrained`. |

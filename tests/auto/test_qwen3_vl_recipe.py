@@ -34,7 +34,7 @@ from torch import nn
 def recipe():
     """Importing the modeling module registers the recipe; return the instance."""
     import tt_symbiote.models.qwen3_vl  # noqa: F401 — side-effect import
-    from tt_symbiote.auto.auto_mappings import TT_MODEL_REGISTRY
+    from tt_symbiote.models.auto.auto_mappings import TT_MODEL_REGISTRY
 
     return TT_MODEL_REGISTRY["Qwen3VLForConditionalGeneration"]
 

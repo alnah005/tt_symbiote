@@ -76,7 +76,7 @@ The orchestrator automatically selects validation inputs based on model architec
   Use `register_modules()` from `tt_symbiote.utils.module_replacement`.
 
 **Import conventions**:
-  - Integration modules: `from tt_symbiote.integrations.ttnn_<module> import TTNN<Class>`
+  - Integration modules: `from tt_symbiote.modules.ttnn_<module> import TTNN<Class>`
   - Core: `from tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch`
   - Tier 1-3 tests: `from tt_symbiote.utils.device_management import set_device`
   - Tier 4 (Auto API): `from tt_symbiote import AutoModelForCausalLM, set_device`
@@ -486,7 +486,7 @@ python -c "from tt_symbiote.models.<model_name> import TTNN<ModelName>Model; pri
 
 # If Recipe path:
 python -c "
-from tt_symbiote.auto.auto_mappings import TT_MODEL_REGISTRY
+from tt_symbiote.models.auto.auto_mappings import TT_MODEL_REGISTRY
 assert '<HFModelClass>ForCausalLM' in TT_MODEL_REGISTRY, 'Recipe not registered!'
 print('Recipe registered')
 "
@@ -512,8 +512,8 @@ Device target: T3K (8x Wormhole)
 import ttnn
 
 from tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
-from tt_symbiote.integrations.ttnn_linear import TTNNLinear
-from tt_symbiote.integrations.ttnn_normalization import TTNNRMSNorm
+from tt_symbiote.modules.ttnn_linear import TTNNLinear
+from tt_symbiote.modules.ttnn_normalization import TTNNRMSNorm
 from tt_symbiote.utils.module_replacement import register_modules
 
 TT_METAL_COMMIT = '<full 40-char git hash from Step 0c>'
@@ -596,7 +596,7 @@ If Recipe/Auto API path, also generate:
 ```python
 from typing import Dict, Type
 from torch import nn
-from tt_symbiote.auto.auto_mappings import register_recipe
+from tt_symbiote.models.auto.auto_mappings import register_recipe
 
 @register_recipe(hf_class_name="<HFModelClass>ForCausalLM")
 class <ModelName>Recipe:

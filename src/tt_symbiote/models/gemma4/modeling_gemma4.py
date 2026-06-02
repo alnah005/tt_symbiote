@@ -78,7 +78,7 @@ import warnings
 
 import torch
 
-from tt_symbiote.auto.auto_mappings import register_recipe
+from tt_symbiote.models.auto.auto_mappings import register_recipe
 from tt_symbiote.models.gemma4.configuration_gemma4 import lookup_ttnn_tuning
 from tt_symbiote.models.gemma4.modeling_gemma4_text import (
     TTNNGemma4RMSNorm,

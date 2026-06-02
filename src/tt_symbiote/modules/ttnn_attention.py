@@ -18,14 +18,14 @@ import ttnn
 
 from tt_symbiote.core.module import TTNNModule
 from tt_symbiote.core.tensor import TorchTTNNTensor
-from tt_symbiote.integrations.ttnn_linear import (
+from tt_symbiote.modules.ttnn_linear import (
     TTNNLinear,
     TTNNLinearIColShardedWAllReduced,
     TTNNLinearIColShardedWRowSharded,
     TTNNLinearIReplicatedWColSharded,
 )
-from tt_symbiote.integrations.ttnn_normalization import TTNNDistributedRMSNorm
-from tt_symbiote.integrations.ttnn_rope import TTNNDistributedRotaryPositionEmbedding, TTNNRotaryPositionEmbedding
+from tt_symbiote.modules.ttnn_normalization import TTNNDistributedRMSNorm
+from tt_symbiote.modules.ttnn_rope import TTNNDistributedRotaryPositionEmbedding, TTNNRotaryPositionEmbedding
 
 try:
     from transformers.cache_utils import Cache
@@ -1108,7 +1108,7 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         new_attn.num_heads = torch_attn.num_heads
         new_attn.scaling = torch_attn.scaling
 
-        from tt_symbiote.integrations.ttnn_normalization import TTNNRMSNorm
+        from tt_symbiote.modules.ttnn_normalization import TTNNRMSNorm
 
         LinearCls = TTNNLinearIColShardedWRowSharded if distributed else TTNNLinear
         LinearClsOut = TTNNLinearIReplicatedWColSharded if distributed else TTNNLinear
@@ -1888,7 +1888,7 @@ class TTNNBailingMoEAttention(TTNNModule):
         Splits fused QKV into separate Q (sharded), K/V (replicated) projections
         and permutes Q/K weights from HF to Meta layout for rotary_embedding_llama.
         """
-        from tt_symbiote.integrations.ttnn_normalization import TTNNRMSNorm
+        from tt_symbiote.modules.ttnn_normalization import TTNNRMSNorm
 
         new_attn = cls()
         new_attn._fallback_torch_layer = torch_attn
@@ -2008,7 +2008,7 @@ class TTNNBailingMoEAttention(TTNNModule):
             )
 
         # Initialize BailingRotarySetup (Meta-format cos/sin with identity padding)
-        from tt_symbiote.integrations.ttnn_rope import BailingRotarySetup
+        from tt_symbiote.modules.ttnn_rope import BailingRotarySetup
 
         config = self._fallback_torch_layer.config
         self._rotary_setup = BailingRotarySetup(

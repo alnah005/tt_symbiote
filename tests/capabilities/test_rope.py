@@ -9,7 +9,7 @@ import torch
 
 from tt_symbiote.core.tensor import TorchTTNNTensor
 from tt_symbiote.core.utils import compare_fn_outputs
-from tt_symbiote.integrations.ttnn_rope import TorchRotaryPositionEmbedding, TTNNRotaryPositionEmbedding
+from tt_symbiote.modules.ttnn_rope import TorchRotaryPositionEmbedding, TTNNRotaryPositionEmbedding
 from tt_symbiote.utils.device_management import set_device
 
 

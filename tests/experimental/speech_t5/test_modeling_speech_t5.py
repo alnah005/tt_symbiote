@@ -10,9 +10,9 @@ from torch import nn
 from transformers import SpeechT5ForTextToSpeech, SpeechT5HifiGan, SpeechT5Processor
 
 from tt_symbiote.core.run_config import DispatchManager
-from tt_symbiote.integrations.ttnn_activation import TTNNSilu
-from tt_symbiote.integrations.ttnn_linear import TTNNLinear
-from tt_symbiote.integrations.ttnn_normalization import TTNNLayerNorm
+from tt_symbiote.modules.ttnn_activation import TTNNSilu
+from tt_symbiote.modules.ttnn_linear import TTNNLinear
+from tt_symbiote.modules.ttnn_normalization import TTNNLayerNorm
 from tt_symbiote.utils.device_management import set_device
 from tt_symbiote.utils.module_replacement import register_module_replacement_dict
 

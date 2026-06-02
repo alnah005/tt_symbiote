@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Recipe registry that powers :mod:`tt_symbiote.auto`.
+"""Recipe registry that powers :mod:`tt_symbiote.models.auto`.
 
 A *Recipe* is a small object that knows, given a loaded HF model instance,
 how to produce the PyTorch -> TTNN module-replacement dict (and any
@@ -34,7 +34,7 @@ class Recipe(Protocol):
 
     - ``post_register(model)``: any model-specific post-replacement patches
       (runs immediately after ``register_modules`` inside
-      :class:`~tt_symbiote.auto.auto_factory._BaseAutoModelClass.from_pretrained`).
+      :class:`~tt_symbiote.models.auto.auto_factory._BaseAutoModelClass.from_pretrained`).
     - ``make_kv_cache(model, device, **kwargs)``: build and return the
       model-specific KV cache object (e.g. a paged attention cache). Called
       by :func:`tt_symbiote.utils.device_management.set_device` once every

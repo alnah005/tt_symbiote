@@ -177,7 +177,7 @@ tt_symbiote/                           # repo root
 
 ### Naming convention reconciliation
 
-The current package uses prefix `TTNN` (`TTNNLinear`, `TTNNRMSNorm`, …). We keep that prefix — it visually distinguishes TT classes from HF originals and makes mixed code readable. **TBD during implementation:** whether per-file filenames should drop the `ttnn_` prefix (e.g. `integrations/linear.py` vs `integrations/ttnn_linear.py`); leaning toward `ttnn_*` so the import line `from tt_symbiote.integrations.ttnn_linear import TTNNLinear` is unambiguous.
+The current package uses prefix `TTNN` (`TTNNLinear`, `TTNNRMSNorm`, …). We keep that prefix — it visually distinguishes TT classes from HF originals and makes mixed code readable. **TBD during implementation:** whether per-file filenames should drop the `ttnn_` prefix (e.g. `integrations/linear.py` vs `integrations/ttnn_linear.py`); leaning toward `ttnn_*` so the import line `from tt_symbiote.modules.ttnn_linear import TTNNLinear` is unambiguous.
 
 ---
 
@@ -251,7 +251,7 @@ The registry is populated by per-model modules at import time via a decorator:
 
 ```python
 # src/tt_symbiote/models/bailing_moe_v2/modeling_bailing_moe_v2.py
-from tt_symbiote.auto.auto_mappings import register_recipe
+from tt_symbiote.models.auto.auto_mappings import register_recipe
 
 @register_recipe(hf_class_name="BailingMoeV2ForCausalLM")
 class BailingMoEV2Recipe:
@@ -380,7 +380,7 @@ Create `.cursor/skills/port-hf-model/SKILL.md` inside the new repo. The skill's 
 - **Input:** HF model repo id (e.g. `inclusionAI/Ling-mini-3.0`), target `DeviceArch` (e.g. `T3K`), optional reference: an already-ported sibling model in `tt_symbiote/models/`.
 - **Stages:**
   1. Load the HF model in a sandbox, dump the type tree, identify the decoder/attention/MoE/embedding/norm classes.
-  2. Generate a skeleton `modeling_<model>.py` next to its HF analog, importing generic blocks from `tt_symbiote.integrations.*` and only overriding what's model-specific.
+  2. Generate a skeleton `modeling_<model>.py` next to its HF analog, importing generic blocks from `tt_symbiote.modules.*` and only overriding what's model-specific.
   3. Generate the `@register_recipe` decorator with the module dict (analog of the three-pass dict in today's `test_gemma4.py` / `test_ling_mini_2_0.py`).
   4. Generate a thin smoke test in `tests/capabilities/<model>/`.
   5. Run the smoke test; iterate on the recipe until it passes or the model is dropped.

@@ -19,7 +19,7 @@ What's included
 Only [`builder.py`](builder.py) is vendored — it provides
 ``Conv2dConfiguration``, ``MaxPool2dConfiguration``, ``TtConv2d``,
 ``TtMaxPool2d`` (the four symbols
-:mod:`tt_symbiote.integrations.ttnn_conv` consumes).
+:mod:`tt_symbiote.modules.ttnn_conv` consumes).
 
 What's intentionally absent
 ---------------------------

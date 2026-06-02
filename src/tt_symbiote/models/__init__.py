@@ -7,7 +7,7 @@
 Importing this package eagerly imports every recipe-bearing model
 subpackage so the ``@register_recipe`` decorators inside their
 ``modeling_<model>.py`` files run and populate
-:data:`tt_symbiote.auto.auto_mappings.TT_MODEL_REGISTRY`. This mirrors the
+:data:`tt_symbiote.models.auto.auto_mappings.TT_MODEL_REGISTRY`. This mirrors the
 side-effect-import pattern used by ``transformers/models/__init__.py`` to
 register Auto-class mappings at top-level import time.
 

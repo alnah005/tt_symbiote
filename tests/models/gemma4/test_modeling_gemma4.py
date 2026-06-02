@@ -34,7 +34,7 @@ import pytest
 def gemma4_recipe():
     """Side-effect import: load the Gemma-4 modeling package, get the recipe."""
     import tt_symbiote.models.gemma4  # noqa: F401
-    from tt_symbiote.auto.auto_mappings import TT_MODEL_REGISTRY
+    from tt_symbiote.models.auto.auto_mappings import TT_MODEL_REGISTRY
 
     assert "Gemma4ForConditionalGeneration" in TT_MODEL_REGISTRY, (
         "Gemma4Recipe should be registered after importing "

@@ -10,7 +10,7 @@ from torch import nn
 
 from tt_symbiote.core.tensor import TorchTTNNTensor
 from tt_symbiote.core.utils import compare_fn_outputs
-from tt_symbiote.integrations.ttnn_conv import (
+from tt_symbiote.modules.ttnn_conv import (
     NHWCConvBNActivationPytorch,
     NHWCConvBNPytorch,
     NHWCConvPytorch,

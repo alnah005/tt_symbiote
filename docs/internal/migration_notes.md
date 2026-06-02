@@ -56,7 +56,7 @@ Bump procedure when moving to a new transformers release:
 
 | Script | Purpose |
 |---|---|
-| `scripts/codemod_imports.py` | One-shot import rewriter. Drops dispatcher imports, rewrites `models.experimental.tt_symbiote.*` → `tt_symbiote.*`, rewrites `models.tt_transformers.tt.ccl` → `tt_symbiote.core.ccl`, rewrites `models.tt_cnn.tt` → `tt_symbiote.integrations.tt_cnn`, and remaps the intra-package `modules/` → `integrations/` + `models/<model>/` moves. Handles multi-line `from X import (\n  a,\n  b,\n)` blocks correctly. Idempotent (model-name rules use negative lookaheads). |
+| `scripts/codemod_imports.py` | One-shot import rewriter. Drops dispatcher imports, rewrites `models.experimental.tt_symbiote.*` → `tt_symbiote.*`, rewrites `models.tt_transformers.tt.ccl` → `tt_symbiote.core.ccl`, rewrites `models.tt_cnn.tt` → `tt_symbiote.modules.tt_cnn`, and remaps the intra-package `modules/` → `integrations/` + `models/<model>/` moves. Handles multi-line `from X import (\n  a,\n  b,\n)` blocks correctly. Idempotent (model-name rules use negative lookaheads). |
 | `scripts/merge_model_files.py` | Concatenates the multiple per-model source files into a single `modeling_<model>.py` per model. Deduplicates top-level imports, drops self-imports that would become circular after the merge, and inserts `# === content from ... ===` section markers so the origin of each block is traceable. |
 | `scripts/_smoke_conftest.py` | Local-only stubs for `ttnn` and `tracy`. Used to verify the Phase 2 import graph on a host where the C extensions are not yet installed. Activated by passing `-p scripts._smoke_conftest` to `pytest`. |
 
@@ -81,7 +81,7 @@ Discovered during the codemod that
 self-contained on `ttnn`/`torch`). Same situation as `TT_CCL`, so it was
 vendored identically into `src/tt_symbiote/integrations/tt_cnn/` and the
 codemod was extended with the rule
-`models.tt_cnn.tt` → `tt_symbiote.integrations.tt_cnn`.
+`models.tt_cnn.tt` → `tt_symbiote.modules.tt_cnn`.
 
 This is **OQ-5** in spirit: revisit when (or if) tt-metal ships a pip-installable
 distribution; at that point we can stop vendoring.

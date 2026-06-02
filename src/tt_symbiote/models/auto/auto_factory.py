@@ -17,7 +17,7 @@ from __future__ import annotations
 import warnings
 from typing import Any, Optional, Type
 
-from tt_symbiote.auto.auto_mappings import TT_MODEL_REGISTRY
+from tt_symbiote.models.auto.auto_mappings import TT_MODEL_REGISTRY
 from tt_symbiote.utils.module_replacement import register_modules
 
 __all__ = ["_BaseAutoModelClass", "_BaseAutoBackboneClass"]
@@ -27,7 +27,7 @@ class _BaseAutoModelClass:
     """Common ``Auto*`` plumbing.
 
     Subclasses set ``_HF_AUTO_CLASS`` to the matching ``transformers.AutoModel*``
-    class (resolved lazily so importing :mod:`tt_symbiote.auto` does not
+    class (resolved lazily so importing :mod:`tt_symbiote.models.auto` does not
     require ``transformers`` to be installed at module-import time — only at
     ``from_pretrained`` time).
     """
@@ -65,8 +65,8 @@ class _BaseAutoModelClass:
         # Install compat shims before HF's dynamic remote-code loader runs:
         # Hub modeling files authored against older transformers releases
         # frequently import symbols (e.g. ``is_torch_fx_available``) that
-        # have since been removed. See ``tt_symbiote/_hf_compat.py``.
-        from tt_symbiote._hf_compat import install_transformers_shims
+        # have since been removed. See ``tt_symbiote/utils/hf_compat.py``.
+        from tt_symbiote.utils.hf_compat import install_transformers_shims
 
         install_transformers_shims()
 

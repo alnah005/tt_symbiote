@@ -20,10 +20,10 @@ from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.whisper.tt.ttnn_optimized_functional_whisper import create_custom_mesh_preprocessor, encoder_layer
 from tt_symbiote.core.module import TTNNModule
 from tt_symbiote.core.run_config import DispatchManager
-from tt_symbiote.integrations.ttnn_activation import TTNNGelu, TTNNSilu
-from tt_symbiote.integrations.ttnn_attention import TTNNWhisperAttention
-from tt_symbiote.integrations.ttnn_linear import TTNNLinear
-from tt_symbiote.integrations.ttnn_normalization import TTNNLayerNorm
+from tt_symbiote.modules.ttnn_activation import TTNNGelu, TTNNSilu
+from tt_symbiote.modules.ttnn_attention import TTNNWhisperAttention
+from tt_symbiote.modules.ttnn_linear import TTNNLinear
+from tt_symbiote.modules.ttnn_normalization import TTNNLayerNorm
 from tt_symbiote.utils.device_management import set_device
 from tt_symbiote.utils.module_replacement import register_module_replacement_dict
 

@@ -7,7 +7,7 @@
 Importing this package runs the ``@register_recipe`` decorator in
 :mod:`tt_symbiote.models.gemma4.modeling_gemma4` and inserts
 :class:`Gemma4Recipe` into
-:data:`tt_symbiote.auto.auto_mappings.TT_MODEL_REGISTRY` under the key
+:data:`tt_symbiote.models.auto.auto_mappings.TT_MODEL_REGISTRY` under the key
 ``"Gemma4ForConditionalGeneration"``.
 
 Phase 8 Wave A moves the structurally simple classes (``Gemma4RMSNorm``,

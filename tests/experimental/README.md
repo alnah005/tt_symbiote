@@ -47,7 +47,7 @@ To bring one of these models back into the supported set:
 
 | Subdir | Notes |
 |---|---|
-| `glm4_moe/` | 4 variant files; references `tt_symbiote.integrations.ttnn_moe.Glm4MoeConfig` which IS in the runtime |
+| `glm4_moe/` | 4 variant files; references `tt_symbiote.modules.ttnn_moe.Glm4MoeConfig` which IS in the runtime |
 | `gpt_oss/` | GPT-OSS MoE |
 | `gr00t/` | NVIDIA GR00T |
 | `hunyuan_video/` | Hunyuan video diffusion |

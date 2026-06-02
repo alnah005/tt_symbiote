@@ -32,7 +32,7 @@ from torch import nn
 def recipe():
     """Import the Ling modeling module (registers recipe) and return the instance."""
     import tt_symbiote.models.bailing_moe_v2  # noqa: F401 — side-effect import
-    from tt_symbiote.auto.auto_mappings import TT_MODEL_REGISTRY
+    from tt_symbiote.models.auto.auto_mappings import TT_MODEL_REGISTRY
 
     return TT_MODEL_REGISTRY["BailingMoeV2ForCausalLM"]
 

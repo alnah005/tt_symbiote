@@ -43,7 +43,7 @@ Profile a pytest test or standalone script to measure TTNN op device times.
   Use `register_modules()` from `tt_symbiote.utils.module_replacement`.
 
 **Import conventions**:
-  - Integration modules: `from tt_symbiote.integrations.ttnn_<module> import TTNN<Class>`
+  - Integration modules: `from tt_symbiote.modules.ttnn_<module> import TTNN<Class>`
   - Core: `from tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch`
   - Device management: `from tt_symbiote.utils.device_management import set_device`
 

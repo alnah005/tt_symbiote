@@ -44,14 +44,14 @@ from transformers.models.resnet.modeling_resnet import (
     ResNetShortCut,
 )
 
-from tt_symbiote.auto.auto_mappings import register_recipe
 from tt_symbiote.core.module import TTNNModule
 from tt_symbiote.core.run_config import trace_enabled
-from tt_symbiote.integrations.ttnn_activation import TTNNReLU
-from tt_symbiote.integrations.ttnn_conv import TTNNConv2dBNActivationNHWC, TTNNConv2dBNNHWC, TTNNMaxPool2dNHWC
-from tt_symbiote.integrations.ttnn_linear import TTNNLinear  # noqa: F401 — re-exported via recipe
-from tt_symbiote.integrations.ttnn_tensor import TTNNPermute
+from tt_symbiote.models.auto.auto_mappings import register_recipe
 from tt_symbiote.models.resnet.configuration_resnet import lookup_ttnn_tuning
+from tt_symbiote.modules.ttnn_activation import TTNNReLU
+from tt_symbiote.modules.ttnn_conv import TTNNConv2dBNActivationNHWC, TTNNConv2dBNNHWC, TTNNMaxPool2dNHWC
+from tt_symbiote.modules.ttnn_linear import TTNNLinear  # noqa: F401 — re-exported via recipe
+from tt_symbiote.modules.ttnn_tensor import TTNNPermute
 
 __all__ = [
     "ResNetRecipe",
@@ -228,7 +228,7 @@ class TTNNResNetBottleNeckLayer(TTNNModule):
     Used by resnet-50/101/152. HF's shape (note the nested
     ``nn.Sequential`` — different from torchvision's flat
     ``conv1/bn1/conv2/bn2/conv3/bn3`` that the legacy
-    :class:`tt_symbiote.integrations.ttnn_conv.TTNNBottleneck` was
+    :class:`tt_symbiote.modules.ttnn_conv.TTNNBottleneck` was
     written against):
 
         layer.layer      -> nn.Sequential(

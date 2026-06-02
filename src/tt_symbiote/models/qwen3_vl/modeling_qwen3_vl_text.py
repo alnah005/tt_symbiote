@@ -26,7 +26,7 @@ from __future__ import annotations
 import ttnn
 
 from tt_symbiote.core.module import TTNNModule
-from tt_symbiote.integrations.ttnn_linear import TTNNLinear
+from tt_symbiote.modules.ttnn_linear import TTNNLinear
 
 __all__ = [
     "TTNNQwen3VLTextMLP",

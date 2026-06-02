@@ -215,7 +215,7 @@ EXECUTE: Write files, run commands, produce artifacts
 ```
 
 Verification checks (done WITHOUT hardware, WITHOUT user approval):
-- All imports resolve: `python -c "from tt_symbiote.integrations.ttnn_linear import TTNNLinear"`
+- All imports resolve: `python -c "from tt_symbiote.modules.ttnn_linear import TTNNLinear"`
 - No `torch.*` calls in `forward()` bodies (pure TTNN constraint)
 - Shapes are consistent with `shapes.json` and HF config
 - `@run_on_devices` decorator present on all `forward()` methods

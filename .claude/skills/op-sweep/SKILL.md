@@ -96,7 +96,7 @@ This skill follows a mandatory loop structure. If the loop fails 5 times, report
 
 ### VERIFY Phase (no hardware, no user approval needed)
 1. Verify shapes.json exists and is valid: `python -c "import json; json.load(open('tests/capabilities/<model_name>/shapes.json'))"`
-2. Verify all imports resolve: `python -c "from tt_symbiote.integrations.ttnn_linear import TTNNLinear; from ttnn.model_preprocessing import preprocess_linear_weight"`
+2. Verify all imports resolve: `python -c "from tt_symbiote.modules.ttnn_linear import TTNNLinear; from ttnn.model_preprocessing import preprocess_linear_weight"`
 3. Verify the sweep subclass forward() uses only `ttnn.*` ops (pure TTNN constraint)
 4. Verify `@run_on_devices` is present on any overridden `forward()` methods
 5. Verify license headers are present

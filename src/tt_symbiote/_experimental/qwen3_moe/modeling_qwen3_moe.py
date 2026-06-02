@@ -18,9 +18,9 @@ import ttnn
 from tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices, tree_map
 from tt_symbiote.core.run_config import DistributedTensorConfig
 from tt_symbiote.core.tensor import TorchTTNNTensor
-from tt_symbiote.integrations.ttnn_attention import PagedAttentionConfig, TTNNPagedAttentionKVCache, TTNNSDPAAttention
-from tt_symbiote.integrations.ttnn_linear import TTNNLinear, TTNNLinearIReplicatedWColSharded
-from tt_symbiote.integrations.ttnn_moe import (
+from tt_symbiote.modules.ttnn_attention import PagedAttentionConfig, TTNNPagedAttentionKVCache, TTNNSDPAAttention
+from tt_symbiote.modules.ttnn_linear import TTNNLinear, TTNNLinearIReplicatedWColSharded
+from tt_symbiote.modules.ttnn_moe import (
     SPARSITY_BLOCK_SIZE,
     Glm4MoeRouteTokenToExperts,
     TTNNExperts,
@@ -31,7 +31,7 @@ from tt_symbiote.integrations.ttnn_moe import (
     _make_sparse_matmul_program_config,
     even_int_div,
 )
-from tt_symbiote.integrations.ttnn_rope import TTNNRotaryPositionEmbedding
+from tt_symbiote.modules.ttnn_rope import TTNNRotaryPositionEmbedding
 
 # === content from models/experimental/tt_symbiote/modules/qwen_attention.py ===
 """Qwen3.5-35B-A3B Attention implementations for TTNN.

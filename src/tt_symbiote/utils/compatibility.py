@@ -165,7 +165,7 @@ def _snapshot() -> Dict[str, Dict]:
 def _recipe_for(model: Any):
     """Look up the registered recipe for ``model``'s class, if any."""
     try:
-        from tt_symbiote.auto.auto_mappings import TT_MODEL_REGISTRY
+        from tt_symbiote.models.auto.auto_mappings import TT_MODEL_REGISTRY
     except Exception:
         return None
     return TT_MODEL_REGISTRY.get(type(model).__name__)

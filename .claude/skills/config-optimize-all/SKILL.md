@@ -139,7 +139,7 @@ established pattern (TTNNLinearLLama, TTNNBailingMoEAttention, etc.).
 # Commit hash for reproducibility
 TT_METAL_COMMIT = "<40-char hash>"
 
-from tt_symbiote.integrations.ttnn_linear import TTNNLinear
+from tt_symbiote.modules.ttnn_linear import TTNNLinear
 from ttnn.model_preprocessing import preprocess_linear_weight, preprocess_linear_bias
 import ttnn
 
@@ -160,7 +160,7 @@ class TTNNLinear<Model>(TTNNLinear):
 ### For compute config overrides (override `move_weights_to_device_impl`):
 
 ```python
-from tt_symbiote.integrations.ttnn_attention import TTNNSelfAttention
+from tt_symbiote.modules.ttnn_attention import TTNNSelfAttention
 import ttnn
 
 class TTNNAttention<Model>(TTNNSelfAttention):
