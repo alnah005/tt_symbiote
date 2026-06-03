@@ -19,7 +19,7 @@ All in-repo deliverables required to build, smoke-test, and publish a
 release.
 
 - [x] **`pyproject.toml` PEP 621 metadata** — name, description, license,
-  authors, URLs, dependencies, literal `version = "0.1.1"`.
+  authors, URLs, dependencies, literal `version = "0.1.2"`.
 - [x] **`pyproject.toml` Trove classifiers** — `Development Status :: 4 -
   Beta`, Python 3.10/3.11/3.12, Apache-2.0, Linux, AI/ML topic.
 - [x] **`pyproject.toml` ttnn hard dependency** — pins `ttnn==0.68.0`
@@ -27,6 +27,13 @@ release.
   0.1.0; promoted to a hard dep in 0.1.1 after the TestPyPI smoke
   install revealed that `core/*.py` does top-level `import ttnn`, so
   the package was never actually importable without it.)
+- [x] **`pyproject.toml` `[vision]` optional extra** — pins
+  `torchvision`. Added in 0.1.2 after the out-of-the-box e2e probe of
+  `google/gemma-4-E2B-it` revealed that
+  `transformers.AutoProcessor.from_pretrained(...)` for any HF VLM
+  hard-imports `torchvision` via the `*VideoProcessor` subclass.
+  Mirrors HF transformers' own `[vision]` extra. Text-only causal LMs
+  do not need this.
 - [x] **`pyproject.toml` `[dev]` extra includes `build`/`twine`** — so
   `make install` provisions the local pre-publish gate.
 - [x] **`pyproject.toml` excludes `*.bak` from packaged data** — keeps
@@ -39,7 +46,7 @@ release.
   `src/tt_symbiote/_experimental/`, `.cursor/`, `CLAUDE.md`, plus a
   global exclude for `.bak` / `.orig` / `.rej` / `__pycache__` / `.pyc`
   so the sdist is as clean as the wheel.
-- [x] **Literal `version = "0.1.1"` (no `setuptools-scm`)** — tt_symbiote
+- [x] **Literal `version = "0.1.2"` (no `setuptools-scm`)** — tt_symbiote
   is branch-driven; the release branch is the release marker. See
   `docs/development/release_process.md` §Versioning model.
 - [x] **`src/tt_symbiote/__init__.py` exposes `__version__`** — via
@@ -147,22 +154,29 @@ exact field values are in
 ## Stage F: post-publish verification
 
 - [ ] **TestPyPI release page exists** — at
-  `https://test.pypi.org/project/tt-symbiote/0.1.1/`, showing the
-  wheel + sdist artifacts. (0.1.0 was published to TestPyPI on the
-  way to 0.1.1 but had a broken dependency declaration — see Stage A
-  notes above. Do not publish 0.1.0 to PyPI.)
+  `https://test.pypi.org/project/tt-symbiote/0.1.2/`, showing the
+  wheel + sdist artifacts. (0.1.0 and 0.1.1 were published to
+  TestPyPI on the way to 0.1.2: 0.1.0 was broken at import (eager
+  `import ttnn` under an optional extra); 0.1.1 was importable but
+  required a separate `pip install torchvision` for any vision /
+  multimodal model. 0.1.2 fixes both by promoting `ttnn` to a hard
+  dep and adding a `[vision]` extra for `torchvision`. Do not publish
+  0.1.0 or 0.1.1 to PyPI.)
 - [ ] **PyPI release page exists** — at
-  `https://pypi.org/project/tt-symbiote/0.1.1/`, same artifacts.
+  `https://pypi.org/project/tt-symbiote/0.1.2/`, same artifacts.
 - [ ] **Clean-machine install works** — on a host with matching sfpi
   (`/opt/tenstorrent/sfpi/compiler/bin/riscv-tt-elf-g++ --version` →
   `sfpi:7.35.3...`):
   ```bash
-  python -m venv /tmp/tt011
-  /tmp/tt011/bin/pip install "tt_symbiote==0.1.1"
-  /tmp/tt011/bin/python -c "import tt_symbiote, ttnn; print(tt_symbiote.__version__, ttnn.__version__)"
+  python -m venv /tmp/tt012
+  /tmp/tt012/bin/pip install "tt_symbiote[vision]==0.1.2"
+  /tmp/tt012/bin/python -c "import tt_symbiote, ttnn, torchvision; print(tt_symbiote.__version__, ttnn.__version__, torchvision.__version__)"
   ```
-- [ ] **End-to-end demo runs from the installed wheel** —
-  `examples/e2e/run_ling_mini_2_0.py` on a T3K (or any
-  hardware-target script appropriate to the machine you have): clone
-  the repo only for the script, but `pip install
-  "tt_symbiote==0.1.1"` provides the runtime.
+- [ ] **End-to-end demo runs from the installed wheel** — copy
+  `examples/e2e/gemma4/run_gemma4_e2b.py` somewhere outside the repo
+  (or use `/home/aroberge/run_gemma4_e2b.py` from the release-time
+  validation), drop a dog picture at `~/test-dog.png`, and run it on
+  a host with a Tenstorrent device. Expected: a "this is a dog /
+  retriever / puppy" answer printed within ~1 minute, full TT module
+  binding visible in the log (`TTNNGemma4TextMLP` / `TTNNLinear` /
+  `TTNNGemma4RMSNorm` rows).

@@ -19,7 +19,7 @@ name = "tt_symbiote"
 # back to noisy `0.0.1.dev<n>+<sha>` strings that PyPI rejects as
 # pre-releases. The literal pin below is the source of truth that
 # `importlib.metadata.version("tt_symbiote")` returns.
-version = "0.1.1"
+version = "0.1.2"
 authors = [
     {name = "Tenstorrent"},
     {email = "info@tenstorrent.com"},
@@ -119,6 +119,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Vision / multimodal extra. Many HuggingFace VLM processors (Gemma-4,
+# Qwen3-VL, …) lazy-construct `*VideoProcessor` subclasses that
+# unconditionally `import torchvision` at first use. `torchvision` is
+# NOT a mandatory `transformers` dep — HF themselves put it in their
+# own `[vision]` extra — so we mirror that pattern. Text-only causal
+# LMs (Ling-mini-2.0, …) do NOT need this extra.
+#
+# Users running any of the Gemma-4 / Qwen3-VL / ResNet examples should
+# install with:  pip install "tt_symbiote[vision]"
+vision = [
+  "torchvision",
+]
 dev = [
   "pre-commit",
   "pytest",

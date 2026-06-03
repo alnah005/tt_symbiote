@@ -123,6 +123,31 @@ optional extra while several core modules still imported it
 eagerly — that artifact has been removed from PyPI; 0.1.1 is the
 first published version with the corrected dependency declaration.)
 
+### `ImportError: ... requires the Torchvision library but it was not found`
+
+Symptom on `AutoProcessor.from_pretrained("google/gemma-4-...-it")`
+or any other HuggingFace VLM:
+
+```
+ImportError: Gemma4VideoProcessor requires the Torchvision library but it
+was not found in your environment.
+```
+
+HF's multimodal `AutoProcessor` constructs a `*VideoProcessor`
+subclass that unconditionally imports `torchvision`. Torchvision is
+NOT a mandatory `transformers` dep — HF themselves put it in their
+own `[vision]` extra — so `tt_symbiote` follows that pattern.
+
+Fix: reinstall with the `[vision]` extra.
+
+```bash
+pip install "tt_symbiote[vision]"
+```
+
+Available since `tt_symbiote` 0.1.2. The extra simply pulls
+`torchvision`; everything else stays identical. Text-only causal LMs
+do NOT need this extra.
+
 ### `ModuleNotFoundError: No module named 'tracy'`
 
 `tracy` is Tenstorrent's profiler. It is not on PyPI and only ships

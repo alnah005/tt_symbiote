@@ -205,8 +205,8 @@ published versions as immutable:
 
 - **Found a packaging bug after publish.** Yank the bad version on
   PyPI (project settings → release → yank) so resolvers stop picking
-  it. Cut a `+1` patch release (bump `pyproject.toml` to `0.1.1`,
-  push, dispatch).
+  it. Cut a `+1` patch release (bump `pyproject.toml` to the next
+  patch — e.g. `0.1.2` → `0.1.3` — push, dispatch).
 - **Found a hardware regression after publish.** Yank, then cut a
   patch with the fix.
 - **Aborted release (CI failed before publish).** Just push a follow-up

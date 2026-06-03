@@ -41,15 +41,27 @@ Tenstorrent Wormhole device attached.
 ```bash
 python -m venv .venv
 source .venv/bin/activate
+
+# Text-only models (e.g. inclusionAI/Ling-mini-2.0):
 pip install tt_symbiote
+
+# Vision / multimodal models (Gemma-4, Qwen3-VL, ResNet):
+pip install "tt_symbiote[vision]"
 ```
 
-That single command pulls `ttnn==0.68.0` (the exact wheel this
-release was validated against, matching `scripts/ttnn-pin.txt`) and
-the transitive deps (`torch`, `transformers==5.9.0`, `accelerate`,
+The base install pulls `ttnn==0.68.0` (the exact wheel this release
+was validated against, matching `scripts/ttnn-pin.txt`) and the
+transitive deps (`torch`, `transformers==5.9.0`, `accelerate`,
 `tokenizers`, …). There is no separate `[ttnn]` extra to opt into —
 `ttnn` is a hard dependency, because `tt_symbiote.core` imports it at
 module-load time.
+
+The `[vision]` extra adds `torchvision`, which HuggingFace's
+multimodal `AutoProcessor` implementations (`Gemma4VideoProcessor`,
+the Qwen3-VL preprocessor, the ResNet image processor) require at
+first construction. This mirrors HF transformers' own `[vision]`
+extra. If you only run text-only causal LMs, the extra is
+unnecessary.
 
 > **System prerequisite: sfpi 7.35.3.** `ttnn` JIT-compiles firmware
 > kernels at first `open_mesh_device(...)` call using the Tenstorrent
