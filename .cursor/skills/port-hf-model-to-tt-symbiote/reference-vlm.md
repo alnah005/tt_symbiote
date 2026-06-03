@@ -209,7 +209,7 @@ plus `ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)` on T3K paths.
 ## set_device call
 
 ```python
-set_device(model, mesh_device, dump_visualization=False)
+set_device(model, mesh_device)
 assert hasattr(model, "_tt_runtime_config"), (
     "<Class>Recipe.post_register should have attached _tt_runtime_config"
 )

@@ -77,7 +77,7 @@ Every script in this folder is the same 100-line template:
 1. `ttnn.set_fabric_config(...)` + `ttnn.open_mesh_device(...)`
 2. `AutoProcessor.from_pretrained(MODEL_ID)`
 3. `AutoModelForImageTextToText.from_pretrained(MODEL_ID, dtype=torch.bfloat16)`
-4. `set_device(model, mesh_device, dump_visualization=False)`
+4. `set_device(model, mesh_device)`
 5. `processor.apply_chat_template(...)` against
    [`tests/images/test-dog.png`](../../../tests/images/test-dog.png) +
    `"What is this animal in the photo?"`

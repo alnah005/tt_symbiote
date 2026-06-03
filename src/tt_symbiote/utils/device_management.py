@@ -23,8 +23,8 @@ final step of the ``tt_symbiote`` loading flow (per ``docs/development/PROJECT_P
    ``obj._tt_kv_cache`` (resolves ``docs/development/PROJECT_PROPOSAL.md`` Q9 — see Phase 5).
    The kwargs passed to ``make_kv_cache`` come from
    ``obj._tt_kv_cache_kwargs`` (set by ``AutoModel*.from_pretrained``'s
-   ``kv_cache_kwargs=``) merged with any ``kv_cache_kwargs=`` override
-   on this call. The override wins per-key.
+   ``kv_cache_kwargs=``). There is no bind-site override: cache shape
+   is a model-construction decision and pairs with ``from_pretrained``.
 6. Sets ``_tt_symbiote_device_set = True`` on the root object and on every
    visited TTNN module.
 
@@ -155,16 +155,28 @@ def _swap_module(parent: Any, key: Any, fallback: Any) -> None:
             pass
 
 
-def set_device(obj, device, device_init=DeviceInit, **kwargs) -> None:
+def set_device(obj, device) -> None:
     """Bind every ``TTNNModule`` in ``obj`` to ``device``.
 
     Per ``docs/development/PROJECT_PROPOSAL.md`` §4.4 this is **mandatory** before any model
     invocation. See the module docstring for the full contract.
 
-    Keyword arguments:
-      - ``register_forward_hook`` (default ``True``): wrap each module's
-        ``forward``/``call`` with timing instrumentation.
-      - ``dump_visualization`` (default ``True``): write ``model_graph.png``.
+    Strict two-argument signature. All runtime / diagnostic
+    configuration is a model-construction decision and belongs on
+    :meth:`tt_symbiote.AutoModel*.from_pretrained`. This function
+    reads three configuration attributes that ``from_pretrained``
+    attaches to the model (all default to the production-safe value
+    so the function still works on hand-constructed ``TTNNModule``
+    instances that bypass ``from_pretrained``):
+
+      - ``obj._tt_register_forward_hook`` (default ``False``): if
+        ``True``, every module's ``forward`` / ``call`` is wrapped
+        with timing instrumentation.
+      - ``obj._tt_dump_visualization`` (default ``False``): if
+        ``True``, writes ``model_graph.png`` to the cwd at the end of
+        binding.
+      - ``obj._tt_kv_cache_kwargs`` (default ``{}``): forwarded
+        verbatim to the recipe's ``make_kv_cache`` hook.
 
     Phase 8.5: the swapped-class registry consumed by
     :func:`tt_symbiote.utils.compatibility.report` is cleared at entry
@@ -174,6 +186,14 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs) -> None:
     that want a clean slate call ``reset_runtime_observations()``
     explicitly.
     """
+    # Read runtime config from the model (attached by from_pretrained).
+    # All three flags default to the production-safe value when absent,
+    # which is the case for hand-constructed TTNNModule instances in
+    # tests/auto/test_set_device.py and tests/capabilities/*.
+    register_forward_hook = bool(getattr(obj, "_tt_register_forward_hook", False))
+    dump_visualization = bool(getattr(obj, "_tt_dump_visualization", False))
+    device_init = DeviceInit  # never overridden anywhere in-tree
+
     try:
         from tt_symbiote.utils.compatibility import reset_swapped_registry
 
@@ -214,7 +234,7 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs) -> None:
         if isinstance(current_obj, nn.Module):
             name = module_names.get(current_obj, "")
 
-            if kwargs.get("register_forward_hook", True):
+            if register_forward_hook:
                 if hasattr(current_obj, "forward"):
                     if not hasattr(current_obj.forward, "_is_timed"):
                         current_obj.forward = timed_call(current_obj.forward, name, current_obj.__class__.__name__)
@@ -284,7 +304,7 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs) -> None:
         elif isinstance(current_obj, TTNNModule):
             if not getattr(current_obj, "_bypass_tensor_wrapping", False):
                 current_obj._bypass_tensor_wrapping = parent_is_ttnn
-            if hasattr(current_obj, "call"):
+            if register_forward_hook and hasattr(current_obj, "call"):
                 if not hasattr(current_obj.call, "_is_timed"):
                     current_obj.call = timed_call(
                         current_obj.call, current_obj.module_name, current_obj.__class__.__name__
@@ -373,14 +393,13 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs) -> None:
     # is attached as ``model._tt_kv_cache`` and the test/demo code passes
     # it back in as ``past_key_values=`` for ``model.generate``.
     #
-    # Resolution order for the kwargs passed to ``make_kv_cache``:
-    #   1. ``model._tt_kv_cache_kwargs`` — set by ``AutoModel*.from_pretrained``
-    #      from its ``kv_cache_kwargs=`` keyword. This is the declarative
-    #      "the cache for this model has these dimensions" path.
-    #   2. ``kwargs["kv_cache_kwargs"]`` passed to this call — per-key
-    #      override at the bind site, for A/B-testing cache budgets
-    #      against the same loaded model without re-loading.
-    # ``override`` wins per-key, mirroring how ``dict.update`` works.
+    # The kv-cache shape is declared at ``from_pretrained`` time via
+    # ``kv_cache_kwargs=`` and stashed on the model as
+    # ``model._tt_kv_cache_kwargs``. ``set_device`` reads it here and
+    # forwards it verbatim to the recipe. There is intentionally no
+    # bind-site override: cache shape is a model-construction decision
+    # (one of the things that makes the model what it is), so it pairs
+    # with the construction call, not the binding call.
     try:
         from tt_symbiote.models.auto.auto_mappings import TT_MODEL_REGISTRY
     except Exception:
@@ -388,10 +407,8 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs) -> None:
     recipe = TT_MODEL_REGISTRY.get(type(obj).__name__)
     if recipe is not None and hasattr(recipe, "make_kv_cache"):
         stored_kv_kwargs = getattr(obj, "_tt_kv_cache_kwargs", None) or {}
-        override_kv_kwargs = kwargs.get("kv_cache_kwargs") or {}
-        merged_kv_kwargs = {**stored_kv_kwargs, **override_kv_kwargs}
         try:
-            kv = recipe.make_kv_cache(obj, device, **merged_kv_kwargs)
+            kv = recipe.make_kv_cache(obj, device, **stored_kv_kwargs)
             if kv is not None:
                 obj._tt_kv_cache = kv
         except Exception as e:
@@ -439,5 +456,5 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs) -> None:
             stacklevel=2,
         )
 
-    if kwargs.get("dump_visualization", True):
+    if dump_visualization:
         draw_model_graph(obj)

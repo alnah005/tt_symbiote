@@ -95,7 +95,7 @@ def test_set_device_binds_device_and_runs_weight_prep(reset_mesh_env):
     mod._fallback_torch_layer = nn.Identity()  # so the contract is happy
     device = _StubMeshDevice(num_devices=1)
 
-    set_device(mod, device, dump_visualization=False)
+    set_device(mod, device)
 
     assert mod._device is device
     assert mod._tt_symbiote_device_set is True
@@ -109,7 +109,7 @@ def test_set_device_marker_set_on_nn_module_root(reset_mesh_env):
     parent = _TTNNContainer(child)
     device = _StubMeshDevice(num_devices=1)
 
-    set_device(parent, device, dump_visualization=False, register_forward_hook=False)
+    set_device(parent, device)
 
     assert parent._tt_symbiote_device_set is True
     assert child._tt_symbiote_device_set is True
@@ -120,7 +120,7 @@ def test_set_device_no_arch_constraint_no_swap(reset_mesh_env):
     child._fallback_torch_layer = nn.Identity()
     parent = _TTNNContainer(child)
     device = _StubMeshDevice(num_devices=1)
-    set_device(parent, device, dump_visualization=False, register_forward_hook=False)
+    set_device(parent, device)
     assert parent.tt_child is child, "no @run_on_devices => should not swap"
 
 
@@ -143,7 +143,7 @@ def test_set_device_swaps_unsupported_arch_module(reset_mesh_env):
 
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always")
-        set_device(parent, device, dump_visualization=False, register_forward_hook=False)
+        set_device(parent, device)
 
     assert parent.tt_child is fallback, "module should be swapped to fallback when arch unsupported"
     messages = [str(w.message) for w in captured]
@@ -157,7 +157,7 @@ def test_set_device_keeps_supported_arch_module(reset_mesh_env):
     child._fallback_torch_layer = nn.Identity()
     parent = _TTNNContainer(child)
     device = _StubMeshDevice(num_devices=1)
-    set_device(parent, device, dump_visualization=False, register_forward_hook=False)
+    set_device(parent, device)
 
     assert parent.tt_child is child, "T3K module should remain on T3K device"
 
@@ -228,7 +228,7 @@ def test_kv_cache_kwargs_from_pretrained_flows_to_make_kv_cache(monkeypatch, res
     model._tt_kv_cache_kwargs = {"max_num_blocks": 512, "block_size": 64}
     device = _StubMeshDevice(num_devices=1)
 
-    set_device(model, device, dump_visualization=False, register_forward_hook=False)
+    set_device(model, device)
 
     assert stub_recipe.called == 1, "make_kv_cache should be invoked exactly once"
     assert stub_recipe.received == {
@@ -238,59 +238,57 @@ def test_kv_cache_kwargs_from_pretrained_flows_to_make_kv_cache(monkeypatch, res
     assert hasattr(model, "_tt_kv_cache"), "set_device should attach the returned cache"
 
 
-def test_set_device_override_wins_per_key(monkeypatch, reset_mesh_env):
-    """An override passed to ``set_device`` should win over the stashed kwargs per-key."""
-    stub_recipe = _register_stub_recipe(monkeypatch)
+def test_set_device_rejects_bind_site_kwargs(monkeypatch, reset_mesh_env):
+    """``set_device`` is strictly two-arg; any kwarg is a TypeError.
+
+    Documents the post-refactor contract: cache shape (and every other
+    runtime configuration decision) is a from_pretrained concern, not a
+    bind-site concern. Passing ``kv_cache_kwargs``, ``dump_visualization``,
+    or ``register_forward_hook`` here is no longer supported.
+    """
+    _register_stub_recipe(monkeypatch)
     model = _ModelStub()
     model._tt_kv_cache_kwargs = {"max_num_blocks": 512, "block_size": 64}
     device = _StubMeshDevice(num_devices=1)
 
-    set_device(
-        model,
-        device,
-        dump_visualization=False,
-        register_forward_hook=False,
-        # Override one key, leave the other to fall through from the stash.
-        kv_cache_kwargs={"max_num_blocks": 1024},
-    )
+    import pytest as _pytest
 
-    assert stub_recipe.received == {
-        "max_num_blocks": 1024,  # overridden
-        "block_size": 64,  # inherited from from_pretrained
-    }, f"override should win per-key; got {stub_recipe.received}"
+    for forbidden in (
+        {"kv_cache_kwargs": {"max_num_blocks": 1024}},
+        {"dump_visualization": True},
+        {"register_forward_hook": True},
+    ):
+        with _pytest.raises(TypeError):
+            set_device(model, device, **forbidden)
 
 
 def test_missing_stash_falls_back_to_empty_dict(monkeypatch, reset_mesh_env):
-    """If the model was *not* loaded via from_pretrained, make_kv_cache should still be called.
+    """A model without ``_tt_kv_cache_kwargs`` should still bind cleanly.
 
-    Backward-compat path: pre-refactor callers built the model themselves
-    (no ``_tt_kv_cache_kwargs`` attribute) and passed kwargs at the bind
-    site only. That continues to work.
+    ``getattr(obj, "_tt_kv_cache_kwargs", None) or {}`` in
+    ``set_device`` means hand-constructed models (tests, capabilities
+    probes) that bypass ``from_pretrained`` see make_kv_cache invoked
+    with an empty kwargs dict.
     """
     stub_recipe = _register_stub_recipe(monkeypatch)
     model = _ModelStub()
     # Intentionally do not set ``model._tt_kv_cache_kwargs``.
     device = _StubMeshDevice(num_devices=1)
 
-    set_device(
-        model,
-        device,
-        dump_visualization=False,
-        register_forward_hook=False,
-        kv_cache_kwargs={"max_num_blocks": 256},
-    )
+    set_device(model, device)
 
-    assert stub_recipe.received == {"max_num_blocks": 256}, stub_recipe.received
+    assert stub_recipe.received == {}, f"missing stash should land as empty dict; got {stub_recipe.received}"
 
 
 def test_set_device_with_no_kv_cache_kwargs_anywhere_uses_recipe_defaults(monkeypatch, reset_mesh_env):
-    """No-op-kwarg path: neither from_pretrained nor set_device declared anything."""
+    """No-op-kwarg path: from_pretrained set an empty stash."""
     stub_recipe = _register_stub_recipe(monkeypatch)
     model = _ModelStub()
+    model._tt_kv_cache_kwargs = {}  # what from_pretrained sets when the kwarg was None
     device = _StubMeshDevice(num_devices=1)
 
-    set_device(model, device, dump_visualization=False, register_forward_hook=False)
+    set_device(model, device)
 
     assert (
         stub_recipe.received == {}
-    ), f"With nothing declared, make_kv_cache should see an empty kwargs dict; got {stub_recipe.received}"
+    ), f"With an explicit empty stash, make_kv_cache should see {{}}; got {stub_recipe.received}"

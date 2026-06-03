@@ -79,7 +79,7 @@ model = AutoModelForImageTextToText.from_pretrained(
     dtype=torch.bfloat16,
 )
 
-set_device(model, mesh_device, dump_visualization=False)
+set_device(model, mesh_device)
 assert hasattr(model, "_tt_runtime_config"), "Qwen3VLRecipe.post_register should have attached _tt_runtime_config"
 assert model._tt_runtime_config["mesh_shape"] == (
     1,

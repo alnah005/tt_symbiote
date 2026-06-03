@@ -214,7 +214,7 @@ mesh_device = ttnn.open_mesh_device(
 
 processor = AutoProcessor.from_pretrained("google/gemma-4-E2B-it")
 model = AutoModelForImageTextToText.from_pretrained("google/gemma-4-E2B-it", dtype=torch.bfloat16)
-set_device(model, mesh_device, dump_visualization=False)
+set_device(model, mesh_device)
 
 image = Image.open("my_dog.png").convert("RGB")
 messages = [{"role": "user", "content": [

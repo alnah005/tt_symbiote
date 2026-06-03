@@ -86,7 +86,7 @@ model = AutoModelForImageTextToText.from_pretrained(
 # bind), attaches ``model._tt_runtime_config``, and is otherwise a no-op
 # for execution. Disable the graph viz — it would render a 35-layer
 # decoder + vision tower in one PNG, which is noisy for this run.
-set_device(model, mesh_device, dump_visualization=False)
+set_device(model, mesh_device)
 assert hasattr(model, "_tt_runtime_config"), "Gemma4Recipe.post_register should have attached _tt_runtime_config"
 
 model.eval()

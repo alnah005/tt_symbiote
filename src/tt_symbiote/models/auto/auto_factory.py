@@ -39,28 +39,41 @@ class _BaseAutoModelClass:
         """Load the HF model, apply the tt_symbiote recipe if one is registered.
 
         tt_symbiote-specific keyword arguments (popped before the call
-        reaches HF's ``transformers.Auto*.from_pretrained``):
+        reaches HF's ``transformers.Auto*.from_pretrained``). All of
+        these are *configuration decisions* about the loaded model;
+        they pair naturally with construction. The downstream
+        :func:`tt_symbiote.set_device` call is strictly a binding step
+        and accepts only ``(model, mesh_device)``.
 
         - ``kv_cache_kwargs`` (default ``None``): mapping that the recipe's
           ``make_kv_cache`` hook receives at :func:`set_device` time. The
           cache shape is a model-config decision (capacity, block size,
-          batch budget), so it pairs naturally with ``from_pretrained``
-          rather than the device-binding call. Stored on the returned
-          model as ``model._tt_kv_cache_kwargs``; ``set_device`` reads it
-          and applies any per-key override that may also be passed at
-          the bind site.
+          batch budget). Stored on the returned model as
+          ``model._tt_kv_cache_kwargs``.
 
           For Ling-mini-2.0 the recipe consumes
           ``{"block_size": 64, "max_num_blocks": 512, "batch_size": 1}``.
           For Gemma-4 / Qwen3-VL / ResNet the recipe's ``make_kv_cache``
           is a no-op (HF ``DynamicCache`` is sufficient), so the kwarg
           is silently ignored.
+
+        - ``dump_visualization`` (default ``False``): if ``True``,
+          :func:`set_device` writes ``model_graph.png`` to the cwd at
+          the end of binding. Diagnostic feature for recipe authors;
+          production users leave this off.
+
+        - ``register_forward_hook`` (default ``False``): if ``True``,
+          :func:`set_device` wraps each module's ``forward`` / ``call``
+          with timing instrumentation. Diagnostic feature; production
+          users leave this off.
         """
         if cls._HF_AUTO_CLASS is None:
             raise NotImplementedError(f"{cls.__name__} has no HF counterpart configured (set _HF_AUTO_CLASS).")
 
         # Pop tt_symbiote-only kwargs before they reach HF.
         kv_cache_kwargs = kwargs.pop("kv_cache_kwargs", None)
+        dump_visualization = bool(kwargs.pop("dump_visualization", False))
+        register_forward_hook = bool(kwargs.pop("register_forward_hook", False))
 
         # Install compat shims before HF's dynamic remote-code loader runs:
         # Hub modeling files authored against older transformers releases
@@ -72,6 +85,14 @@ class _BaseAutoModelClass:
 
         model = cls._HF_AUTO_CLASS.from_pretrained(pretrained_name_or_path, *args, **kwargs)
 
+        def _attach_tt_runtime_config(m: Any) -> None:
+            # Set on every loaded model regardless of recipe registration —
+            # set_device reads these unconditionally and the defaults are
+            # the production-safe values.
+            m._tt_kv_cache_kwargs = dict(kv_cache_kwargs) if kv_cache_kwargs else {}
+            m._tt_dump_visualization = dump_visualization
+            m._tt_register_forward_hook = register_forward_hook
+
         hf_class_name = type(model).__name__
         recipe = TT_MODEL_REGISTRY.get(hf_class_name)
         if recipe is None:
@@ -80,9 +101,7 @@ class _BaseAutoModelClass:
                 f"set_device() will be a no-op for this model.",
                 stacklevel=2,
             )
-            # Still attach the kv_cache_kwargs in case the user later
-            # re-registers a recipe and calls set_device.
-            model._tt_kv_cache_kwargs = dict(kv_cache_kwargs) if kv_cache_kwargs else {}
+            _attach_tt_runtime_config(model)
             return model
 
         module_dict = recipe.build_module_dict(model)
@@ -90,9 +109,7 @@ class _BaseAutoModelClass:
         recipe.post_register(model)
         # Marker read by tt_symbiote.set_device for the hard-error contract.
         model._tt_symbiote_has_recipe = True
-        # Stash the cache-shape intent for set_device to consume; default
-        # to an empty dict so set_device can always splat it unconditionally.
-        model._tt_kv_cache_kwargs = dict(kv_cache_kwargs) if kv_cache_kwargs else {}
+        _attach_tt_runtime_config(model)
         return model
 
 
