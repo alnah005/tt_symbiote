@@ -85,7 +85,7 @@ upstream `transformers[vision]` extra exactly.
 
 ## How to use it
 
-Three archetypes covering everything the 0.1.2 release supports: a text-only
+Three archetypes covering everything the 0.1.3 release supports: a text-only
 causal LM, an image classifier, and a vision-language model. Each block
 runs end-to-end on real hardware.
 
@@ -250,7 +250,7 @@ for the schema.
 
 ---
 
-## Supported models in 0.1.2
+## Supported models in 0.1.3
 
 | Architecture (HF class) | Model variants | Hardware target | Status |
 |---|---|---|---|
@@ -272,18 +272,22 @@ the headline item for the next release.
 
 ---
 
-## What's new in 0.1.2
+## Recent releases
 
-- **`[vision]` extra.** `pip install "tt_symbiote[vision]"` pulls
-  `torchvision`, the implicit prerequisite for HF's multimodal
-  `AutoProcessor` classes. Text-only users do not pay this cost.
-- **Strict `set_device(model, mesh)` signature.** All runtime configuration
+- **0.1.3** — PyPI project description refresh. No code or API changes;
+  the published wheel is byte-identical in behavior to 0.1.2. Bumped
+  because PyPI metadata is immutable per-version and the project page
+  needed to reflect the user-facing narrative.
+- **0.1.2** — `[vision]` extra and strict `set_device(model, mesh)`
+  signature. `pip install "tt_symbiote[vision]"` pulls `torchvision`,
+  the implicit prerequisite for HF's multimodal `AutoProcessor` classes;
+  text-only users do not pay this cost. All runtime configuration
   (`kv_cache_kwargs`, optional diagnostics) moved to `from_pretrained`
-  keyword arguments. The binding step is pure: walk the tree, attach
-  TTNNModules to the mesh, allocate KV cache, return.
-- **0.1.1 already promoted `ttnn` from optional extra to hard dependency.**
-  No `[ttnn]` opt-in step; `pip install tt_symbiote` resolves the matching
-  `ttnn==0.68.0` wheel directly.
+  keyword arguments, leaving the binding step pure: walk the tree,
+  attach `TTNNModule`s to the mesh, allocate KV cache, return.
+- **0.1.1** — `ttnn` promoted from optional extra to hard dependency.
+  No `[ttnn]` opt-in step; `pip install tt_symbiote` resolves the
+  matching `ttnn==0.68.0` wheel directly.
 
 Full release history:
 [CHANGELOG](https://github.com/alnah005/tt_symbiote/blob/transformers5.9.0/docs/development/release_checklist.md).
