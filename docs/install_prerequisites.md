@@ -78,8 +78,9 @@ unzip -p /tmp/ttnn-probe/ttnn-*.whl ttnn/tt_metal/sfpi-version
 ## (ttnn, sfpi) compatibility table
 
 The canonical source of truth is [`scripts/ttnn-pin.txt`](../scripts/ttnn-pin.txt),
-which the bootstrap script reads at venv-build time. The PyPI extra
-[`tt_symbiote[ttnn]`](../pyproject.toml) is pinned to match this table.
+which the bootstrap script reads at venv-build time.
+`tt_symbiote`'s hard dependency on `ttnn` (declared in
+[`pyproject.toml`](../pyproject.toml)) is pinned to match this table.
 
 | `ttnn` (PyPI) | required `sfpi` | Verified end-to-end | Notes                                  |
 |---------------|-----------------|---------------------|----------------------------------------|
@@ -92,8 +93,9 @@ When bumping the pair:
 2. Find the matching `ttnn` PyPI release by inspecting its wheel
    (`pip download --no-deps ttnn==<v> -d /tmp/probe; unzip -p
    /tmp/probe/ttnn-*.whl ttnn/tt_metal/sfpi-version`).
-3. Update `scripts/ttnn-pin.txt` and `pyproject.toml`'s `[ttnn]`
-   extra **in lockstep**. The release-process doc covers this.
+3. Update `scripts/ttnn-pin.txt` and `pyproject.toml`'s
+   `dependencies` ttnn pin **in lockstep**. The release-process doc
+   covers this.
 
 ## Troubleshooting
 
@@ -111,10 +113,15 @@ Steps:
 
 ### `ModuleNotFoundError: No module named 'ttnn'` from `import tt_symbiote`
 
-`ttnn` is not in the hard dependencies of `tt_symbiote` (only in the
-`[ttnn]` extra) — `pip install tt_symbiote` alone doesn't pull it.
-Either `pip install "tt_symbiote[ttnn]"` or `pip install ttnn==<v>`
-explicitly.
+Since `tt_symbiote` 0.1.1 `ttnn==0.68.0` is a HARD dependency, so
+`pip install tt_symbiote` always pulls it from PyPI. If you see this
+error from a 0.1.1+ install, your `ttnn` was uninstalled or never
+resolved — re-run `pip install -U tt_symbiote` to recover.
+
+(For context: `tt_symbiote` 0.1.0 mistakenly declared `ttnn` as an
+optional extra while several core modules still imported it
+eagerly — that artifact has been removed from PyPI; 0.1.1 is the
+first published version with the corrected dependency declaration.)
 
 ### `ModuleNotFoundError: No module named 'tracy'`
 
@@ -139,5 +146,5 @@ upgrade with `pip install -U tt_symbiote`.
 - [`scripts/ttnn-pin.txt`](../scripts/ttnn-pin.txt) — the canonical
   `(ttnn, sfpi)` pair.
 - [`docs/development/release_process.md`](development/release_process.md) — how a new
-  `tt_symbiote` release rolls out, including how the `[ttnn]` extra
-  pin gets bumped.
+  `tt_symbiote` release rolls out, including how the hard `ttnn` pin
+  gets bumped.

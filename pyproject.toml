@@ -19,7 +19,7 @@ name = "tt_symbiote"
 # back to noisy `0.0.1.dev<n>+<sha>` strings that PyPI rejects as
 # pre-releases. The literal pin below is the source of truth that
 # `importlib.metadata.version("tt_symbiote")` returns.
-version = "0.1.0"
+version = "0.1.1"
 authors = [
     {name = "Tenstorrent"},
     {email = "info@tenstorrent.com"},
@@ -64,27 +64,43 @@ classifiers = [
 # - `loguru` is tt_symbiote-specific (not in HF) and is needed by the vendored
 #   arch helpers in src/tt_symbiote/core/arch.py.
 #
-# - `ttnn` IS published on PyPI (https://pypi.org/project/ttnn/) but is
-#   deliberately NOT declared here. Each `ttnn` wheel embeds a specific
-#   sfpi RISC-V toolchain version inside `ttnn/tt_metal/sfpi-version`,
-#   and JIT-compiles firmware kernels at first device-open time using
-#   the system-installed `riscv-tt-elf-g++`. If the system sfpi at
-#   `/opt/tenstorrent/sfpi/` doesn't match the wheel's pin, every
-#   `open_mesh_device(...)` call fails with "unrecognized command-line
-#   option". So a blanket `pip install tt_symbiote` cannot safely
-#   resolve `ttnn` for the user — `pip` would happily install a wheel
-#   whose sfpi pin disagrees with the host. Instead we ship a thin
-#   bootstrap (`scripts/bootstrap_venv.sh`) that reads
-#   `scripts/ttnn-pin.txt`, probes the system sfpi, and installs the
-#   matching ttnn version. This mirrors how HF transformers leaves CUDA
-#   wheels to the user: the hardware backend is system-prerequisite,
-#   not pip-resolvable.
+# - `ttnn` IS published on PyPI (https://pypi.org/project/ttnn/) and is
+#   pinned below as a HARD dependency so that `pip install tt_symbiote`
+#   gives a runnable install in one step. The pin here MUST stay in
+#   lockstep with `scripts/ttnn-pin.txt` (canonical source of truth: the
+#   bootstrap script reads it to probe the system sfpi).
 #
-# - `tracy` is also NOT declared. It's tt-metal-built and only needed
-#   for performance work.
+#   Why a hard dep (vs an optional extra)? Several modules under
+#   `src/tt_symbiote/core/` (run_config.py, utils.py, ccl.py, arch.py)
+#   do top-level `import ttnn` to read enums, dtypes, and Config types
+#   used as dataclass defaults at module-load time. Making ttnn optional
+#   would require lazy-importing each of those sites and shimming every
+#   ttnn type referenced at module scope — feasible, but the readme's
+#   promise that `pip install tt_symbiote` *just works* matters more
+#   than supporting a no-ttnn install path for type-checking-only use.
+#
+#   Caveat the user must still understand: each `ttnn` wheel embeds a
+#   specific sfpi RISC-V toolchain version inside
+#   `ttnn/tt_metal/sfpi-version`, and JIT-compiles firmware kernels at
+#   first `open_mesh_device(...)` call using the system-installed
+#   `riscv-tt-elf-g++`. If the system sfpi at `/opt/tenstorrent/sfpi/`
+#   doesn't match the wheel's pin, every device-open fails with
+#   "unrecognized command-line option". On such hosts, users should
+#   either reinstall a matching `ttnn` wheel against their sfpi or use
+#   `scripts/bootstrap_venv.sh`, which validates the sfpi *before*
+#   pip-installing. See `docs/install_prerequisites.md` for the
+#   (ttnn, sfpi) compatibility table.
+#
+# - `tracy` is NOT declared. It's tt-metal-built and only needed for
+#   performance work; `tt_symbiote/core/run_config.py` already falls
+#   back to a no-op signpost shim when it's missing.
 dependencies = [
   # tt_symbiote-specific pin
   "transformers==5.9.0",
+  # Tenstorrent runtime. Pin MUST match scripts/ttnn-pin.txt; see the
+  # commentary above for the (ttnn, sfpi) coupling that motivates the
+  # explicit pin (vs a lower-bound range).
+  "ttnn==0.68.0",
   # Mirror of transformers v5.9.0's `extras["torch"]` (required for us)
   "torch>=2.4",
   "accelerate>=1.1.0",
@@ -103,22 +119,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# UX-convenience extra for users whose system sfpi already matches the pin
-# below. `pip install "tt_symbiote[ttnn]"` pulls the exact ttnn wheel that
-# Phase-8 demos are validated against. The pin here MUST stay in lockstep
-# with `scripts/ttnn-pin.txt` (canonical source of truth: the bootstrap
-# script reads it to probe the system sfpi).
-#
-# IMPORTANT: this extra is intentionally NOT in the hard `dependencies`
-# above. Picking the wrong ttnn for the host's sfpi makes every
-# `open_mesh_device(...)` fail with "unrecognized command-line option".
-# Users without a matching sfpi should either install ttnn manually after
-# verifying the pair (see `docs/install_prerequisites.md`) or use
-# `scripts/bootstrap_venv.sh`, which validates the sfpi *before* pip-
-# installing.
-ttnn = [
-  "ttnn==0.68.0",
-]
 dev = [
   "pre-commit",
   "pytest",

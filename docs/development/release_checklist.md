@@ -19,11 +19,14 @@ All in-repo deliverables required to build, smoke-test, and publish a
 release.
 
 - [x] **`pyproject.toml` PEP 621 metadata** — name, description, license,
-  authors, URLs, dependencies, literal `version = "0.1.0"`.
+  authors, URLs, dependencies, literal `version = "0.1.1"`.
 - [x] **`pyproject.toml` Trove classifiers** — `Development Status :: 4 -
   Beta`, Python 3.10/3.11/3.12, Apache-2.0, Linux, AI/ML topic.
-- [x] **`pyproject.toml` `[ttnn]` optional extra** — pins `ttnn==0.68.0`
-  to match `scripts/ttnn-pin.txt`.
+- [x] **`pyproject.toml` ttnn hard dependency** — pins `ttnn==0.68.0`
+  to match `scripts/ttnn-pin.txt`. (Was the `[ttnn]` optional extra in
+  0.1.0; promoted to a hard dep in 0.1.1 after the TestPyPI smoke
+  install revealed that `core/*.py` does top-level `import ttnn`, so
+  the package was never actually importable without it.)
 - [x] **`pyproject.toml` `[dev]` extra includes `build`/`twine`** — so
   `make install` provisions the local pre-publish gate.
 - [x] **`pyproject.toml` excludes `*.bak` from packaged data** — keeps
@@ -36,7 +39,7 @@ release.
   `src/tt_symbiote/_experimental/`, `.cursor/`, `CLAUDE.md`, plus a
   global exclude for `.bak` / `.orig` / `.rej` / `__pycache__` / `.pyc`
   so the sdist is as clean as the wheel.
-- [x] **Literal `version = "0.1.0"` (no `setuptools-scm`)** — tt_symbiote
+- [x] **Literal `version = "0.1.1"` (no `setuptools-scm`)** — tt_symbiote
   is branch-driven; the release branch is the release marker. See
   `docs/development/release_process.md` §Versioning model.
 - [x] **`src/tt_symbiote/__init__.py` exposes `__version__`** — via
@@ -48,9 +51,9 @@ release.
 - [x] **`src/tt_symbiote/core/run_config.py` guards `from tracy import
   signpost`** — tracy is not on PyPI; the no-op fallback shim unblocks
   the happy-path pip install.
-- [x] **`README.md` Installation section** — `pip install
-  "tt_symbiote[ttnn]"` as the recommended path, loud sfpi caveat,
-  bootstrap script as the contributor path.
+- [x] **`README.md` Installation section** — `pip install tt_symbiote`
+  as the recommended path (ttnn is a hard dep since 0.1.1), loud sfpi
+  caveat, bootstrap script as the contributor path.
 - [x] **`docs/install_prerequisites.md`** — what sfpi is, how to install
   + verify it, the `(ttnn, sfpi)` compatibility table, troubleshooting.
 - [x] **`docs/development/release_process.md`** — branch-driven recipe, one-time
@@ -65,7 +68,7 @@ release.
   all via OIDC Trusted Publishers. **No tag trigger.**
 - [x] **`LICENSE` present** — Apache-2.0.
 - [x] **`scripts/bootstrap_venv.sh` + `scripts/ttnn-pin.txt` consistent
-  with `[ttnn]` extra** — both pin `ttnn==0.68.0` ↔ `sfpi 7.35.3`.
+  with the `ttnn` hard dep** — all three pin `ttnn==0.68.0` ↔ `sfpi 7.35.3`.
 
 ## Stage B: local pre-publish gate
 
@@ -144,20 +147,22 @@ exact field values are in
 ## Stage F: post-publish verification
 
 - [ ] **TestPyPI release page exists** — at
-  `https://test.pypi.org/project/tt-symbiote/0.1.0/`, showing the
-  wheel + sdist artifacts.
+  `https://test.pypi.org/project/tt-symbiote/0.1.1/`, showing the
+  wheel + sdist artifacts. (0.1.0 was published to TestPyPI on the
+  way to 0.1.1 but had a broken dependency declaration — see Stage A
+  notes above. Do not publish 0.1.0 to PyPI.)
 - [ ] **PyPI release page exists** — at
-  `https://pypi.org/project/tt-symbiote/0.1.0/`, same artifacts.
+  `https://pypi.org/project/tt-symbiote/0.1.1/`, same artifacts.
 - [ ] **Clean-machine install works** — on a host with matching sfpi
   (`/opt/tenstorrent/sfpi/compiler/bin/riscv-tt-elf-g++ --version` →
   `sfpi:7.35.3...`):
   ```bash
-  python -m venv /tmp/tt010
-  /tmp/tt010/bin/pip install "tt_symbiote[ttnn]==0.1.0"
-  /tmp/tt010/bin/python -c "import tt_symbiote, ttnn; print(tt_symbiote.__version__, ttnn.__version__)"
+  python -m venv /tmp/tt011
+  /tmp/tt011/bin/pip install "tt_symbiote==0.1.1"
+  /tmp/tt011/bin/python -c "import tt_symbiote, ttnn; print(tt_symbiote.__version__, ttnn.__version__)"
   ```
 - [ ] **End-to-end demo runs from the installed wheel** —
   `examples/e2e/run_ling_mini_2_0.py` on a T3K (or any
   hardware-target script appropriate to the machine you have): clone
   the repo only for the script, but `pip install
-  "tt_symbiote[ttnn]==0.1.0"` provides the runtime.
+  "tt_symbiote==0.1.1"` provides the runtime.

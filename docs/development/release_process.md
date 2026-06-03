@@ -185,7 +185,7 @@ rm -rf /tmp/tt_test
 
 # After dispatch with target=pypi (skip for rcN versions):
 python -m venv /tmp/tt_prod
-/tmp/tt_prod/bin/pip install "tt_symbiote[ttnn]==$VERSION"
+/tmp/tt_prod/bin/pip install "tt_symbiote==$VERSION"
 /tmp/tt_prod/bin/python -c "import tt_symbiote, ttnn; print(tt_symbiote.__version__, ttnn.__version__)"
 rm -rf /tmp/tt_prod
 ```

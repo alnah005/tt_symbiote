@@ -12,7 +12,7 @@ Why vendored
 ``tt_cnn`` lives inside tt-metal's ``models/`` source tree. ``models/``
 is not part of the ``ttnn`` PyPI wheel, so ``pip install ttnn`` does
 not give us these convenience wrappers — we have to ship our own copy
-to keep ``pip install "tt_symbiote[ttnn]"`` self-contained.
+to keep ``pip install tt_symbiote`` self-contained.
 
 What's included
 ---------------

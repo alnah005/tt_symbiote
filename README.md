@@ -41,23 +41,22 @@ Tenstorrent Wormhole device attached.
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install "tt_symbiote[ttnn]"
+pip install tt_symbiote
 ```
 
-The `[ttnn]` extra pulls the exact `ttnn` wheel this release was
-validated against (`ttnn==0.68.0`, matching `scripts/ttnn-pin.txt`)
-plus the transitive deps (`torch`, `transformers==5.9.0`,
-`accelerate`, `tokenizers`, …). Plain `pip install tt_symbiote` (no
-extra) installs the Python surface only; you are then responsible for
-matching a `ttnn` wheel to your host sfpi yourself.
+That single command pulls `ttnn==0.68.0` (the exact wheel this
+release was validated against, matching `scripts/ttnn-pin.txt`) and
+the transitive deps (`torch`, `transformers==5.9.0`, `accelerate`,
+`tokenizers`, …). There is no separate `[ttnn]` extra to opt into —
+`ttnn` is a hard dependency, because `tt_symbiote.core` imports it at
+module-load time.
 
 > **System prerequisite: sfpi 7.35.3.** `ttnn` JIT-compiles firmware
 > kernels at first `open_mesh_device(...)` call using the Tenstorrent
 > sfpi RISC-V toolchain at `/opt/tenstorrent/sfpi/`. Every `ttnn`
 > wheel pins one sfpi version; if the host's installed sfpi doesn't
 > match, `open_mesh_device()` fails with `unrecognized command-line
-> option`. The `[ttnn]` extra pins `ttnn==0.68.0`, which requires
-> `sfpi 7.35.3`. Verify with
+> option`. `ttnn==0.68.0` requires `sfpi 7.35.3`. Verify with
 >
 > ```bash
 > /opt/tenstorrent/sfpi/compiler/bin/riscv-tt-elf-g++ --version

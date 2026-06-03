@@ -3,8 +3,7 @@
 User-facing guides:
 
 - [`install_prerequisites.md`](install_prerequisites.md) — install the
-  `(ttnn, sfpi)` runtime that `pip install "tt_symbiote[ttnn]"`
-  depends on.
+  `(ttnn, sfpi)` runtime that `pip install tt_symbiote` depends on.
 - [`supported_models.md`](supported_models.md) — catalog of recipes
   that ship with hardware-verified status.
 - [`ling_mini_2_0_guide.md`](ling_mini_2_0_guide.md) — end-to-end
