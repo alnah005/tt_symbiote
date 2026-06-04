@@ -1116,16 +1116,12 @@ class TracedRun(LightweightRun):
             else:
                 trace_func_kwargs[key] = val
 
-        # Warm-up — run forward once to populate caches and prime ops.
-        # The warm-up output is discarded; we only keep the trace-capture output.
-        module.forward(*func_args, **func_kwargs)
-        # Synchronize device to ensure all warm-up ops (including CCL) complete
-        # before starting trace capture. Without this, in-flight CCL ops can
-        # cause "Writes/Reads are not supported during trace capture" errors.
-        ttnn.synchronize_device(device)
-
         # Capture — the output from THIS forward is the trace_output whose
         # device buffer will be rewritten by every subsequent execute_trace.
+        # The separate RUN-1 warm-up encounter (tracked in ``_warmup_keys``)
+        # already primed caches/ops, so we capture directly with no extra
+        # in-capture warm-up forward (an extra forward double-mutates stateful
+        # graphs and frees buffers the captured trace references).
         trace_id = ttnn.begin_trace_capture(device, cq_id=cq_id)
         trace_output = module.forward(*trace_func_args, **trace_func_kwargs)
         ttnn.end_trace_capture(device, trace_id, cq_id=cq_id)

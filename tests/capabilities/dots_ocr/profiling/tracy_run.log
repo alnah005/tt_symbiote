@@ -1,0 +1,289 @@
+2026-06-01 21:50:41.647 | INFO     | __main__:main:297 - Using port 8086
+2026-06-01 21:50:41.648 | INFO     | tracy:run_report_setup:88 - Verifying tracy profiling tools
+2026-06-01 21:50:41.656 | INFO     | tracy:run_report_setup:108 - Capture command: ('/home/ttuser/salnahari/tt-metal/build/tools/profiler/bin/capture-release -o /home/ttuser/salnahari/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-06-01 21:50:41.677 | INFO     | __main__:main:362 - Test process started
+2026-06-01 21:50:46.671 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-06-01 21:51:00.345 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:418)
+2026-06-01 21:51:00.345 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for wormhole_b0 architecture. Newest features may not be supported. (topology_discovery.cpp:444)
+2026-06-01 21:51:00.424 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
+2026-06-01 21:51:00.441 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:418)
+2026-06-01 21:51:00.441 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for wormhole_b0 architecture. Newest features may not be supported. (topology_discovery.cpp:444)
+2026-06-01 21:51:00.663 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:418)
+2026-06-01 21:51:00.663 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for wormhole_b0 architecture. Newest features may not be supported. (topology_discovery.cpp:444)
+2026-06-01 21:51:00.864 | info     |             UMD | Harvesting masks for chip 1 tensix: 0x280 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0 (cluster.cpp:331)
+2026-06-01 21:51:00.993 | info     |             UMD | Harvesting masks for chip 2 tensix: 0x220 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0 (cluster.cpp:331)
+2026-06-01 21:51:01.029 | info     |             UMD | Harvesting masks for chip 0 tensix: 0x201 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0 (cluster.cpp:331)
+2026-06-01 21:51:01.065 | info     |             UMD | Harvesting masks for chip 3 tensix: 0x240 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0 (cluster.cpp:331)
+2026-06-01 21:51:01.101 | info     |             UMD | Harvesting masks for chip 7 tensix: 0x201 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0 (cluster.cpp:331)
+2026-06-01 21:51:01.141 | info     |             UMD | Harvesting masks for chip 6 tensix: 0x280 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0 (cluster.cpp:331)
+2026-06-01 21:51:01.180 | info     |             UMD | Harvesting masks for chip 5 tensix: 0x300 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0 (cluster.cpp:331)
+2026-06-01 21:51:01.219 | info     |             UMD | Harvesting masks for chip 4 tensix: 0x240 dram: 0x0 eth: 0x0 pcie: 0x0 l2cpu: 0x0 (cluster.cpp:331)
+2026-06-01 21:51:01.258 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {4, 5, 6, 7} (cluster.cpp:180)
+2026-06-01 21:51:01.258 | info     |             UMD | IOMMU: disabled (cluster.cpp:155)
+2026-06-01 21:51:01.258 | info     |             UMD | KMD version: 2.8.0 (cluster.cpp:158)
+2026-06-01 21:51:01.281 | info     |             UMD | Starting devices in cluster (cluster.cpp:964)
+2026-06-01 21:51:01.283 | info     |             UMD | Mapped hugepage 0x280000000 to NOC address 0x800000000 (silicon_sysmem_manager.cpp:217)
+2026-06-01 21:51:01.286 | info     |             UMD | Mapped hugepage 0x240000000 to NOC address 0x840000000 (silicon_sysmem_manager.cpp:217)
+2026-06-01 21:51:01.289 | info     |             UMD | Mapped hugepage 0x300000000 to NOC address 0x800000000 (silicon_sysmem_manager.cpp:217)
+2026-06-01 21:51:01.291 | info     |             UMD | Mapped hugepage 0x2c0000000 to NOC address 0x840000000 (silicon_sysmem_manager.cpp:217)
+2026-06-01 21:51:01.294 | info     |             UMD | Mapped hugepage 0x4280000000 to NOC address 0x800000000 (silicon_sysmem_manager.cpp:217)
+2026-06-01 21:51:01.296 | info     |             UMD | Mapped hugepage 0x4240000000 to NOC address 0x840000000 (silicon_sysmem_manager.cpp:217)
+2026-06-01 21:51:01.299 | info     |             UMD | Mapped hugepage 0x4200000000 to NOC address 0x800000000 (silicon_sysmem_manager.cpp:217)
+2026-06-01 21:51:01.301 | info     |             UMD | Mapped hugepage 0x41c0000000 to NOC address 0x840000000 (silicon_sysmem_manager.cpp:217)
+2026-06-01 21:51:01.422 | DEBUG    | ttnn.device:__init__:155 - Using default dispatch core type for this system: DispatchCoreType.ETH
+2026-06-01 21:51:01.423 | DEBUG    | ttnn.device:__init__:157 - Using default dispatch core axis for this system: DispatchCoreAxis.ROW
+2026-06-01 21:51:01.423 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_context.cpp:884)
+2026-06-01 21:51:01.423 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_context.cpp:851)
+2026-06-01 21:51:01.425 | info     |          Fabric | Starting multi-mesh mapping: 1 logical mesh(es) to 1 physical mesh(es) (topology_mapper_utils.cpp:1027)
+2026-06-01 21:51:01.425 | info     |          Fabric | Multi-mesh mapping attempt 1/2: Trying inter-mesh mapping (topology_mapper_utils.cpp:1068)
+2026-06-01 21:51:01.425 | info     |          Fabric | Attempt 1: Inter-mesh mapping succeeded, found 1 mesh pair(s) (topology_mapper_utils.cpp:1097)
+2026-06-01 21:51:01.425 | info     |          Fabric | Multi-mesh mapping succeeded after 1 attempt(s): 1 mesh pair(s) mapped (topology_mapper_utils.cpp:1234)
+2026-06-01 21:51:04.763 | warning  |           Metal | Got num_routing_planes: 1, which is less than current value: 255, ignoring the override (metal_context.cpp:688)
+2026-06-01 21:51:04.763 | info     |           Metal | Dispatch on FabricConfig::FABRIC_1D_RING with 1 Command Queues
+ (device_manager.cpp:290)
+2026-06-01 21:51:05.369 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:45)
+2026-06-01 21:51:05.865 | info     |           Metal | Profiler started on remote device 5 (profiler_initializer.cpp:56)
+2026-06-01 21:51:06.348 | info     |           Metal | Profiler started on device 1 (profiler_initializer.cpp:45)
+2026-06-01 21:51:06.839 | info     |           Metal | Profiler started on remote device 7 (profiler_initializer.cpp:56)
+2026-06-01 21:51:07.319 | info     |           Metal | Profiler started on device 2 (profiler_initializer.cpp:45)
+2026-06-01 21:51:07.811 | info     |           Metal | Profiler started on remote device 6 (profiler_initializer.cpp:56)
+2026-06-01 21:51:08.294 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:45)
+2026-06-01 21:51:08.784 | info     |           Metal | Profiler started on remote device 4 (profiler_initializer.cpp:56)
+2026-06-01 21:51:08.784 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:45)
+2026-06-01 21:51:17.737 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:394)
+2026-06-01 21:51:23.301 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:394)
+2026-06-01 21:51:23.303 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:394)
+2026-06-01 21:51:23.305 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:394)
+2026-06-01 21:51:23.308 | info     |           Metal | Fabric initialized on Device 4 (device.cpp:394)
+2026-06-01 21:51:23.315 | info     |           Metal | Fabric initialized on Device 5 (device.cpp:394)
+2026-06-01 21:51:25.622 | info     |           Metal | Fabric initialized on Device 6 (device.cpp:394)
+2026-06-01 21:51:25.629 | info     |           Metal | Fabric initialized on Device 7 (device.cpp:394)
+2026-06-01 21:51:25.629 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:48)
+2026-06-01 21:53:55.243 | INFO     | tracy:signpost:41 - model.layers.0.input_layernorm : TTNNDotsOCRLocalShardRMSNorm 
+2026-06-01 21:54:01.511 | INFO     | tracy:signpost:41 - model.layers.0.self_attn : TTNNDotsOCRAttention 
+2026-06-01 21:54:03.898 | INFO     | tracy:signpost:41 - model.layers.0.self_attn.qkv_proj : TTNNLinearLLamaIColShardedWAllReduced 
+2026-06-01 21:55:03.375 | INFO     | tracy:signpost:41 - model.layers.0.self_attn.o_proj : _TTNNDotsOCROProjPrefillLinear 
+2026-06-01 21:55:10.972 | INFO     | tracy:signpost:41 - model.layers.0.post_attention_layernorm : TTNNDotsOCRLocalShardRMSNorm 
+2026-06-01 21:55:10.974 | INFO     | tracy:signpost:41 - model.layers.0.mlp : TTNNDotsOCRMLP 
+2026-06-01 21:55:10.975 | INFO     | tracy:signpost:41 - model.layers.0.mlp.fused_gate_up_proj : TTNNDotsOCRFusedGateUpRowSharded 
+2026-06-01 21:55:24.903 | INFO     | tracy:signpost:41 - model.layers.0.mlp.down_proj : TTNNDotsOCRRowShardedNoAllGather 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+flash attention not available! fallback to eager implementation 
+TTNNDotsOCRLocalShardRMSNorm: model.layers.0.input_layernorm on device MeshDevice(8x1 grid, 8 devices)
+TTNNDotsOCRAttention: model.layers.0.self_attn on device MeshDevice(8x1 grid, 8 devices)
+TTNNLinearLLamaIColShardedWAllReduced: model.layers.0.self_attn.qkv_proj on device MeshDevice(8x1 grid, 8 devices)
+_TTNNDotsOCROProjPrefillLinear: model.layers.0.self_attn.o_proj on device MeshDevice(8x1 grid, 8 devices)
+TTNNDotsOCRLocalShardRMSNorm: model.layers.0.post_attention_layernorm on device MeshDevice(8x1 grid, 8 devices)
+TTNNDotsOCRMLP: model.layers.0.mlp on device MeshDevice(8x1 grid, 8 devices)
+TTNNDotsOCRFusedGateUpRowSharded: model.layers.0.mlp.fused_gate_up_proj on device MeshDevice(8x1 grid, 8 devices)
+TTNNDotsOCRRowShardedNoAllGather: model.layers.0.mlp.down_proj on device MeshDevice(8x1 grid, 8 devices)
+.2026-06-01 21:55:47.822 | info     |           Metal | Device kernel duration perf summary (device=6): count=46, min=660ns, avg=6141.0ns, max=70449ns (profiler_analysis.cpp:646)
+2026-06-01 21:55:47.822 | info     |           Metal | Device kernel duration perf histogram (device=6): (buckets=10, bucket_size=7000ns, range=[0..70000), underflow(<0ns)=0, overflow(>=70000ns)=1) (profiler_analysis.cpp:689)
+2026-06-01 21:55:47.822 | info     |           Metal |   [           0 ..         7000) |########################################|       38 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.822 | info     |           Metal |   [        7000 ..        14000) |#####                                   |        5 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.822 | info     |           Metal |   [       14000 ..        21000) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.822 | info     |           Metal |   [       21000 ..        28000) |#                                       |        1 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.822 | info     |           Metal |   [       28000 ..        35000) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.822 | info     |           Metal |   [       35000 ..        42000) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.822 | info     |           Metal |   [       42000 ..        49000) |#                                       |        1 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.822 | info     |           Metal |   [       49000 ..        56000) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.822 | info     |           Metal |   [       56000 ..        63000) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.822 | info     |           Metal |   [       63000 ..        70000) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.838 | info     |           Metal | Device kernel duration perf summary (device=4): count=46, min=674ns, avg=6151.4ns, max=70681ns (profiler_analysis.cpp:646)
+2026-06-01 21:55:47.838 | info     |           Metal | Device kernel duration perf histogram (device=4): (buckets=10, bucket_size=7100ns, range=[0..71000), underflow(<0ns)=0, overflow(>=71000ns)=0) (profiler_analysis.cpp:689)
+2026-06-01 21:55:47.838 | info     |           Metal |   [           0 ..         7100) |########################################|       38 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.838 | info     |           Metal |   [        7100 ..        14200) |#####                                   |        5 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.838 | info     |           Metal |   [       14200 ..        21300) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.838 | info     |           Metal |   [       21300 ..        28400) |#                                       |        1 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.838 | info     |           Metal |   [       28400 ..        35500) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.838 | info     |           Metal |   [       35500 ..        42600) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.838 | info     |           Metal |   [       42600 ..        49700) |#                                       |        1 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.838 | info     |           Metal |   [       49700 ..        56800) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.838 | info     |           Metal |   [       56800 ..        63900) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.838 | info     |           Metal |   [       63900 ..        71000) |#                                       |        1 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.846 | info     |           Metal | Device kernel duration perf summary (device=7): count=46, min=684ns, avg=6186.2ns, max=71744ns (profiler_analysis.cpp:646)
+2026-06-01 21:55:47.846 | info     |           Metal | Device kernel duration perf histogram (device=7): (buckets=10, bucket_size=7200ns, range=[0..72000), underflow(<0ns)=0, overflow(>=72000ns)=0) (profiler_analysis.cpp:689)
+2026-06-01 21:55:47.846 | info     |           Metal |   [           0 ..         7200) |########################################|       38 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.846 | info     |           Metal |   [        7200 ..        14400) |#####                                   |        5 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.846 | info     |           Metal |   [       14400 ..        21600) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.846 | info     |           Metal |   [       21600 ..        28800) |#                                       |        1 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.846 | info     |           Metal |   [       28800 ..        36000) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.846 | info     |           Metal |   [       36000 ..        43200) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.846 | info     |           Metal |   [       43200 ..        50400) |#                                       |        1 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.846 | info     |           Metal |   [       50400 ..        57600) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.846 | info     |           Metal |   [       57600 ..        64800) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.846 | info     |           Metal |   [       64800 ..        72000) |#                                       |        1 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.855 | info     |           Metal | Device kernel duration perf summary (device=5): count=46, min=671ns, avg=6177.8ns, max=71351ns (profiler_analysis.cpp:646)
+2026-06-01 21:55:47.855 | info     |           Metal | Device kernel duration perf histogram (device=5): (buckets=10, bucket_size=7100ns, range=[0..71000), underflow(<0ns)=0, overflow(>=71000ns)=1) (profiler_analysis.cpp:689)
+2026-06-01 21:55:47.855 | info     |           Metal |   [           0 ..         7100) |########################################|       37 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.855 | info     |           Metal |   [        7100 ..        14200) |######                                  |        6 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.855 | info     |           Metal |   [       14200 ..        21300) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.855 | info     |           Metal |   [       21300 ..        28400) |#                                       |        1 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.855 | info     |           Metal |   [       28400 ..        35500) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.855 | info     |           Metal |   [       35500 ..        42600) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.855 | info     |           Metal |   [       42600 ..        49700) |#                                       |        1 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.855 | info     |           Metal |   [       49700 ..        56800) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.855 | info     |           Metal |   [       56800 ..        63900) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.855 | info     |           Metal |   [       63900 ..        71000) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.901 | info     |           Metal | Device kernel duration perf summary (device=0): count=46, min=675ns, avg=6180.4ns, max=71084ns (profiler_analysis.cpp:646)
+2026-06-01 21:55:47.901 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=7100ns, range=[0..71000), underflow(<0ns)=0, overflow(>=71000ns)=1) (profiler_analysis.cpp:689)
+2026-06-01 21:55:47.901 | info     |           Metal |   [           0 ..         7100) |########################################|       38 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.901 | info     |           Metal |   [        7100 ..        14200) |#####                                   |        5 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.901 | info     |           Metal |   [       14200 ..        21300) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.901 | info     |           Metal |   [       21300 ..        28400) |#                                       |        1 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.901 | info     |           Metal |   [       28400 ..        35500) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.901 | info     |           Metal |   [       35500 ..        42600) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.901 | info     |           Metal |   [       42600 ..        49700) |#                                       |        1 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.901 | info     |           Metal |   [       49700 ..        56800) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.901 | info     |           Metal |   [       56800 ..        63900) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.901 | info     |           Metal |   [       63900 ..        71000) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.922 | info     |           Metal | Device kernel duration perf summary (device=3): count=46, min=670ns, avg=6165.1ns, max=71311ns (profiler_analysis.cpp:646)
+2026-06-01 21:55:47.922 | info     |           Metal | Device kernel duration perf histogram (device=3): (buckets=10, bucket_size=7100ns, range=[0..71000), underflow(<0ns)=0, overflow(>=71000ns)=1) (profiler_analysis.cpp:689)
+2026-06-01 21:55:47.922 | info     |           Metal |   [           0 ..         7100) |########################################|       38 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.922 | info     |           Metal |   [        7100 ..        14200) |#####                                   |        5 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.922 | info     |           Metal |   [       14200 ..        21300) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.922 | info     |           Metal |   [       21300 ..        28400) |#                                       |        1 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.923 | info     |           Metal |   [       28400 ..        35500) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.923 | info     |           Metal |   [       35500 ..        42600) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.923 | info     |           Metal |   [       42600 ..        49700) |#                                       |        1 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.923 | info     |           Metal |   [       49700 ..        56800) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.923 | info     |           Metal |   [       56800 ..        63900) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.923 | info     |           Metal |   [       63900 ..        71000) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.928 | info     |           Metal | Device kernel duration perf summary (device=2): count=46, min=670ns, avg=6170.9ns, max=71046ns (profiler_analysis.cpp:646)
+2026-06-01 21:55:47.928 | info     |           Metal | Device kernel duration perf histogram (device=2): (buckets=10, bucket_size=7100ns, range=[0..71000), underflow(<0ns)=0, overflow(>=71000ns)=1) (profiler_analysis.cpp:689)
+2026-06-01 21:55:47.928 | info     |           Metal |   [           0 ..         7100) |########################################|       38 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.928 | info     |           Metal |   [        7100 ..        14200) |#####                                   |        5 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.928 | info     |           Metal |   [       14200 ..        21300) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.928 | info     |           Metal |   [       21300 ..        28400) |#                                       |        1 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.928 | info     |           Metal |   [       28400 ..        35500) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.928 | info     |           Metal |   [       35500 ..        42600) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.928 | info     |           Metal |   [       42600 ..        49700) |#                                       |        1 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.928 | info     |           Metal |   [       49700 ..        56800) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.928 | info     |           Metal |   [       56800 ..        63900) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.928 | info     |           Metal |   [       63900 ..        71000) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.933 | info     |           Metal | Device kernel duration perf summary (device=1): count=46, min=675ns, avg=6154.2ns, max=71021ns (profiler_analysis.cpp:646)
+2026-06-01 21:55:47.933 | info     |           Metal | Device kernel duration perf histogram (device=1): (buckets=10, bucket_size=7100ns, range=[0..71000), underflow(<0ns)=0, overflow(>=71000ns)=1) (profiler_analysis.cpp:689)
+2026-06-01 21:55:47.933 | info     |           Metal |   [           0 ..         7100) |########################################|       38 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.933 | info     |           Metal |   [        7100 ..        14200) |#####                                   |        5 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.933 | info     |           Metal |   [       14200 ..        21300) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.933 | info     |           Metal |   [       21300 ..        28400) |#                                       |        1 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.933 | info     |           Metal |   [       28400 ..        35500) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.933 | info     |           Metal |   [       35500 ..        42600) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.933 | info     |           Metal |   [       42600 ..        49700) |#                                       |        1 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.933 | info     |           Metal |   [       49700 ..        56800) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.933 | info     |           Metal |   [       56800 ..        63900) |                                        |        0 (profiler_analysis.cpp:694)
+2026-06-01 21:55:47.933 | info     |           Metal |   [       63900 ..        71000) |                                        |        0 (profiler_analysis.cpp:694)
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1 passed, 2 warnings in 297.70s (0:04:57)
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 15 instances!
+ - leaked instance 0x7fed7fe415a8 of type "ttnn._ttnn.operations.normalization.SoftmaxDefaultProgramConfig"
+ - leaked instance 0x7fed90b37288 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7fed7fe41b48 of type "ttnn._ttnn.operations.normalization.SoftmaxDefaultProgramConfig"
+ - leaked instance 0x7fed7fe41548 of type "ttnn._ttnn.operations.normalization.SoftmaxDefaultProgramConfig"
+ - leaked instance 0x7fed7fe41608 of type "ttnn._ttnn.operations.normalization.SoftmaxDefaultProgramConfig"
+ - leaked instance 0x7fed90b37108 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7fed7fe41ae8 of type "ttnn._ttnn.operations.normalization.SoftmaxDefaultProgramConfig"
+ - leaked instance 0x7fed90b36b08 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7fed91790648 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7fed90b36bc8 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7fed90b36d48 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7fed90b37348 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7fed90b371c8 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7fed90b36c88 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7fed90b36e08 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 575 types!
+ - leaked type "ttnn._ttnn.operations.transformer.scaled_dot_product_attention_t"
+ - leaked type "ttnn._ttnn.operations.unary.selu_t"
+ - leaked type "ttnn._ttnn.operations.moreh.moreh_layer_norm_t"
+ - leaked type "ttnn._ttnn.operations.unary.cos_t"
+ - leaked type "ttnn._ttnn.operations.examples.composite_example_t"
+ - leaked type "ttnn._ttnn.operations.unary.mish_t"
+ - leaked type "ttnn._ttnn.operations.experimental.nlp_create_qkv_heads_t"
+ - leaked type "ttnn._ttnn.operations.binary.prelu_t"
+ - leaked type "ttnn._ttnn.operations.unary_backward.abs_bw_t"
+ - leaked type "ttnn._ttnn.operations.unary.digamma_t"
+ - ... skipped remainder
+nanobind: leaked 2252 functions!
+ - leaked function "__call__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__call__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__call__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-06-01 21:55:54.266 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:477)
+2026-06-01 21:55:54.266 | info     |             UMD | Closing devices in cluster (cluster.cpp:975)
+
+Queue delay: 70 ns
+Timer resolution: 30 ns
+
+Frames: 2
+Time span: 6:30.5
+Zones: 135,410
+Elapsed time: 5:08.1
+Saving trace... done!
+Trace size 2695.57 KB (31.57% ratio)
+2026-06-01 21:55:55.451 | INFO     | tracy:generate_report:154 - Host side ops time report generated at /home/ttuser/salnahari/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-06-01 21:55:55.490 | INFO     | tracy:generate_report:165 - Host side ops data report generated at /home/ttuser/salnahari/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-06-01 21:55:55.491 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:252 - Importing ops logs
+2026-06-01 21:55:56.118 | INFO     | tracy.process_ops_logs:get_device_op_data:459 - Getting device ops
+2026-06-01 21:55:56.120 | INFO     | tracy.process_ops_logs:append_device_data:846 - Appending device data
+2026-06-01 21:55:56.407 | INFO     | tracy.process_ops_logs:generate_reports:1116 - OPs' perf analysis is finished! Generating reports ...
+2026-06-01 21:55:56.408 | INFO     | tracy.process_ops_logs:generate_reports:1134 - Copying runtime artifacts
+2026-06-01 21:55:56.462 | INFO     | tracy.process_ops_logs:generate_reports:1143 - Generating OPs CSV
+2026-06-01 21:55:56.784 | INFO     | tracy.process_ops_logs:generate_reports:1524 - OPs csv generated at: /home/ttuser/salnahari/tt-metal/generated/profiler/reports/2026_06_01_21_55_56/ops_perf_results_2026_06_01_21_55_56.csv

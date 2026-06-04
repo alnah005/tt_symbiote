@@ -1,0 +1,20 @@
+{
+  "model_name": "dots_ocr",
+  "device_arch": "T3K",
+  "tt_metal_commit": "e3447fd55874d8625f3c2e894ecc9409bb606805",
+  "source": "tracy ops_perf_results_2026_06_01_21_55_56.csv (decode, DP 8x1, real ported TTNNDotsOCRDecoderLayer)",
+  "total_device_kernel_us_all_rows": 2269.0,
+  "bottlenecks": [
+    {"rank": 1, "op": "Matmul MLP gate_up", "config": "LoFi, BF16 x BFP4 => BFP8, 64 cores", "pct": 28.8, "verdict": "already minimal fidelity (LoFi) + minimal weight dtype (BFP4). No further dtype/fidelity headroom without accuracy loss."},
+    {"rank": 2, "op": "Matmul MLP down_proj", "config": "LoFi, BFP8 x BFP4 => BFP8, 64 cores", "pct": 15.6, "verdict": "already LoFi + BFP4 weights. Optimal for speed."},
+    {"rank": 3, "op": "Matmul QKV proj", "config": "HiFi2, BF16 x BFP8 => BF16, 64 cores", "pct": 7.8, "verdict": "intentionally HiFi2 + BFP8 (accuracy-sensitive Q/K/V). Dropping to LoFi/BFP4 risks decode PCC < 0.99. Keep."},
+    {"rank": 4, "op": "LayerNorm (distributed RMSNorm)", "pct": 6.8, "verdict": "already uses sharded fast path (HiFi4 + fp32_acc + packer_l1) per dots_ocr_decoder_layer. Optimal."},
+    {"rank": 5, "op": "Permute + Slice + Interleaved<->Sharded reshards", "pct": 16.2, "verdict": "structural layout-shuffle overhead. Only reducible by reworking the sharding/head-split strategy -- HIGH RISK on a tuned faithful port. Not recommended without a dedicated re-tune + full PCC re-validation."}
+  ],
+  "recommendations": [
+    {"target": "all matmuls", "action": "NO CHANGE", "rationale": "The ported implementation is the tuned production config: gate_up/down at LoFi+BFP4 (max speed), QKV at HiFi2+BFP8 (accuracy preserved). Matmul fidelity/dtype is already at the speed/accuracy Pareto front. Lowering QKV fidelity is the only dtype lever and it threatens the validated decode PCC>=0.99."},
+    {"target": "layout reshards (~16%)", "action": "DEFER", "rationale": "Reducing Permute/Slice/reshard overhead requires sharding-strategy rework, high regression risk on a validated port. Track as a future structural-perf item, not a config-override change."}
+  ],
+  "config_optimize_directive": "NO_OP_ALREADY_OPTIMAL",
+  "config_optimize_rationale": "Per decision profile (functionality first, then speed) the ported decoder already passed PCC>=0.99 AND carries the reference's tuned per-op configs. Applying further config overrides has near-zero speed headroom on the matmuls and material risk of regressing the validated PCC. config_optimize is therefore a validated no-op: current config IS the optimal config."
+}

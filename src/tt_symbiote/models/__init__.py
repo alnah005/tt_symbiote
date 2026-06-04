@@ -27,6 +27,7 @@ _RECIPE_BEARING_SUBPACKAGES = (
     "resnet",
     "gemma4",
     "qwen3_vl",
+    "dots_ocr",
 )
 
 

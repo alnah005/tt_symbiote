@@ -1,0 +1,72 @@
+{
+  "_meta": {
+    "model_name": "dots_ocr",
+    "model_id": "rednote-hilab/dots.ocr",
+    "tt_metal_commit": "e3447fd55874d8625f3c2e894ecc9409bb606805",
+    "notes": [
+      "Text backbone is Qwen2 (DotsOCRForCausalLM extends Qwen2ForCausalLM).",
+      "Vision tower is the custom DotsVisionTransformer loaded via trust_remote_code.",
+      "No Qwen2-specific or DotsVision-specific attention integration exists yet; attention tests swap only inner Linears + activations via register_modules and keep the attention math in torch."
+    ]
+  },
+  "TTNNLinear": {
+    "ttnn_ops": ["ttnn.linear"],
+    "import_path": "tt_symbiote.modules.ttnn_linear.TTNNLinear",
+    "used_by_text": [
+      "q_proj", "k_proj", "v_proj", "o_proj",
+      "gate_proj", "up_proj", "down_proj", "lm_head"
+    ],
+    "used_by_vision": [
+      "qkv", "proj", "fc1", "fc2", "fc3",
+      "merger.mlp[0]", "merger.mlp[2]"
+    ],
+    "device_constraint": null
+  },
+  "TTNNRMSNorm": {
+    "ttnn_ops": ["ttnn.rms_norm"],
+    "import_path": "tt_symbiote.modules.ttnn_normalization.TTNNRMSNorm",
+    "used_by_text": ["input_layernorm", "post_attention_layernorm", "norm"],
+    "device_constraint": null,
+    "notes": "Reads self.torch_layer.variance_epsilon -- matches Qwen2RMSNorm."
+  },
+  "TTNNLocalRMSNorm": {
+    "ttnn_ops": ["ttnn.rms_norm"],
+    "import_path": "tt_symbiote.modules.ttnn_normalization.TTNNLocalRMSNorm",
+    "used_by_vision": ["norm1", "norm2", "post_trunk_norm", "patch_embed.norm"],
+    "device_constraint": null,
+    "notes": "Supports rms_norm modules that expose .eps instead of .variance_epsilon (DotsVision RMSNorm)."
+  },
+  "TTNNLayerNorm": {
+    "ttnn_ops": ["ttnn.layer_norm"],
+    "import_path": "tt_symbiote.modules.ttnn_normalization.TTNNLayerNorm",
+    "used_by_vision": ["merger.ln_q"],
+    "device_constraint": null
+  },
+  "TTNNSilu": {
+    "ttnn_ops": ["ttnn.silu"],
+    "import_path": "tt_symbiote.modules.ttnn_activation.TTNNSilu",
+    "used_by_text": ["mlp.act_fn"],
+    "used_by_vision": ["DotsSwiGLUFFN (F.silu inside forward)"],
+    "device_constraint": null,
+    "notes": "Vision SwiGLU FFN calls F.silu functionally; substituting requires a wrapper Module."
+  },
+  "TTNNGelu": {
+    "ttnn_ops": ["ttnn.gelu"],
+    "import_path": "tt_symbiote.modules.ttnn_activation.TTNNGelu",
+    "used_by_vision": ["merger.mlp.1 (nn.GELU)"],
+    "device_constraint": null
+  },
+  "TTNNConv2dNHWC": {
+    "ttnn_ops": ["ttnn.conv2d"],
+    "import_path": "tt_symbiote.modules.ttnn_conv.TTNNConv2dNHWC",
+    "used_by_vision": ["patch_embed.proj"],
+    "device_constraint": null,
+    "notes": "Not exercised by the generated tier-1 tests for dots_ocr; listed for completeness."
+  },
+  "_unmapped": {
+    "Qwen2Attention": "No Qwen2-specific integration -- tested via inner-Linear swaps only.",
+    "DotsVisionAttention": "No vision-attention integration -- tested via inner-Linear swaps only.",
+    "DotsVisionTransformer": "Tier-4 full vision model not currently swappable; tier-4 test is skip-marked.",
+    "DotsOCRForCausalLM": "Multimodal entry point; tier-4 full-model test is skip-marked (requires real checkpoint + image inputs)."
+  }
+}

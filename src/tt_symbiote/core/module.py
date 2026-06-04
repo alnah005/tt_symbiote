@@ -8,7 +8,7 @@ import functools
 import os
 from enum import Enum
 from functools import wraps
-from typing import Optional
+from typing import Dict, Optional, Tuple, Union
 
 import torch
 
@@ -352,30 +352,94 @@ MeshShapeToDeviceArch = {
     "BHGLX": DeviceArch.BHGLX,
 }
 
+# Ring / mesh collectives used by column-sharded linears (reduce_scatter, all_gather, all_reduce).
+# Keep in sync with keys in ``MeshShapeToDeviceArch`` so ``MESH_DEVICE`` always maps to an allowed arch.
+SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS = (
+    DeviceArch.N150,
+    DeviceArch.N300,
+    DeviceArch.T3K,
+    DeviceArch.TG,
+    DeviceArch.P150,
+    DeviceArch.P300,
+    DeviceArch.P150x4,
+    DeviceArch.P150x8,
+    DeviceArch.BHGLX,
+)
 
-def run_on_devices(*allowed_archs: DeviceArch):
+
+def run_on_devices(
+    *allowed_archs: DeviceArch,
+    mesh_shape: Optional[Union[Tuple[int, int], Dict[DeviceArch, Tuple[int, int]]]] = None,
+):
     """Decorator restricting a TTNNModule method to specific device architectures.
 
     Args:
         *allowed_archs: ``DeviceArch`` enum values that the module can run on.
+        mesh_shape: Optional required mesh shape(s). A mesh shape is inherently
+            *per-architecture* -- e.g. a data-parallel layout is ``(8, 1)`` on
+            T3K, ``(2, 1)`` on N300, ``(1, 1)`` on N150 -- so when more than one
+            arch is allowed you must say which shape goes with which arch.
+            Accepted forms:
+
+            * ``None`` (default): no mesh-shape constraint. Backward compatible
+              with every existing ``@run_on_devices`` call site.
+            * ``(rows, cols)`` tuple: sugar for the single-arch case. The shape
+              is required on *every* allowed arch (only meaningful when one arch
+              is allowed, or when the same shape genuinely fits all of them).
+            * ``{DeviceArch: (rows, cols), ...}`` mapping: the required shape per
+              arch. Keys must be a subset of ``allowed_archs``. Allowed archs not
+              present in the mapping carry no shape constraint.
+
+            The normalized ``{DeviceArch: (rows, cols)}`` dict is stamped on
+            ``wrapper.__tt_mesh_shape__`` for :func:`tt_symbiote.set_device` to
+            introspect. At call time only the *active* arch's required shape is
+            enforced.
 
     Raises:
+        ValueError: At decoration time, if a ``mesh_shape`` dict key is not in
+            ``allowed_archs``.
         RuntimeError: At call time, if the active device's architecture is not
-            in ``allowed_archs``. This is the runtime defense-in-depth check;
-            Phase 4 also has :func:`tt_symbiote.set_device` introspect
-            ``wrapper.__tt_allowed_archs__`` and proactively swap unsupported
-            modules to their ``_fallback_torch_layer`` so the runtime check
-            should rarely fire in practice.
+            in ``allowed_archs``, or if the active arch has a required mesh shape
+            that the live mesh does not match.
 
     Example:
         @run_on_devices(DeviceArch.N300, DeviceArch.T3K)
         def forward(self, input_tensor):
             return ttnn.linear(input_tensor, self.tt_weight)
+
+        # Single arch: tuple sugar. Data-parallel 8x1 on T3K.
+        @run_on_devices(DeviceArch.T3K, mesh_shape=(8, 1))
+        def forward(self, hidden_states, **kwargs):
+            ...
+
+        # Multiple archs: per-arch mapping (each arch its own DP shape).
+        @run_on_devices(
+            DeviceArch.N300, DeviceArch.T3K,
+            mesh_shape={DeviceArch.N300: (2, 1), DeviceArch.T3K: (8, 1)},
+        )
+        def forward(self, hidden_states, **kwargs):
+            ...
     """
     if not allowed_archs:
         raise ValueError("Must specify at least one allowed device architecture")
 
     allowed_set = frozenset(allowed_archs)
+
+    # Normalize mesh_shape into a per-arch dict {DeviceArch: (rows, cols)}.
+    if mesh_shape is None:
+        required_mesh_shapes: Dict[DeviceArch, Tuple[int, int]] = {}
+    elif isinstance(mesh_shape, dict):
+        unknown = set(mesh_shape) - allowed_set
+        if unknown:
+            raise ValueError(
+                f"run_on_devices: mesh_shape keys {sorted(a.name for a in unknown)} "
+                f"are not in allowed archs {sorted(a.name for a in allowed_set)}"
+            )
+        required_mesh_shapes = {arch: tuple(int(d) for d in shp) for arch, shp in mesh_shape.items()}
+    else:
+        # Single (rows, cols) tuple -> required on every allowed arch.
+        shp = tuple(int(d) for d in mesh_shape)
+        required_mesh_shapes = {arch: shp for arch in allowed_set}
 
     def decorator(func):
         @wraps(func)
@@ -397,11 +461,25 @@ def run_on_devices(*allowed_archs: DeviceArch):
                     f"Allowed architectures: {allowed_set}"
                 )
 
+            required = required_mesh_shapes.get(mesh_device)
+            if required is not None:
+                actual_shape = getattr(self.device, "shape", None)
+                actual = tuple(int(d) for d in actual_shape) if actual_shape is not None else None
+                if actual != required:
+                    raise RuntimeError(
+                        f"{self.__class__.__name__}: on {mesh_device.name} requires mesh shape "
+                        f"{required} but the active device mesh is {actual}. "
+                        f"Open the device as ttnn.MeshShape{required} for {mesh_device.name} "
+                        f"(e.g. for dots.ocr data-parallel set DOTS_OCR_PARALLELISM=DP)."
+                    )
+
             return func(self, *args, **kwargs)
 
-        # Phase 4: stamp the allowed-arch set on the wrapped function so
-        # set_device can introspect it without invoking the wrapper.
+        # Phase 4: stamp the allowed-arch set (and optional per-arch mesh shapes)
+        # on the wrapped function so set_device can introspect them without
+        # invoking the wrapper.
         wrapper.__tt_allowed_archs__ = allowed_set
+        wrapper.__tt_mesh_shape__ = dict(required_mesh_shapes) if required_mesh_shapes else None
         return wrapper
 
     return decorator
