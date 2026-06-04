@@ -38,13 +38,19 @@ src/tt_symbiote/
   generation/      # Text generation utilities (stub)
 
 tests/
-  auto/            # Software-only tests (no hardware needed, mock TTNN)
-  capabilities/    # Hardware tests: shared + per-model subdirectories
-    <model_name>/  # Per-model test directories
-    pcc_utils.py   # PCC assertion helpers (stub -- filled by pcc-test-gen skill)
-    shared_configs.py  # Config presets (stub -- filled by config skills)
-    conftest.py    # Shared fixtures (pcc_threshold = 0.99)
-    test_attention.py, test_conv.py, test_moe.py, test_rope.py  # Shared capability tests
+  conftest.py        # ROOT conftest: pcc_threshold + autouse tt_metal_commit_check (non-blocking)
+  auto/              # Software-only tests (no hardware needed, mock TTNN)
+    test_structure_lint.py  # stdlib-only lint enforcing the two-tree test layout
+  shared/            # Shared helpers + shared capability tests (hardware)
+    pcc_utils.py     # PCC assertion helpers
+    shared_configs.py  # Config presets
+    conftest.py      # Shared-tree conftest (fixture-free; fixtures live in ROOT conftest.py)
+    test_attention.py, test_conv.py, test_moe.py, test_rope.py, test_dpl.py
+  models/            # RICH per-model dirs (e2e-traced-correct)
+    <name>/          # __init__.py, test_config.json, shapes.json, op_map.json,
+                     #   test_ops/composites/decoder/modeling/traced_<name>.py
+  experimental/      # MINIMAL per-model dirs (partial TTNN; excluded from default collection)
+    <name>/          # __init__.py + test_config.json
 ```
 
 ## Architecture: The TTNNModule Lifecycle
@@ -244,18 +250,71 @@ class TTNNMyModule(TTNNModule):
 ```
 Guard goes on forward() ONLY, not on __init__, from_torch, or preprocess_weights.
 
+### Decorator-Only Tracing
+Trace enablement is expressed SOLELY via the `@trace_enabled` class decorator on the
+ACTUAL trace unit (the module whose forward is captured/replayed), and checked at runtime
+via `is_trace_enabled(<unit>)` from `tt_symbiote.core.run_config`. Do NOT introduce ad-hoc
+instance flags (e.g. `self._trace_enabled`). Do NOT decorate a parent/wrapper module just to
+flag a child — check `is_trace_enabled(self.<child>)` instead (decorating the wrapper would
+flip its global trace-enablement and pull it into the `TracedRun` dispatch lifecycle).
+
+### Tracy-Only Device Time
+Device time is sourced SOLELY from the tracy `ops_perf_results_*.csv` DEVICE TIME (ns)
+column. Never estimate, project, or compute device time from theoretical peak / FLOPS /
+utilization. `GEMM_FLOPS/GEMM_FLOPS.md` is background reading only. Where no tracy data
+exists, the answer is "profile first via tracy", NOT an estimate.
+
+### Bottom-Up Tuning (Functional-First)
+Phase A — functional-first: get ALL tier PCC green (0.99 default / 0.999 bring-up) plus
+semantic validation BEFORE any performance tuning (HARD precondition). Phase B — bottom-up,
+leaves-first: tune a module ONLY IF its tracy device-time % exceeds the descent gate (knob
+`phase_b_descent_gate_pct`, default 5%); re-validate PCC after each module before ascending;
+roll back on regression; re-profile via tracy. All numbers come from the tracy CSV.
+
+### Op-Sweep Dynamic Derivation
+The op-sweep grid is DERIVED at sweep time by grepping `$TT_METAL_HOME` (e.g.
+`models/tt_transformers/tt/`, `models/tt_dit/`, `models/demos/`, `ttnn/`) for the op's
+actually-used dtypes, math fidelities, and memory/layout configs. There is NO committed grid
+catalog; record the derived grid plus the tt-metal commit at sweep time.
+
+### Tech-Report Reading Gate
+BEFORE writing or replacing any new TTNN module, append an additive `references_read` record
+to the model's `bringup_status.json` (tech reports + reference impls + consulted paths +
+tt-metal commit + timestamp). The orchestrator is BLOCKED until this is logged; the entry is
+additive and never removes existing keys.
+
 ### Test Location
-- Per-model tests: `tests/capabilities/<model_name>/test_modeling_<model_name>.py`
-- Shared capability tests: `tests/capabilities/` (root level)
-- Software-only tests: `tests/auto/`
-- `tests/models/` NO LONGER EXISTS.
+- RICH per-model tests (e2e-traced-correct): `tests/models/<name>/test_modeling_<name>.py`
+  (plus `test_ops/composites/decoder/traced_<name>.py`, `shapes.json`, `op_map.json`).
+- Partial-TTNN per-model tests (bring-up not yet complete): `tests/experimental/<name>/`
+  (MINIMAL floor: `__init__.py` + `test_config.json`; excluded from default collection).
+- Shared helpers + shared capability tests: `tests/shared/`.
+- Software-only tests: `tests/auto/`.
+- The old per-model capabilities tree has been REMOVED; do NOT recreate it.
+- Every per-model dir (both trees) carries a `test_config.json` (see "### Per-Model test_config.json").
 
 ### PCC Testing
 - `compare_fn_outputs()` from `core/utils.py` only prints warnings -- it does NOT assert. NEVER use it as sole validation.
-- Always use `assert_pcc()` from `tests/capabilities/pcc_utils.py`.
-- Default threshold: 0.99 (matches conftest.py fixture and pcc_utils.py).
+- Always use `assert_pcc()` from `tests/shared/pcc_utils.py`.
+- Default threshold: 0.99 (matches ROOT `tests/conftest.py` fixture and pcc_utils.py).
 - Pass `threshold=0.999` explicitly for stricter bring-up validation.
 - Known tech debt: Existing shared tests (test_attention.py, test_conv.py, test_moe.py, test_rope.py) still use `compare_fn_outputs()` instead of `assert_pcc()`. These should be migrated. New tests MUST NOT use `compare_fn_outputs()`.
+
+### Per-Model test_config.json
+Every per-model dir under `tests/models/` and `tests/experimental/` carries a
+`test_config.json` with these keys (lint checks presence + types only):
+```json
+{
+  "tt_metal_commit": "<40-char git hash, or '' if not yet validated>",
+  "device_arch": "T3K",
+  "pcc_threshold": 0.99,
+  "hf_model_id": "<org/model>",
+  "hf_revision": "main"
+}
+```
+The autouse, NON-BLOCKING `tt_metal_commit_check` fixture (ROOT `tests/conftest.py`)
+warns once if a populated `tt_metal_commit` differs from the current `$TT_METAL_HOME`
+checkout; it never skips or fails.
 
 ### Config System (Current State)
 The hierarchical typed config system (DtypeConfig, ComputeConfig, MemoryConfig, ModuleConfig) is PLANNED but NOT yet implemented. None of these classes exist.
@@ -289,7 +348,7 @@ Current mechanisms:
 | Deprecated | Replacement | Location |
 |-----------|-------------|----------|
 | `register_module_replacement_dict()` | `register_modules()` | `utils/module_replacement.py` |
-| `compare_fn_outputs()` (for test assertions) | `assert_pcc()` | `core/utils.py` -> `tests/capabilities/pcc_utils.py` |
+| `compare_fn_outputs()` (for test assertions) | `assert_pcc()` | `core/utils.py` -> `tests/shared/pcc_utils.py` |
 
 ### License Headers
 New files use `(C)`:
@@ -304,10 +363,15 @@ Some existing framework files use the Unicode copyright symbol -- do not change 
 - Configure via `@pytest.mark.parametrize("device_params", [{...}], indirect=True)`
 - Single-device tests (N150, P150): use `device` fixture
 - Multi-device tests (N300, T3K, TG, etc.): use `mesh_device` fixture
+- `pcc_threshold` and the non-blocking autouse `tt_metal_commit_check` fixtures are
+  defined ONCE in ROOT `tests/conftest.py` (the common ancestor of `auto/`, `shared/`,
+  `models/`, `experimental/`). Do NOT define them in `tests/shared/conftest.py` — that
+  file is a *sibling* of the per-model trees, so its fixtures would not reach them.
 
 ## Model Bring-Up State Tracking
 
-Active model bring-ups track progress in `tests/capabilities/<model_name>/bringup_status.json`.
+Active model bring-ups track progress in `tests/models/<name>/bringup_status.json` (rich,
+e2e-traced) or `tests/experimental/<name>/bringup_status.json` (partial-TTNN).
 This file records:
 - Which phases (scaffold, pcc_test_gen, op_sweep, etc.) are completed
 - Test results per tier
@@ -370,8 +434,8 @@ per retry attempt).
 # Run software-only tests
 pytest tests/auto/ -x -v
 
-# Run a specific model's capability tests
-pytest tests/capabilities/<model_name>/ -x -v
+# Run a specific model's per-model tests (rich tree; or tests/experimental/<name>/)
+pytest tests/models/<name>/ -x -v
 
 # Run with DPL mode for debugging
 TT_SYMBIOTE_RUN_MODE=DPL pytest <test_file> -x -s
@@ -389,7 +453,7 @@ git -C $TT_METAL_HOME rev-parse HEAD
 
 ## Do Not
 - Do NOT use `register_module_replacement_dict` (deprecated alias for `register_modules`)
-- Do NOT put tests in `tests/models/` (directory removed)
+- Per-model RICH tests live in `tests/models/<name>/`; partial-TTNN in `tests/experimental/<name>/`; do NOT recreate the old per-model capabilities tree
 - Do NOT create `TTNNModule.forward()` without `@run_on_devices`
 - Do NOT use `torch.*` calls inside `TTNNModule.forward()` -- pure TTNN only
 - Do NOT reference or recreate anything related to gr00t

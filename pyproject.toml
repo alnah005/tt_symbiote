@@ -178,9 +178,14 @@ skip = ["__init__.py"]
 line-length = 120
 
 [tool.pytest.ini_options]
-# Default collection paths. `tests/experimental/` is deliberately excluded
-# (see tests/experimental/README.md) — those tests target models whose
-# `src/tt_symbiote/models/<name>/` package is NOT in the supported
-# `_RECIPE_BEARING_SUBPACKAGES` registry and are not guaranteed to import.
-testpaths = ["tests/auto", "tests/capabilities", "tests/models"]
+# Default collection paths:
+#   - tests/auto/    software-only tests (no hardware; ttnn deferred/mocked)
+#   - tests/shared/  shared helpers (pcc_utils, shared_configs) + shared
+#                    capability tests (attention/conv/moe/rope/dpl)
+#   - tests/models/  RICH per-model dirs (e2e-traced-correct)
+# `tests/experimental/` is deliberately excluded (see tests/experimental/README.md)
+# — those tests target models whose `src/tt_symbiote/models/<name>/` package is
+# NOT in the supported `_RECIPE_BEARING_SUBPACKAGES` registry and are not
+# guaranteed to import.
+testpaths = ["tests/auto", "tests/shared", "tests/models"]
 addopts = "-q --ignore=tests/experimental"

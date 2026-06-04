@@ -11,7 +11,9 @@ Fine-tune configuration for one specific module.
 
 **File naming**: Model directories use HuggingFace `transformers` snake_case naming.
 
-**Test location**: All per-model tests go under `tests/capabilities/<model_name>/`.
+**Test location**: Per-model tests live under `tests/models/<model_name>/` (RICH, e2e-traced)
+  or `tests/experimental/<model_name>/` (partial-TTNN); for an already-brought-up model default
+  to `tests/models/<model_name>/`.
 
 **Pure TTNN forward**: ALL `TTNNModule.forward()` methods must use pure `ttnn.*` ops only.
   No `torch.*` calls in the compute path.
@@ -21,7 +23,7 @@ Fine-tune configuration for one specific module.
 
 **License headers**: Every generated `.py` file starts with `(C)` format.
 
-**PCC assertions**: Use `assert_pcc()` from `tests/capabilities/pcc_utils.py`.
+**PCC assertions**: Use `assert_pcc()` from `tests/shared/pcc_utils.py`.
 
 **Config system**: The typed config system does NOT exist. Use subclass-based overrides:
   - Weight dtype: override `preprocess_weights_impl()`
@@ -51,7 +53,7 @@ done
 
 Key reports for config-optimize-module (read FIRST):
 1. `data_formats/data_formats.md` -- Dtype impact on compute and PCC for the specific op
-2. `GEMM_FLOPS/GEMM_FLOPS.md` -- Theoretical peak for the module's dominant op
+2. `GEMM_FLOPS/GEMM_FLOPS.md` -- matmul background for the module's dominant op (read for understanding only; device time comes from the tracy CSV, not from hardware-limit estimates)
 3. `memory/allocator.md` -- L1 vs DRAM for this specific module's access pattern
 4. `tensor_sharding/tensor_sharding.md` -- Optimal sharding for the module's tensor shapes
 5. `YoloV4-TTNN/yolov4.md` -- Per-op optimization examples
@@ -150,11 +152,18 @@ register_modules(model.model.layers[5].self_attn, {nn.Linear: TTNNLinear<Model>Q
 
 Ensure `modeling_<model_name>.py` has the current commit hash.
 
-## Step 6 -- Validate PCC
+## Step 6 -- Validate PCC (bottom-up re-validation hook)
 
-Run only the tests that exercise this module (Tier 1 for the op, plus Tier 2/3 composites).
+Run the tests that exercise this module (Tier 1 for the op, plus Tier 2/3 composites) AND any
+affected higher tiers. This is the single-module re-validation hook in the bottom-up tuning
+workflow: re-validate this module and the affected tiers BEFORE reporting. If PCC regresses
+below threshold, ROLL BACK the config change (restore the prior subclass/override) and report
+the regression. Do NOT ascend to the parent module with a regressed leaf.
 
 ## Step 7 -- Report Before/After
+
+Timing in the before/after comparison comes SOLELY from the tracy `ops_perf_results_*.csv`
+DEVICE TIME (ns) column — never from hardware-limit estimates or projected numbers.
 
 ```
 Module: model.layers[5].self_attn.q_proj

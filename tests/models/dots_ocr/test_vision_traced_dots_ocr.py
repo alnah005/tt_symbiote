@@ -17,7 +17,7 @@ text embeds straight in, which IS the trace input, so the decoder frees it ->
 
 Run:
     export DOTS_OCR_PARALLELISM=DP MESH_DEVICE=T3K TT_SYMBIOTE_RUN_MODE=TRACED
-    pytest tests/capabilities/dots_ocr/test_vision_traced_dots_ocr.py --timeout=0 -s
+    pytest tests/models/dots_ocr/test_vision_traced_dots_ocr.py --timeout=0 -s
 
 TT_METAL_COMMIT used during scaffolding: e3447fd55874d8625f3c2e894ecc9409bb606805
 """

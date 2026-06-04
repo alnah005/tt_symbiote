@@ -35,7 +35,7 @@ from tt_symbiote.modules.ttnn_normalization import TTNNLayerNorm, TTNNLocalRMSNo
 from tt_symbiote.utils.device_management import set_device
 from tt_symbiote.utils.module_replacement import register_modules
 
-from tests.capabilities.pcc_utils import assert_pcc
+from tests.shared.pcc_utils import assert_pcc
 
 _SHAPES_PATH = pathlib.Path(__file__).parent / "shapes.json"
 _SHAPES = json.loads(_SHAPES_PATH.read_text())
@@ -143,7 +143,7 @@ def test_dots_vision_transformer_smoke(mesh_device):
 def test_dots_ocr_forcausallm_full(mesh_device):
     """End-to-end multimodal forward (currently skip-marked).
 
-    When enabling, follow this pattern (mirrors tests/capabilities/olmo3):
+    When enabling, follow this pattern (mirrors tests/experimental/olmo3):
 
         from transformers import AutoModelForCausalLM, AutoTokenizer
 

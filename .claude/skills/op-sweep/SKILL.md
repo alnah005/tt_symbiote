@@ -11,10 +11,26 @@ Systematically explore the configuration space for TTNN ops to find optimal sett
 
 **File naming**: Model directories use HuggingFace `transformers` snake_case naming.
   - Model source: `src/tt_symbiote/models/<model_name>/modeling_<model_name>.py`
-  - Model tests: `tests/capabilities/<model_name>/test_modeling_<model_name>.py`
+  - Model tests: `tests/models/<model_name>/test_modeling_<model_name>.py`
 
-**Test location**: All per-model tests go under `tests/capabilities/<model_name>/`.
-  - `tests/models/` does NOT exist. Never create files there.
+**Test location**: Per-model tests live under `tests/models/<model_name>/` (RICH, e2e-traced)
+  or `tests/experimental/<model_name>/` (partial-TTNN). For an already-brought-up model default
+  to `tests/models/<model_name>/`. Sweep outputs go to `tests/models/<model_name>/sweep_results/`;
+  `shapes.json` is read from `tests/models/<model_name>/`.
+
+**Dynamic Grid Derivation (Req 7)**: The sweep grid is DERIVED at sweep time — there is NO
+  committed grid catalog artifact. Capture `TT_METAL_COMMIT=$(git -C $TT_METAL_HOME rev-parse HEAD)`,
+  then GREP `$TT_METAL_HOME` (`models/tt_transformers/tt/`, `models/tt_dit/`, `models/demos/`,
+  `ttnn/`) for the op's actually-used dtypes (`ttnn.bfloat16` / `ttnn.bfloat8_b` /
+  `ttnn.bfloat4_b` / `ttnn.float32` / `ttnn.uint32`), math fidelities
+  (`MathFidelity.{LoFi,HiFi2,HiFi3,HiFi4}`), memory/layout (`MEMORY_CONFIG` / `MemoryConfig(` /
+  `ShardSpec` / `_LAYOUT`), and op-specific params at the call sites. Build the cartesian grid
+  from the OBSERVED set only; record the derived grid plus the tt-metal commit.
+
+**Tracy-only device time (Req 4)**: Per-grid-point timing comes SOLELY from the tracy
+  `ops_perf_results_*.csv` DEVICE TIME (ns) column; record PCC per grid point. Never estimate or
+  derive device time from theoretical hardware limits, from FLOP counts, or from any efficiency
+  ratio.
 
 **Pure TTNN forward**: ALL `TTNNModule.forward()` methods must use pure `ttnn.*` ops only.
   No `torch.*` calls in the compute path. Weight preprocessing may use PyTorch.
@@ -33,7 +49,7 @@ Systematically explore the configuration space for TTNN ops to find optimal sett
   # SPDX-License-Identifier: Apache-2.0
   ```
 
-**PCC assertions**: Use `assert_pcc()` from `tests/capabilities/pcc_utils.py`.
+**PCC assertions**: Use `assert_pcc()` from `tests/shared/pcc_utils.py`.
   NEVER rely on `compare_fn_outputs()`.
 
 **Deprecated API**: Never use `register_module_replacement_dict()`.
@@ -95,7 +111,7 @@ This skill follows a mandatory loop structure. If the loop fails 5 times, report
 4. Determine the sweep parameter grid
 
 ### VERIFY Phase (no hardware, no user approval needed)
-1. Verify shapes.json exists and is valid: `python -c "import json; json.load(open('tests/capabilities/<model_name>/shapes.json'))"`
+1. Verify shapes.json exists and is valid: `python -c "import json; json.load(open('tests/models/<model_name>/shapes.json'))"`
 2. Verify all imports resolve: `python -c "from tt_symbiote.modules.ttnn_linear import TTNNLinear; from ttnn.model_preprocessing import preprocess_linear_weight"`
 3. Verify the sweep subclass forward() uses only `ttnn.*` ops (pure TTNN constraint)
 4. Verify `@run_on_devices` is present on any overridden `forward()` methods
@@ -151,7 +167,7 @@ For sweeping, we create a **TTNNLinearSweep subclass** that parameterizes both.
 
 ## Step 2 -- Generate Sweep Test File
 
-Create `tests/capabilities/<model_name>/test_sweep_<op_name>.py` with:
+Create `tests/models/<model_name>/test_sweep_<op_name>.py` with:
 - A `TTNNLinearSweep` subclass that overrides `preprocess_weights_impl()` for weight dtype
 - Parametrized test function sweeping weight_dtype x math_fidelity x fp32_acc
 - CSV result output to `sweep_results/<op_name>_sweep.csv`
@@ -160,9 +176,9 @@ Create `tests/capabilities/<model_name>/test_sweep_<op_name>.py` with:
 ## Step 3 -- Run the Sweep
 
 ```bash
-mkdir -p tests/capabilities/<model_name>/sweep_results
-rm -f tests/capabilities/<model_name>/sweep_results/<op_name>_sweep.csv
-pytest tests/capabilities/<model_name>/test_sweep_<op_name>.py -v --tb=no -q 2>&1 | tee sweep_output.txt
+mkdir -p tests/models/<model_name>/sweep_results
+rm -f tests/models/<model_name>/sweep_results/<op_name>_sweep.csv
+pytest tests/models/<model_name>/test_sweep_<op_name>.py -v --tb=no -q 2>&1 | tee sweep_output.txt
 ```
 
 ## Step 4 -- Analyze and Present Results
@@ -173,7 +189,7 @@ Parse the CSV, filter passing configs (PCC >= 0.999), sort by time. Present top 
 (section 2.3: "set math_fidelity=ttnn.MathFidelity.LoFi unless noticeable PCC drop")
 align with sweep results.
 
-Save best config as `tests/capabilities/<model_name>/sweep_results/<op_name>_best.json`.
+Save best config as `tests/models/<model_name>/sweep_results/<op_name>_best.json`.
 
 ## Error Handling
 

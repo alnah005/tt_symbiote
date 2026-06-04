@@ -35,7 +35,7 @@ from tt_symbiote.modules.ttnn_normalization import TTNNLayerNorm
 from tt_symbiote.utils.device_management import set_device
 from tt_symbiote.utils.module_replacement import register_modules
 
-from tests.capabilities.pcc_utils import assert_pcc
+from tests.shared.pcc_utils import assert_pcc
 
 _SHAPES_PATH = pathlib.Path(__file__).parent / "shapes.json"
 _SHAPES = json.loads(_SHAPES_PATH.read_text())

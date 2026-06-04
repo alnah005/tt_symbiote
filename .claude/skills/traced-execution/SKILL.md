@@ -11,10 +11,13 @@ Set up trace capture and replay for a model test for deterministic, low-overhead
 
 **File naming**: Model directories use HuggingFace `transformers` snake_case naming.
   - Model source: `src/tt_symbiote/models/<model_name>/modeling_<model_name>.py`
-  - Model tests: `tests/capabilities/<model_name>/test_modeling_<model_name>.py`
+  - Model tests: `tests/models/<model_name>/test_modeling_<model_name>.py`
 
-**Test location**: All per-model tests go under `tests/capabilities/<model_name>/`.
-  - `tests/models/` does NOT exist. Never create files there.
+**Test location**: Per-model tests live under `tests/models/<model_name>/` (RICH, e2e-traced)
+  or `tests/experimental/<model_name>/` (partial-TTNN); for an already-brought-up model default
+  to `tests/models/<model_name>/`. Traced tests are written to
+  `tests/models/<model_name>/test_traced_<model_name>.py`; `assert_pcc` is imported from
+  `tests/shared/pcc_utils.py`.
 
 **Pure TTNN forward**: ALL `TTNNModule.forward()` methods must use pure `ttnn.*` ops only.
   No `torch.*` calls in the compute path. This is ESPECIALLY critical for traced execution,
@@ -29,7 +32,7 @@ Set up trace capture and replay for a model test for deterministic, low-overhead
   # SPDX-License-Identifier: Apache-2.0
   ```
 
-**PCC assertions**: Use `assert_pcc()` from `tests/capabilities/pcc_utils.py`.
+**PCC assertions**: Use `assert_pcc()` from `tests/shared/pcc_utils.py`.
 
 **Config system**: The typed config system does NOT exist yet.
 
@@ -113,7 +116,7 @@ This skill follows a mandatory loop structure. If the loop fails 5 times, report
 4. Draft the traced test file
 
 ### VERIFY Phase (no hardware, no user approval needed)
-1. Verify the base PCC test exists: `test -f tests/capabilities/<model_name>/test_modeling_<model_name>.py`
+1. Verify the base PCC test exists: `test -f tests/models/<model_name>/test_modeling_<model_name>.py`
 2. Verify all imports resolve: `python -c "from tt_symbiote.core.run_config import TracedRun"`
 3. Verify no `torch.*` calls in any model `forward()` methods (torch ops break trace capture):
    ```bash
@@ -159,6 +162,13 @@ class TTNNMyModule(TTNNModule):
     ...
 ```
 
+**Decorator-only tracing (Req 5)**: FORBID ad-hoc instance flags (e.g. `self._trace_enabled`).
+Enable tracing ONLY via the `@trace_enabled` decorator on the ACTUAL trace unit (the module whose
+forward is captured/replayed), and check it at runtime via `is_trace_enabled(<unit>)` from
+`tt_symbiote.core.run_config`. Do NOT decorate a parent/wrapper module just to flag a child —
+check `is_trace_enabled(self.<child>)` instead (decorating the wrapper would flip its global
+trace-enablement and pull it into the `TracedRun` dispatch lifecycle).
+
 ## Step 1 -- Collect Inputs (ASK the user)
 
 1. **Model name**: For locating test files
@@ -176,7 +186,7 @@ class TTNNMyModule(TTNNModule):
 
 ## Step 3 -- Generate Traced Test File
 
-Create `tests/capabilities/<model_name>/test_traced_<model_name>.py` (SEPARATE from pcc-test-gen tests):
+Create `tests/models/<model_name>/test_traced_<model_name>.py` (SEPARATE from pcc-test-gen tests):
 
 ```python
 # SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
@@ -201,7 +211,7 @@ import torch
 import ttnn
 from tt_symbiote.core.run_config import TracedRun
 from tt_symbiote.utils.device_management import set_device
-from tests.capabilities.pcc_utils import assert_pcc
+from tests.shared.pcc_utils import assert_pcc
 
 MODEL_ID = "<hf_model_id>"
 
@@ -279,10 +289,10 @@ def test_traced_multiple_replays(mesh_device):
 
 ```bash
 # Run the same model test in NORMAL mode first (baseline PCC reference)
-TT_SYMBIOTE_RUN_MODE=NORMAL pytest tests/capabilities/<model_name>/test_modeling_<model_name>.py -x -s
+TT_SYMBIOTE_RUN_MODE=NORMAL pytest tests/models/<model_name>/test_modeling_<model_name>.py -x -s
 
 # Run traced tests (uses TRACED mode set in the test file via os.environ)
-pytest tests/capabilities/<model_name>/test_traced_<model_name>.py -x -s
+pytest tests/models/<model_name>/test_traced_<model_name>.py -x -s
 ```
 
 ## Step 5 -- Report PCC Delta

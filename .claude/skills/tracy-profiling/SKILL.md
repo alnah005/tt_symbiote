@@ -11,12 +11,23 @@ Profile a pytest test or standalone script to measure TTNN op device times.
 
 **File naming**: Model directories use HuggingFace `transformers` snake_case naming.
   - Model source: `src/tt_symbiote/models/<model_name>/modeling_<model_name>.py`
-  - Model tests: `tests/capabilities/<model_name>/test_modeling_<model_name>.py`
+  - Model tests: `tests/models/<model_name>/test_modeling_<model_name>.py`
 
-**Test location**: All per-model tests go under `tests/capabilities/<model_name>/`.
-  - `tests/models/` does NOT exist. Never create files there.
-  - Shared capability tests: `tests/capabilities/` root (e.g., `test_attention.py`)
+**Test location**: Per-model tests live under `tests/models/<model_name>/` (RICH, e2e-traced)
+  or `tests/experimental/<model_name>/` (partial-TTNN). For an already-brought-up model default
+  to `tests/models/<model_name>/`. Profiling outputs go to `tests/models/<model_name>/profiling/`.
+  - Shared capability tests: `tests/shared/` root (e.g., `test_attention.py`)
   - Auto/unit tests: `tests/auto/`
+
+**Tracy-only device time (Req 4)**: Device time is reported SOLELY from the tracy
+  `ops_perf_results_*.csv` DEVICE TIME (ns) column. Never estimate, project, or compute device
+  time from theoretical hardware limits, from FLOP counts, or from any efficiency ratio.
+  `GEMM_FLOPS/GEMM_FLOPS.md` is reading material only.
+
+**Tech-Report Reading Gate (Req 8)**: BEFORE any profiling-driven new-module work, append an
+  additive `references_read` record to the model's `bringup_status.json`
+  (`tt_metal_commit` + `timestamp` + `tech_reports` + `reference_impls` + `consulted_paths`);
+  additive only — never remove existing keys.
 
 **Pure TTNN forward**: ALL `TTNNModule.forward()` methods must use pure `ttnn.*` ops only.
   No `torch.*` calls in the compute path. Weight preprocessing may use PyTorch.
@@ -37,7 +48,7 @@ Profile a pytest test or standalone script to measure TTNN op device times.
   NOTE: Some existing framework files use the Unicode copyright symbol. Do NOT change those. Use `(C)` for all NEW files.
 
 **PCC assertions**: NEVER rely on `compare_fn_outputs()` alone -- it only prints warnings.
-  Always use `assert_pcc()` from `tests/capabilities/pcc_utils.py`.
+  Always use `assert_pcc()` from `tests/shared/pcc_utils.py`.
 
 **Deprecated API**: Never use `register_module_replacement_dict()`.
   Use `register_modules()` from `tt_symbiote.utils.module_replacement`.
@@ -126,7 +137,7 @@ Ask the user for:
 1. **Test file path**: The pytest file or standalone script to profile.
    - Validate the file exists with `ls <path>`.
    - If the user gives a model name instead of a path, look for tests at:
-     `tests/capabilities/<model_name>/test_modeling_<model_name>.py`
+     `tests/models/<model_name>/test_modeling_<model_name>.py`
 
 2. **Decoder layer limiting** (optional): For models with repeated decoder layers,
    ask whether to limit to 1-2 layers to avoid profiling the same structure N times.

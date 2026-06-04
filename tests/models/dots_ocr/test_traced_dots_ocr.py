@@ -36,7 +36,7 @@ from tt_symbiote.core.run_config import TracedRun
 from tt_symbiote.core.tensor import TorchTTNNTensor
 from tt_symbiote.utils.device_management import set_device
 
-from tests.capabilities.pcc_utils import assert_pcc
+from tests.shared.pcc_utils import assert_pcc
 
 
 # ---------------------------------------------------------------------------

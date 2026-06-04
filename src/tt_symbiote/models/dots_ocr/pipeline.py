@@ -25,7 +25,7 @@ import ttnn
 
 
 from tt_symbiote.core.module import TTNNModule
-from tt_symbiote.core.run_config import TracedRun, trace_enabled
+from tt_symbiote.core.run_config import TracedRun, is_trace_enabled, trace_enabled
 from tt_symbiote.models.dots_ocr._attention import (
     PagedAttentionConfig,
     TTNNPagedAttentionKVCache,
@@ -868,7 +868,8 @@ class TTNNDotsOCRPipeline(TTNNModule):
                 actual_vision_seq_len = int(x_patch.shape[2])
                 vision_bucket = (
                     self.vision_tower.block_stack.nearest_bucket(actual_vision_seq_len)
-                    if self.vision_tower.block_stack is not None and self.vision_tower._trace_enabled
+                    if self.vision_tower.block_stack is not None
+                    and is_trace_enabled(self.vision_tower.block_stack)
                     else -1
                 )
                 use_vision_sdpa_mask = os.environ.get("DOTS_OCR_USE_FULL_SDPA_MASK", "").lower() in {

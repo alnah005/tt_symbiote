@@ -3,7 +3,7 @@
 
 """Op-sweep over Qwen2DecoderLayer linears at rednote-hilab/dots.ocr dims.
 
-Target: ``tests/capabilities/dots_ocr/test_decoder_dots_ocr.py::test_text_qwen2_decoder_layer_prefill``
+Target: ``tests/models/dots_ocr/test_decoder_dots_ocr.py::test_text_qwen2_decoder_layer_prefill``
 Grid:   wide (full Cartesian product of weight_dtype x math_fidelity x
         fp32_dest_acc_en x packer_l1_acc x activation_dtype x memory_config).
 
@@ -47,7 +47,7 @@ from tt_symbiote.modules.ttnn_normalization import TTNNRMSNorm
 from tt_symbiote.utils.device_management import set_device
 from tt_symbiote.utils.module_replacement import register_modules
 
-from tests.capabilities.pcc_utils import compute_pcc
+from tests.shared.pcc_utils import compute_pcc
 
 _HERE = pathlib.Path(__file__).parent
 _SHAPES = json.loads((_HERE / "shapes.json").read_text())

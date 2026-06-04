@@ -46,10 +46,28 @@ The orchestrator automatically selects validation inputs based on model architec
 
 **File naming**: Model directories use HuggingFace `transformers` snake_case naming.
   - Model source: `src/tt_symbiote/models/<model_name>/modeling_<model_name>.py`
-  - Model tests: `tests/capabilities/<model_name>/test_modeling_<model_name>.py`
+  - Model tests: `tests/models/<model_name>/test_modeling_<model_name>.py`
 
-**Test location**: All per-model tests go under `tests/capabilities/<model_name>/`.
-  - `tests/models/` does NOT exist. Never create files there.
+**Test location**: Per-model RICH tests go under `tests/models/<model_name>/` (e2e-traced
+  correct); partial-TTNN bring-ups under `tests/experimental/<model_name>/` (MINIMAL floor:
+  `__init__.py` + `test_config.json`). Write to `tests/models/` ONLY once e2e traced correctness
+  is proven, else `tests/experimental/`. The old per-model capabilities tree was removed.
+  Every per-model dir carries a `test_config.json` (5 keys: `tt_metal_commit`, `device_arch`,
+  `pcc_threshold`, `hf_model_id`, `hf_revision`). Promotion experimental→models requires PROVEN
+  e2e traced correctness (all RICH-tier PCC green in TRACED at 0.99 default / 0.999 bring-up +
+  traced-mode PCC matches NORMAL + semantic validation) AND upgrade to the RICH floor
+  (`shapes.json`, `op_map.json`, `test_ops/composites/decoder/modeling/traced_<model_name>.py`)
+  with a populated `test_config.json` (pinned `tt_metal_commit`); use `git mv` to preserve history.
+
+**Tracy-only device time (Req 4)**: Device time is sourced SOLELY from the tracy
+  `ops_perf_results_*.csv` DEVICE TIME (ns) column. Never estimate, project, or compute device
+  time from theoretical hardware limits, from FLOP counts, or from any efficiency ratio.
+  `GEMM_FLOPS/GEMM_FLOPS.md` is reading material only.
+
+**Decorator-only tracing (Req 5)**: Enable tracing SOLELY via the `@trace_enabled` class
+  decorator on the ACTUAL trace unit, checked at runtime via `is_trace_enabled(<unit>)`. Never
+  use ad-hoc instance flags (e.g. `self._trace_enabled`). Never decorate a parent/wrapper module
+  just to flag a child — check `is_trace_enabled(self.<child>)` instead.
 
 **Pure TTNN forward**: ALL `TTNNModule.forward()` methods MUST use pure `ttnn.*` ops only.
   No `torch.*` calls in the compute/forward path. This is mandatory and non-negotiable.
@@ -69,7 +87,7 @@ The orchestrator automatically selects validation inputs based on model architec
   # SPDX-License-Identifier: Apache-2.0
   ```
 
-**PCC assertions**: Use `assert_pcc()` from `tests/capabilities/pcc_utils.py`.
+**PCC assertions**: Use `assert_pcc()` from `tests/shared/pcc_utils.py`.
   NEVER rely on `compare_fn_outputs()`.
 
 **Deprecated API**: Never use `register_module_replacement_dict()`.
@@ -86,6 +104,26 @@ The orchestrator automatically selects validation inputs based on model architec
 
 **Config system**: The typed config system (ModuleConfig, DtypeConfig, etc.) does NOT exist.
   Use `_model_config: dict` via `set_model_config()`, and subclass-based overrides.
+
+**Tuning Workflow (Req 6 — functional-first, then bottom-up)**:
+  - **Phase A (functional-first)**: get ALL tier PCC green (0.99 default / 0.999 bring-up) plus
+    semantic validation BEFORE any performance tuning. This is a HARD precondition — do NOT begin
+    Phase B until Phase A passes.
+  - **Phase B (bottom-up, leaves-first)**: profile via tracy, then tune a module ONLY IF its tracy
+    device-time % exceeds the descent gate (knob `phase_b_descent_gate_pct`, default **5%**). After
+    tuning each module, re-validate PCC for that module and the affected tiers BEFORE ascending to
+    its parent; roll back the change on any PCC regression; re-profile via tracy. All numbers come
+    from the tracy `ops_perf_results_*.csv` DEVICE TIME column — never estimates.
+
+**Tech-Report Reading Gate (Req 8)**: BEFORE writing or replacing ANY new TTNN module, append an
+  additive `references_read` record to `bringup_status.json`. The orchestrator is BLOCKED until
+  this is logged; the entry is additive and never removes existing keys:
+  ```json
+  "references_read": [{"tt_metal_commit":"<hash>","timestamp":"<iso8601>",
+    "tech_reports":["ttnn/TTNN-model-bringup.md","..."],
+    "reference_impls":["models/tt_transformers/tt/attention.py","..."],
+    "consulted_paths":["models/demos/.../..."]}]
+  ```
 
 **HuggingFace**: Always pass `trust_remote_code=True`. (Decision profile: auto-proceed.)
 
@@ -477,7 +515,7 @@ The executor creates:
 2. `modeling_<model_name>.py` with TTNN module classes
 3. `__init__.py` with exports
 4. Updates `models/__init__.py` for recipe path
-5. `tests/capabilities/<model_name>/` directory
+5. `tests/models/<model_name>/` directory
 6. `bringup_status.json` initialized
 
 Verification commands:
@@ -756,9 +794,9 @@ the sub-agent reports failure back to the orchestrator.
 - Test file path (Tier 4 test)
 
 **Autonomous decisions injected**:
-- Test file: `tests/capabilities/<model_name>/test_modeling_<model_name>.py`
+- Test file: `tests/models/<model_name>/test_modeling_<model_name>.py`
 - Decoder layer limiting: Yes, limit to 2 layers
-- Output directory: `tests/capabilities/<model_name>/`
+- Output directory: `tests/models/<model_name>/`
 
 **Expected artifacts**: ops_perf_results_*.csv, perf_report.txt
 
@@ -865,17 +903,17 @@ FILES CREATED/MODIFIED:
   - src/tt_symbiote/models/<model_name>/modeling_<model_name>.py
   - src/tt_symbiote/models/<model_name>/__init__.py
   - src/tt_symbiote/models/__init__.py (if recipe path)
-  - tests/capabilities/<model_name>/shapes.json
-  - tests/capabilities/<model_name>/op_map.json
-  - tests/capabilities/<model_name>/test_ops_<model_name>.py
-  - tests/capabilities/<model_name>/test_composites_<model_name>.py
-  - tests/capabilities/<model_name>/test_decoder_<model_name>.py
-  - tests/capabilities/<model_name>/test_modeling_<model_name>.py
-  - tests/capabilities/<model_name>/test_device_guards_<model_name>.py
-  - tests/capabilities/<model_name>/test_traced_<model_name>.py
-  - tests/capabilities/<model_name>/sweep_results/*.csv
-  - tests/capabilities/<model_name>/perf_results/recommendation.json
-  - tests/capabilities/<model_name>/bringup_status.json
+  - tests/models/<model_name>/shapes.json
+  - tests/models/<model_name>/op_map.json
+  - tests/models/<model_name>/test_ops_<model_name>.py
+  - tests/models/<model_name>/test_composites_<model_name>.py
+  - tests/models/<model_name>/test_decoder_<model_name>.py
+  - tests/models/<model_name>/test_modeling_<model_name>.py
+  - tests/models/<model_name>/test_device_guards_<model_name>.py
+  - tests/models/<model_name>/test_traced_<model_name>.py
+  - tests/models/<model_name>/sweep_results/*.csv
+  - tests/models/<model_name>/perf_results/recommendation.json
+  - tests/models/<model_name>/bringup_status.json
 
 PCC RESULTS:
   Tier 1 (ops):       <pass/fail> (PCC: <value>)
@@ -910,7 +948,7 @@ NEXT STEPS:
 
 ## State Management: bringup_status.json
 
-Located at `tests/capabilities/<model_name>/bringup_status.json`:
+Located at `tests/models/<model_name>/bringup_status.json`:
 
 ```json
 {

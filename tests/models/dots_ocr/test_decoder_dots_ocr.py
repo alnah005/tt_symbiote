@@ -56,7 +56,7 @@ from tt_symbiote.models.dots_ocr import (
 from tt_symbiote.utils.device_management import set_device
 from tt_symbiote.utils.module_replacement import register_modules
 
-from tests.capabilities.pcc_utils import assert_pcc, compute_pcc
+from tests.shared.pcc_utils import assert_pcc, compute_pcc
 
 
 _SHAPES_PATH = pathlib.Path(__file__).parent / "shapes.json"

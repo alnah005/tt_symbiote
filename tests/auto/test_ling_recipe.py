@@ -14,7 +14,7 @@ when no ``nn.Module`` params remain), and that ``make_kv_cache`` is
 callable with the documented signature.
 
 Actual TTNN execution and KV-cache allocation are exercised by
-``tests/capabilities/bailing_moe_v2/test_modeling_bailing_moe_v2.py`` on
+``tests/models/bailing_moe_v2/test_modeling_bailing_moe_v2.py`` on
 real hardware.
 """
 

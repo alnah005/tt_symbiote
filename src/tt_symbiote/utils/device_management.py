@@ -189,7 +189,8 @@ def set_device(obj, device) -> None:
     # Read runtime config from the model (attached by from_pretrained).
     # All three flags default to the production-safe value when absent,
     # which is the case for hand-constructed TTNNModule instances in
-    # tests/auto/test_set_device.py and tests/capabilities/*.
+    # tests/auto/test_set_device.py and the per-model test trees
+    # (tests/models/* and tests/experimental/*).
     register_forward_hook = bool(getattr(obj, "_tt_register_forward_hook", False))
     dump_visualization = bool(getattr(obj, "_tt_dump_visualization", False))
     device_init = DeviceInit  # never overridden anywhere in-tree

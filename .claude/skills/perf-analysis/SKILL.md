@@ -11,15 +11,18 @@ Analyze profiling data to identify bottlenecks and recommend optimizations.
 
 **File naming**: Model directories use HuggingFace `transformers` snake_case naming.
   - Model source: `src/tt_symbiote/models/<model_name>/modeling_<model_name>.py`
-  - Model tests: `tests/capabilities/<model_name>/test_modeling_<model_name>.py`
+  - Model tests: `tests/models/<model_name>/test_modeling_<model_name>.py`
 
-**Test location**: All per-model tests go under `tests/capabilities/<model_name>/`.
+**Test location**: Per-model tests live under `tests/models/<model_name>/` (RICH, e2e-traced)
+  or `tests/experimental/<model_name>/` (partial-TTNN); for an already-brought-up model default
+  to `tests/models/<model_name>/`. The `recommendation.json` is written to
+  `tests/models/<model_name>/perf_results/`.
 
 **Pure TTNN forward**: When analyzing profiles, FLAG any ops that appear to be
   torch fallbacks (non-ttnn ops in the trace). These indicate A1 violations that should
   be fixed before optimization -- optimizing around a torch fallback is wasted effort.
 
-**PCC assertions**: Use `assert_pcc()` from `tests/capabilities/pcc_utils.py`.
+**PCC assertions**: Use `assert_pcc()` from `tests/shared/pcc_utils.py`.
 
 **Config system**: The typed config system does NOT exist yet. Optimization is done via
   subclass selection and method overrides:
@@ -44,7 +47,7 @@ done
 ```
 
 Key reports for perf-analysis (read FIRST):
-1. `GEMM_FLOPS/GEMM_FLOPS.md` -- Theoretical peak, understanding utilization
+1. `GEMM_FLOPS/GEMM_FLOPS.md` -- matmul/GEMM background (read for understanding only; device time is read from the tracy CSV, never computed from this report)
 2. `AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md` -- Optimization techniques reference
 3. `data_formats/data_formats.md` -- dtype impact on compute throughput
 4. `memory/allocator.md` -- L1 vs DRAM bandwidth implications
@@ -64,7 +67,7 @@ ls "$TT_METAL_HOME/models/tt_transformers/tt/"
 
 **Key extraction for perf-analysis**: Study `model_config.py` (~196K bytes, ~4,236 lines)
 to understand:
-- How utilization is calculated
+- How per-op and per-layer configs are selected (read for background)
 - How configs are selected per-op and per-layer
 - The DecoderOptimizations pattern for per-layer dtype/fidelity tuning
 
@@ -136,7 +139,11 @@ For each top-10 op, check if a faster config exists in sweep results.
 - YoloV4 report recommends LoFi math fidelity unless PCC drops
 - Data formats report gives specific throughput multipliers for bfloat8_b vs bfloat16
 - Sharding report gives guidance on when to switch sharding strategies
-- GEMM_FLOPS report gives theoretical peak to compare utilization against
+
+**Device-time source (Req 4)**: Rank ops SOLELY by the tracy `ops_perf_results_*.csv` DEVICE
+TIME (ns) column. Do NOT derive device time from theoretical hardware limits, from FLOPS, or
+from any efficiency ratio; do NOT report estimated or projected timings. Where no tracy data
+exists, the answer is "profile first via tracy", NOT an estimate.
 
 ## Step 4 -- Generate Recommendations
 
@@ -144,7 +151,7 @@ For each top-10 op, check if a faster config exists in sweep results.
 forward. If torch fallbacks are detected in the profile, flag them as PRIORITY FIX items
 before any config optimization.
 
-Save to `tests/capabilities/<model_name>/perf_results/recommendation.json`:
+Save to `tests/models/<model_name>/perf_results/recommendation.json`:
 
 ```json
 {

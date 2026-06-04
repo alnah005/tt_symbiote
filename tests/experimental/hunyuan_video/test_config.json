@@ -1,0 +1,7 @@
+{
+  "tt_metal_commit": "",
+  "device_arch": "T3K",
+  "pcc_threshold": 0.99,
+  "hf_model_id": "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v",
+  "hf_revision": "main"
+}

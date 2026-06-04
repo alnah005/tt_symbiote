@@ -12,7 +12,7 @@
     "mesh": "DP (4,1)",
     "tt_metal_commit": "78a02a443067f1ff87aa31f3fc21c06714b15604",
     "run_mode": "TRACED",
-    "test": "tests/capabilities/dots_ocr/test_vision_traced_dots_ocr.py::test_dots_ocr_vision_traced[mesh_device0-device_params0]",
+    "test": "tests/models/dots_ocr/test_vision_traced_dots_ocr.py::test_dots_ocr_vision_traced[mesh_device0-device_params0]",
     "result": "1 passed, 1 skipped (8,1 needs 8 devices) in 61.4s; full Warm-up->Capture->Replay (embed_tokens + graph_prefill + graph_decode traced on MeshDevice(4x1)); 180 tokens coherent structured table OCR; zero TT_FATAL/trace errors; zero torch fallbacks.",
     "code_changes": [
       "dots_ocr_decoder_layer.py: @run_on_devices widened to {T3K:(8,1), P150x4:(4,1)}",
@@ -50,16 +50,16 @@
     "pcc_test_gen": {
       "status": "completed",
       "artifacts": [
-        "tests/capabilities/dots_ocr/shapes.json",
-        "tests/capabilities/dots_ocr/op_map.json",
-        "tests/capabilities/dots_ocr/test_ops_dots_ocr.py",
-        "tests/capabilities/dots_ocr/test_composites_dots_ocr.py",
-        "tests/capabilities/dots_ocr/test_decoder_dots_ocr.py",
-        "tests/capabilities/dots_ocr/test_modeling_dots_ocr.py",
-        "tests/capabilities/dots_ocr/test_pipeline_dots_ocr.py",
-        "tests/capabilities/dots_ocr/test_device_guards_dots_ocr.py",
-        "tests/capabilities/dots_ocr/conftest.py",
-        "tests/capabilities/pcc_utils.py"
+        "tests/models/dots_ocr/shapes.json",
+        "tests/models/dots_ocr/op_map.json",
+        "tests/models/dots_ocr/test_ops_dots_ocr.py",
+        "tests/models/dots_ocr/test_composites_dots_ocr.py",
+        "tests/models/dots_ocr/test_decoder_dots_ocr.py",
+        "tests/models/dots_ocr/test_modeling_dots_ocr.py",
+        "tests/models/dots_ocr/test_pipeline_dots_ocr.py",
+        "tests/models/dots_ocr/test_device_guards_dots_ocr.py",
+        "tests/models/dots_ocr/conftest.py",
+        "tests/shared/pcc_utils.py"
       ],
       "test_results": {
         "tier1": {
@@ -89,9 +89,9 @@
     "op_sweep": {
       "status": "completed",
       "artifacts": [
-        "tests/capabilities/dots_ocr/test_sweep_decoder_dots_ocr.py",
-        "tests/capabilities/dots_ocr/sweep_results/decoder_sweep.csv",
-        "tests/capabilities/dots_ocr/sweep_results/decoder_best.json"
+        "tests/models/dots_ocr/test_sweep_decoder_dots_ocr.py",
+        "tests/models/dots_ocr/sweep_results/decoder_sweep.csv",
+        "tests/models/dots_ocr/sweep_results/decoder_best.json"
       ],
       "notes": "Quick 18-config sweep executed on a single Wormhole chip, but the GENERIC nn.Linear leaf-swap harness hit a set_device propagation bug under the plain Qwen2 attention (n_passing=0) AND targets the wrong implementation (generic replicated TTNNLinear, not the ported fused/DRAM-sharded dots_ocr linears). Autonomous decision: use the tracy profile (real per-op fidelity/dtype/utilization on the ACTUAL ported decoder) as the optimization data source instead of fixing a low-value generic harness. Retry budget preserved.",
       "started_at": "2026-06-01T22:40:00Z",
@@ -100,9 +100,9 @@
     "tracy_profiling": {
       "status": "completed",
       "artifacts": [
-        "tests/capabilities/dots_ocr/profiling/ops_perf_results_2026_06_01_21_55_56.csv",
-        "tests/capabilities/dots_ocr/profiling/perf_report.txt",
-        "tests/capabilities/dots_ocr/profiling/tracy_run.log"
+        "tests/models/dots_ocr/profiling/ops_perf_results_2026_06_01_21_55_56.csv",
+        "tests/models/dots_ocr/profiling/perf_report.txt",
+        "tests/models/dots_ocr/profiling/tracy_run.log"
       ],
       "notes": "Profiled decode on T3K (DP). 377 op rows, 8 devices, pure TTNN (zero fallbacks). ~287us device time/decode step. Matmuls = 52%; MLP gate_up (LoFi BF16xBFP4) is the single biggest at 28.8%.",
       "started_at": "2026-06-01T21:30:00Z",
@@ -111,8 +111,8 @@
     "perf_analysis": {
       "status": "completed",
       "artifacts": [
-        "tests/capabilities/dots_ocr/perf_results/recommendation.json",
-        "tests/capabilities/dots_ocr/perf_results/_ranked.json"
+        "tests/models/dots_ocr/perf_results/recommendation.json",
+        "tests/models/dots_ocr/perf_results/_ranked.json"
       ],
       "notes": "Ranked ops from tracy CSV. Matmuls already at LoFi+BFP4 (gate_up/down) and HiFi2+BFP8 (QKV, accuracy-sensitive) -- Pareto-optimal. ~16% in Permute/Slice/reshard layout overhead (structural, high-risk to change). Directive: NO_OP_ALREADY_OPTIMAL.",
       "started_at": "2026-06-01T22:56:00Z",
@@ -128,8 +128,8 @@
     "traced_execution": {
       "status": "completed",
       "artifacts": [
-        "tests/capabilities/dots_ocr/test_vision_traced_dots_ocr.py",
-        "tests/capabilities/dots_ocr/test_traced_dots_ocr.py"
+        "tests/models/dots_ocr/test_vision_traced_dots_ocr.py",
+        "tests/models/dots_ocr/test_traced_dots_ocr.py"
       ],
       "notes": "TRACED VALIDATED on the vision path (dots.ocr's real purpose), matching tt-metal's validated config. test_dots_ocr_vision_traced PASS on T3K DP (8,1) + TT_SYMBIOTE_RUN_MODE=TRACED + --timeout=0: full Warm-up->Capture->Replay lifecycle, 180 tokens of coherent structured table OCR ('TABLE II - ODDS RATIO OF HODGKIN LYMPHOMA ... <table>...'), zero trace errors. tt-metal's own test_dots_ocr_vision independently confirmed under the same config (115.6 tok/s). Bottom-up traced: Tier1 leaf ops (linear/rmsnorm/embedding) PASS on (1,1); vision pipeline PASS on (8,1). Root-caused + fixed the port's only traced divergence from tt-metal: reverted 9 extra @trace_enabled decorators I had added (vision/MLP/LMhead) -- patch_embed runs outside the graph and does host writes, so tracing it threw 'Writes not supported during trace capture'. Also kept the genuine _capture_trace fix (removed extra in-capture warmup forward; now matches tt-metal). Note: text-only-traced has a latent dual-stream prefill-input dealloc and is NOT a supported path (tt-metal doesn't trace text-only either); use the vision path for traced execution.",
       "started_at": "2026-06-02T06:30:00Z",
@@ -290,5 +290,6 @@
     "input": "The capital of France is (chat-templated, add_generation_prompt=True)",
     "output": "How does the system of national debt in France compare to that in other European countries?The system of national debt in France is compared to that of other European countries in the following way:\n\n*   The debt of France is",
     "status": "coherent"
-  }
+  },
+  "references_read": []
 }

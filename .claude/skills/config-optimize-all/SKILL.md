@@ -12,7 +12,9 @@ Apply the best-known configurations to every module in a model.
 **File naming**: Model directories use HuggingFace `transformers` snake_case naming.
   - Model source: `src/tt_symbiote/models/<model_name>/modeling_<model_name>.py`
 
-**Test location**: All per-model tests go under `tests/capabilities/<model_name>/`.
+**Test location**: Per-model tests live under `tests/models/<model_name>/` (RICH, e2e-traced)
+  or `tests/experimental/<model_name>/` (partial-TTNN); for an already-brought-up model default
+  to `tests/models/<model_name>/`.
 
 **Pure TTNN forward**: ALL `TTNNModule.forward()` methods must use pure `ttnn.*` ops only.
   No `torch.*` calls in the compute path. When overriding `forward()` for memory config,
@@ -23,7 +25,7 @@ Apply the best-known configurations to every module in a model.
 
 **License headers**: Every generated `.py` file starts with `(C)` format.
 
-**PCC assertions**: Use `assert_pcc()` from `tests/capabilities/pcc_utils.py`.
+**PCC assertions**: Use `assert_pcc()` from `tests/shared/pcc_utils.py`.
 
 **Config system**: The typed config system does NOT exist. Use subclass-based overrides only:
   - Weight dtype: override `preprocess_weights_impl()` (or select existing class like TTNNLinearLLama)
@@ -57,7 +59,7 @@ done
 
 Key reports for config-optimize-all (read FIRST):
 1. `data_formats/data_formats.md` -- Dtype tradeoffs for weight and activation optimization
-2. `GEMM_FLOPS/GEMM_FLOPS.md` -- Understanding theoretical limits for config selection
+2. `GEMM_FLOPS/GEMM_FLOPS.md` -- understanding the op for config selection (NOT for estimating device time — that comes from the tracy CSV)
 3. `tensor_sharding/tensor_sharding.md` -- Sharding strategy for memory config optimization
 4. `memory/allocator.md` -- L1 vs DRAM config selection
 5. `AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md` -- Multi-technique optimization
@@ -124,7 +126,7 @@ Write the optimized subclasses, update register_modules dict, run PCC validation
 
 ## Step 2 -- Read Recommendations
 
-Load `tests/capabilities/<model_name>/perf_results/recommendation.json`.
+Load `tests/models/<model_name>/perf_results/recommendation.json`.
 
 ## Step 3 -- Apply Configs via Subclass Overrides
 
@@ -213,19 +215,26 @@ Ensure `modeling_<model_name>.py` has the current commit hash:
 TT_METAL_COMMIT = '<full 40-char hash from Step 0c>'
 ```
 
-## Step 6 -- Re-validate PCC
+## Step 6 -- Re-validate PCC (bottom-up)
+
+Apply optimizations BOTTOM-UP (leaves first). After each module, re-validate PCC across the
+rich tiers; roll back that module's subclass/override on ANY regression before ascending to its
+parent. Modify ONLY model-specific subclass overrides — never the shared integration modules in
+`src/tt_symbiote/integrations/` (`src/tt_symbiote/modules/`).
 
 **ASK USER:** "Apply configs to all modules, or review each individually?"
 
 ```bash
-pytest tests/capabilities/<model_name>/ -v --tb=short
+pytest tests/models/<model_name>/ -v --tb=short
 ```
 
 If any test fails, revert that module's subclass and report.
 
 ## Step 7 -- Generate Optimization Report
 
-Per-module before/after device time and PCC.
+Per-module before/after device time and PCC. Device time comes SOLELY from the tracy
+`ops_perf_results_*.csv` DEVICE TIME (ns) column — never from hardware-limit estimates or
+projected numbers.
 
 ## Error Handling
 

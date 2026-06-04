@@ -13,7 +13,7 @@ no such installed plugin -- those fixtures live only in tt-metal's root
 This conftest therefore re-implements ``device_params`` and ``mesh_device``
 by opening the mesh through ttnn's own public API, mirroring the open/close +
 fabric set/reset logic of ``$TT_METAL_HOME/conftest.py::mesh_device`` exactly.
-It is scoped to ``tests/capabilities/dots_ocr/`` so it does not change fixture
+It is scoped to ``tests/models/dots_ocr/`` so it does not change fixture
 behavior anywhere else in the suite.
 
 Mesh shape comes from the ``MESH_DEVICE`` env var (e.g. ``T3K`` -> (1, 8)).

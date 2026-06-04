@@ -1,6 +1,6 @@
 ---
 name: pcc-test-gen
-description: Read a HuggingFace transformers model, decompose into all module tiers (ops, composites, decoder layers, full model), generate tiered PCC tests with explicit PCC assertions, and implement the assert_pcc utility. Generates shapes.json, op_map.json, and per-tier test files under tests/capabilities/<model_name>/.
+description: Read a HuggingFace transformers model, decompose into all module tiers (ops, composites, decoder layers, full model), generate tiered PCC tests with explicit PCC assertions, and implement the assert_pcc utility. Generates shapes.json, op_map.json, and per-tier test files under tests/models/<model_name>/.
 ---
 
 # PCC Test Generation
@@ -11,11 +11,14 @@ Generate comprehensive tiered PCC tests for a HuggingFace model's TTNN bring-up.
 
 **File naming**: Model directories use HuggingFace `transformers` snake_case naming.
   - Model source: `src/tt_symbiote/models/<model_name>/modeling_<model_name>.py`
-  - Model tests: `tests/capabilities/<model_name>/test_modeling_<model_name>.py`
+  - Model tests: `tests/models/<model_name>/test_modeling_<model_name>.py`
 
-**Test location**: All per-model tests go under `tests/capabilities/<model_name>/`.
-  - `tests/models/` does NOT exist. Never create files there.
-  - Shared capability tests: `tests/capabilities/` root (e.g., `test_attention.py`)
+**Test location**: Generate tiered tests into `tests/models/<model_name>/` (RICH tree) once
+  end-to-end traced correctness is proven, otherwise `tests/experimental/<model_name>/`
+  (MINIMAL tree). Emit `test_config.json` (5 keys: `tt_metal_commit`, `device_arch`,
+  `pcc_threshold`, `hf_model_id`, `hf_revision`) + `shapes.json` + `op_map.json` alongside the
+  tier files. STOP writing to the removed per-model capabilities tree.
+  - Shared capability tests: `tests/shared/` root (e.g., `test_attention.py`)
   - Auto/unit tests: `tests/auto/`
 
 **Pure TTNN forward**: ALL `TTNNModule.forward()` methods must use pure `ttnn.*` ops only.
@@ -35,7 +38,7 @@ Generate comprehensive tiered PCC tests for a HuggingFace model's TTNN bring-up.
   NOTE: Some existing framework files use the Unicode copyright symbol. Do NOT change those. Use `(C)` for all NEW files.
 
 **PCC assertions**: NEVER rely on `compare_fn_outputs()` alone -- it only prints warnings.
-  Always use `assert_pcc()` from `tests/capabilities/pcc_utils.py`.
+  Always use `assert_pcc()` from `tests/shared/pcc_utils.py`.
 
 **Deprecated API**: Never use `register_module_replacement_dict()`.
   Use `register_modules()` from `tt_symbiote.utils.module_replacement`.
@@ -207,17 +210,17 @@ Use `register_modules` when you need to recursively replace leaf modules within 
 
 ## Step 3 -- Implement assert_pcc Utility
 
-Check if `tests/capabilities/pcc_utils.py` still has the `NotImplementedError` stub:
+Check if `tests/shared/pcc_utils.py` still has the `NotImplementedError` stub:
 
 ```bash
-grep "NotImplementedError" tests/capabilities/pcc_utils.py
+grep "NotImplementedError" tests/shared/pcc_utils.py
 ```
 
 If it does, replace the stub with the full implementation. **CRITICAL**: The implementation
 MUST preserve the existing stub's function signature `(actual, expected, threshold=0.99, msg="")`
 to avoid breaking any code that may already reference it.
 
-Write this content to `tests/capabilities/pcc_utils.py`:
+Write this content to `tests/shared/pcc_utils.py`:
 
 ```python
 # SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
@@ -302,7 +305,7 @@ def assert_pcc(actual, expected, threshold=0.99, msg=""):
 
 ## Step 4 -- Generate Shapes Manifest
 
-Create `tests/capabilities/<model_name>/shapes.json`:
+Create `tests/models/<model_name>/shapes.json`:
 
 ```json
 {
@@ -331,7 +334,7 @@ Create `tests/capabilities/<model_name>/shapes.json`:
 }
 ```
 
-Also create `tests/capabilities/<model_name>/op_map.json`:
+Also create `tests/models/<model_name>/op_map.json`:
 ```json
 {
   "TTNNLinear": {
@@ -354,13 +357,13 @@ Also create `tests/capabilities/<model_name>/op_map.json`:
 ### 5a. Create test directory and __init__.py
 
 ```bash
-mkdir -p tests/capabilities/<model_name>
-touch tests/capabilities/<model_name>/__init__.py
+mkdir -p tests/models/<model_name>
+touch tests/models/<model_name>/__init__.py
 ```
 
 ### 5b. Tier 1 -- Op/Simple Module Tests
 
-Generate `tests/capabilities/<model_name>/test_ops_<model_name>.py` following the pattern from the PLAN phase. Each test:
+Generate `tests/models/<model_name>/test_ops_<model_name>.py` following the pattern from the PLAN phase. Each test:
 1. Creates a PyTorch module with correct shape from shapes.json
 2. `torch.set_grad_enabled(False)` and `.eval()`
 3. `TTNNModule.from_torch(torch_module)`
@@ -371,7 +374,7 @@ Generate `tests/capabilities/<model_name>/test_ops_<model_name>.py` following th
 
 ### 5c. Tier 2 -- Composite Module Tests
 
-Generate `tests/capabilities/<model_name>/test_composites_<model_name>.py`.
+Generate `tests/models/<model_name>/test_composites_<model_name>.py`.
 
 Two patterns are used for TTNN conversion:
 - **Direct from_torch**: when an integration class provides complete TTNN replacement
@@ -381,12 +384,12 @@ Two patterns are used for TTNN conversion:
 
 ### 5d. Tier 3 -- Decoder Layer Tests
 
-Generate `tests/capabilities/<model_name>/test_decoder_<model_name>.py` with both
+Generate `tests/models/<model_name>/test_decoder_<model_name>.py` with both
 prefill (seq_len=32,128) and decode (seq_len=1) tests.
 
 ### 5e. Tier 4 -- Full Model Test
 
-Generate `tests/capabilities/<model_name>/test_modeling_<model_name>.py`. Two paths:
+Generate `tests/models/<model_name>/test_modeling_<model_name>.py`. Two paths:
 
 **Path A (Recipe/Auto API)**: Uses `from tt_symbiote import AutoModelForCausalLM, set_device`.
 
@@ -395,22 +398,22 @@ Generate `tests/capabilities/<model_name>/test_modeling_<model_name>.py`. Two pa
 
 ### 5f. Generate Device Guard Verification Test
 
-Generate `tests/capabilities/<model_name>/test_device_guards_<model_name>.py` to verify
+Generate `tests/models/<model_name>/test_device_guards_<model_name>.py` to verify
 `@run_on_devices` guards are present on all TTNN module forward() methods.
 
 ## Step 6 -- compare_fn_outputs Migration Guidance
 
 After generating new tests, report existing tests that still use `compare_fn_outputs`:
 
-- `tests/capabilities/test_attention.py` (2 call sites)
-- `tests/capabilities/test_conv.py` (3 call sites)
-- `tests/capabilities/test_moe.py` (1 call site)
-- `tests/capabilities/test_rope.py` (4 call sites)
+- `tests/shared/test_attention.py` (2 call sites)
+- `tests/shared/test_conv.py` (3 call sites)
+- `tests/shared/test_moe.py` (1 call site)
+- `tests/shared/test_rope.py` (4 call sites)
 
 **ASK USER:** "These 4 existing test files use `compare_fn_outputs()` which only prints warnings and never asserts. Should I migrate them to use `assert_pcc()` now? (yes/no/later)"
 
 If yes, for each file:
-1. Replace `from tt_symbiote.core.utils import compare_fn_outputs` with `from tests.capabilities.pcc_utils import assert_pcc`
+1. Replace `from tt_symbiote.core.utils import compare_fn_outputs` with `from tests.shared.pcc_utils import assert_pcc`
 2. Replace `compare_fn_outputs(torch_out, ttnn_out, "Name")` with `assert_pcc(ttnn_out, torch_out, msg="Name")`
 3. Note argument order difference: `compare_fn_outputs(torch, ttnn, name)` vs `assert_pcc(actual=ttnn, expected=torch, msg=name)`
 
@@ -418,13 +421,13 @@ If yes, for each file:
 
 ```bash
 # Verify pytest can discover the tests
-pytest --collect-only tests/capabilities/<model_name>/ 2>&1 | tail -10
+pytest --collect-only tests/models/<model_name>/ 2>&1 | tail -10
 
 # Verify shapes.json is valid JSON
-python -c "import json; json.load(open('tests/capabilities/<model_name>/shapes.json'))"
+python -c "import json; json.load(open('tests/models/<model_name>/shapes.json'))"
 
 # Verify no import errors
-python -c "import tests.capabilities.<model_name>"
+python -c "import tests.models.<model_name>"
 ```
 
 If any validation fails, return to PLAN, diagnose, and iterate.

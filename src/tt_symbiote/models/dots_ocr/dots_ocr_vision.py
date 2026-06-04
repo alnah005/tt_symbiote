@@ -23,6 +23,7 @@ import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 from tt_symbiote.core.module import TTNNModule, TTNNLayerStack
+from tt_symbiote.core.run_config import is_trace_enabled
 from ttnn.operations.transformer import SDPAProgramConfig
 
 # Tracy (perf): vision Matmul/SDPA show HiFi4; use lower fidelity for ViT matmul/SDPA only.
@@ -2200,7 +2201,6 @@ class TTNNDotsOCRVisionTower(TTNNModule):
         self.patch_merger = None
         self.rope = None
         self.block_stack = None
-        self._trace_enabled = True
         self.num_layers = 42
         self.hidden_size = 1536
         self.num_heads = 12
@@ -2411,7 +2411,7 @@ class TTNNDotsOCRVisionTower(TTNNModule):
 
         bucket = (
             TTNNDotsVisionBlockStack.nearest_bucket(actual_seq_len)
-            if self._trace_enabled and self.block_stack is not None
+            if self.block_stack is not None and is_trace_enabled(self.block_stack)
             else -1
         )
         if os.environ.get("DOTS_OCR_PROFILE_SYNC", "").lower() in {"1", "true", "yes", "on"}:

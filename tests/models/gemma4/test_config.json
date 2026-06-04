@@ -1,0 +1,7 @@
+{
+  "tt_metal_commit": "",
+  "device_arch": "T3K",
+  "pcc_threshold": 0.99,
+  "hf_model_id": "google/gemma-4-E2B-it",
+  "hf_revision": "main"
+}
