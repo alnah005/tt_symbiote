@@ -1,0 +1,467 @@
+{
+  "model_name": "pi05",
+  "model_id": "lerobot/pi05_base",
+  "model_description": "Physical Intelligence pi0.5 (PI0.5) vision-language-action flow-matching policy. SigLIP-27 vision tower + Gemma-2B VLM + Gemma-300M adaRMS action expert + flow-matching denoiser.",
+  "device_arch": "P150",
+  "device_note": "Target is a single Blackhole device (P150). Physical host has 4x Blackhole p300c boards; tests open a single-device mesh (device fixture).",
+  "tt_metal_runtime_commit": "b2af0cd67b4e92dafeb2d0254e1c5b43c3ec5a25",
+  "tt_metal_runtime_branch": "main",
+  "tt_metal_reference_commit": "b0703a56465989da179480c93a8992ec519e1cde",
+  "tt_metal_reference_branch": "tt/pi0.5_bh",
+  "reference_path": "/home/ttuser/salnahari/pi0_5_ref/models/experimental/pi0_5",
+  "integration_path": "manual",
+  "integration_path_rationale": "pi0.5 is a lerobot/openpi checkpoint, NOT a transformers AutoModel. No HF Pi05ForConditionalGeneration class exists. Golden reference = reference/torch_*.py plain classes (hold raw weight tensors). Recipe/Auto API does not apply.",
+  "started_at": "2026-06-03T00:00:00Z",
+  "python_env": "/home/ttuser/salnahari/tt-metal/python_env/bin/python",
+  "validation_sample": "Vision-language-action: 3x (224x224x3) images + tokenized language+state prompt -> 50x32 action chunk via 10-step flow-matching denoise. Semantic check: output finite (no NaN/inf), correct shape (1,50,32), and E2E PCC vs torch reference >= 0.95 (reference achieves mean 0.991 over 10 seeds).",
+  "weights": {
+    "status": "present",
+    "path": "/home/ttuser/salnahari/pi05_weights/pi05_base",
+    "hf_repo": "lerobot/pi05_base",
+    "size_gb": 14.5,
+    "gated": false,
+    "note": "lerobot/pi05_base is PUBLIC (not gated) - downloaded without a token via `hf download` to /home/ttuser/salnahari/pi05_weights/pi05_base (the default /storage/sdawle mount is absent on this host). Verified: model.safetensors 14.47GB, 812 tensors, valid header (vision_model/action_in_proj/time_mlp/model.norm present); Pi0_5WeightLoader init OK. Set PI05_CHECKPOINT_DIR to this path for Tier 3/4 tests. Hardware-validation stages now UNBLOCKED."
+  },
+  "phases": {
+    "scaffold": {
+      "status": "completed",
+      "artifacts": [
+        "src/tt_symbiote/models/pi05/__init__.py",
+        "src/tt_symbiote/models/pi05/configuration_pi05.py",
+        "src/tt_symbiote/models/pi05/modeling_pi05_common.py",
+        "src/tt_symbiote/models/pi05/modeling_pi05_gemma.py",
+        "src/tt_symbiote/models/pi05/modeling_pi05_siglip.py",
+        "src/tt_symbiote/models/pi05/modeling_pi05_suffix.py",
+        "src/tt_symbiote/models/pi05/modeling_pi05_prefix.py",
+        "src/tt_symbiote/models/pi05/modeling_pi05_paligemma.py",
+        "src/tt_symbiote/models/pi05/modeling_pi05.py"
+      ],
+      "notes": "Full pi05 package ported into tt_symbiote TTNNModule lifecycle and verified: imports clean, py_compile OK, license + TT_METAL_COMMIT in all modeling files, @run_on_devices(DeviceArch.P150) on all 25 device methods, AST scan confirms zero torch.* in any device method. FULLY IMPLEMENTED (functionality-first, interleaved): GemmaMLP, GemmaAttention (fused QKV + nlp_create_qkv_heads + meta-RoPE + SDPA + KV cache), GemmaBlock, AdaRMSGemmaBlock (chunked modulation + gated residuals), SigLIP attention/MLP/block/tower + projector, suffix (action_in/out_proj, adarms_cond sincos->silu->mlp->silu), prefix embed concat, backbone embed_image/embed_language/forward_vlm/forward_expert. SCAFFOLDED (raise NotImplementedError w/ exact reference file:line, to implement+validate in pcc loop once weights land): top-level sample_actions denoise loop + host mask building; prefix pad/att-mask construction; SigLIP position-embedding bicubic interpolation (only for non-256-patch resolutions). KNOWN ITEM: suffix.embed_adarms_cond calls a host-side torch sincos helper (tiny (B,) precompute, mirrors reference) -- migrate to pure-ttnn create_sinusoidal_pos_embedding_ttnn during validation. Integration path manual: NOT added to _RECIPE_BEARING_SUBPACKAGES (no @register_recipe; pi05 is not a transformers AutoModel).",
+      "started_at": "2026-06-03T00:00:00Z",
+      "completed_at": "2026-06-03T00:30:00Z"
+    },
+    "pcc_test_gen": {
+      "status": "completed",
+      "artifacts": [
+        "tests/capabilities/pcc_utils.py (assert_pcc/compute_pcc implemented)",
+        "tests/capabilities/pi05_helpers.py",
+        "tests/capabilities/pi05/conftest.py (dev fixture: single Blackhole device 0)",
+        "tests/capabilities/pi05/shapes.json",
+        "tests/capabilities/pi05/op_map.json",
+        "tests/capabilities/pi05/test_ops_pi05.py (Tier 1)",
+        "tests/capabilities/pi05/test_composites_pi05.py (Tier 2)",
+        "tests/capabilities/pi05/test_modeling_pi05.py (Tier 3/4, checkpoint-gated)",
+        "tests/capabilities/pi05/test_device_guards_pi05.py (software-only)"
+      ],
+      "test_results": {
+        "tier1": {
+          "status": "pass",
+          "pcc": ">=0.99 (adarms_cond 0.98)",
+          "details": "9/9 PASS on P150 vs torch golden (random weights, no checkpoint needed): GemmaMLP[vlm_2b,expert_300m], GemmaAttention(MQA fused-QKV+RoPE+SDPA), GemmaBlock, AdaRMSGemmaBlock, Suffix.embed_actions/project_output/adarms_cond, SigLIP MLP, SigLIP block."
+        },
+        "tier2": {
+          "status": "pass",
+          "pcc": ">=0.95",
+          "details": "SigLIPVisionTower (patch-embed unfold + position embed + 27 blocks + post-LN) PASS on P150 vs torch golden (random weights). PaliGemma backbone forward_vlm validated via Tier-3 test (skips without checkpoint)."
+        },
+        "tier3": {
+          "status": "pass",
+          "pcc": ">=0.95",
+          "details": "Backbone forward_vlm (18-layer Gemma-2B VLM) PASS on P150 with REAL pi05_base weights (14.5GB checkpoint loads + runs at scale via the from_torch tree)."
+        },
+        "tier4": {
+          "status": "pass",
+          "pcc": "0.996",
+          "details": "END-TO-END sample_actions on P150 with real weights: SigLIP vision -> Gemma-2B VLM prefill -> 10-step flow-matching denoise (Gemma-300M adaRMS expert) -> (1,50,32) action chunk. TTNN vs torch reference (shared noise) E2E action PCC = 0.9960. Semantic gate PASS (finite, correct shape, non-degenerate). Implemented the denoise loop + suffix RoPE position-offset + phantom-suffix SDPA mask in modeling_pi05.py (replaced the scaffold)."
+        }
+      },
+      "suite_summary": "19 passed, 0 skipped, 0 failed with real weights (MESH_DEVICE=P150, PI05_CHECKPOINT_DIR set). Includes Tier 1 (9), Tier 2 tower (1), Tier 3 backbone (1), Tier 4 E2E+semantic (1), device-guards (7).",
+      "started_at": "2026-06-03T00:30:00Z",
+      "completed_at": "2026-06-03T01:15:00Z"
+    },
+    "op_sweep": {
+      "status": "completed",
+      "artifacts": [
+        "tests/capabilities/pi05/sweep_results/expert_mlp_sweep.csv"
+      ],
+      "notes": "Swept the dominant op (Gemma-300M expert GeGLU MLP, runs 18 layers x 10 steps/chunk): weight_dtype {bfloat16, bfloat8_b} x math_fidelity {LoFi, HiFi2, HiFi4} = 6 configs, PCC vs fp32 + latency on P150. ALL configs PCC >= 0.9995. bfloat8_b/HiFi2 is Pareto-optimal (122.3us, PCC 0.99979) -- statistically tied with bfloat16 on latency here but half the DRAM bandwidth.",
+      "started_at": "2026-06-03T02:10:00Z",
+      "completed_at": "2026-06-03T02:20:00Z"
+    },
+    "tracy_profiling": {
+      "status": "completed",
+      "artifacts": [
+        "tests/capabilities/pi05/ops_perf_results_denoise.csv",
+        "tests/capabilities/pi05/perf_report.txt",
+        "tests/capabilities/pi05/profile_denoise.py",
+        "tests/capabilities/pi05/profile_full_pi05.py",
+        "tests/capabilities/pi05/ops_perf_results_full.csv",
+        "tests/capabilities/pi05/perf_report_full.txt"
+      ],
+      "notes": "Real tracy op-level device profile (python -m tracy, 10 denoise steps + 1 prefill, 6103 kernels). Matmul 69.6% / non-matmul 30.4% of device time. CSV + tt-perf-report saved.",
+      "started_at": "2026-06-03T02:00:00Z",
+      "completed_at": "2026-06-03T02:20:00Z",
+      "full_model_signposted_profile": {
+        "signposts": [
+          "PREFIX_SIGLIP_VISION",
+          "PREFIX_LANG_EMBED",
+          "VLM_PREFILL_18L",
+          "DENOISE_LOOP_10x_EXPERT",
+          "OUTPUT_SLICE"
+        ],
+        "per_phase_device_us": {
+          "PREFIX_SIGLIP_VISION": 14111.1,
+          "PREFIX_LANG_EMBED": 19.1,
+          "VLM_PREFILL_18L": 54487.6,
+          "DENOISE_LOOP_10x_EXPERT": 49624.1,
+          "OUTPUT_SLICE": 0.6
+        },
+        "per_phase_pct": {
+          "SigLIP": 5.7,
+          "VLM_prefill": 22.0,
+          "denoise_10x": 20.0
+        },
+        "note": "Full pi0.5 inference profiled with tracy signposts. VLM prefill (54.5ms) and the 10-step denoise loop (49.6ms) are the two dominant phases (~equal); SigLIP vision 14.1ms. tt-perf-report segmented per phase via --start-signpost/--end-signpost in perf_report_full.txt."
+      }
+    },
+    "perf_analysis": {
+      "status": "completed",
+      "artifacts": [
+        "tests/capabilities/pi05/perf_results/recommendation_perf_pass.json",
+        "tests/capabilities/pi05/perf_results/recommendation.json"
+      ],
+      "notes": "Matmul ranking (per-op avg): VLM MLP 288x2048x16384=1066us (fixed/prefill, biggest single cost); SigLIP fc2 256x4320x1152=171us; EXPERT MLP down 64x4096x1024=64us (slowest expert op), o 64x2048x1024=31us, qkv 64x1024x2560=23us, gate/up 64x1024x4096=22us. Non-matmul (30%): SDPA 8.1ms, BinaryNg(add/mul) 6.4ms over 2310 ops, LayerNorm/RMSNorm 6.4ms, NlpCreateHeads 6.4ms (26us avg), NLPConcatHeads 6.1ms (25us), RotaryEmbedding 5.8ms, Unary(silu/gelu) 3.7ms. Attention glue (heads+RoPE) is the dominant non-matmul cost.",
+      "started_at": "2026-06-03T02:10:00Z",
+      "completed_at": "2026-06-03T02:20:00Z"
+    },
+    "config_optimize": {
+      "status": "completed",
+      "artifacts": [
+        "src/tt_symbiote/models/pi05/modeling_pi05_gemma.py (precompute_mods)",
+        "src/tt_symbiote/models/pi05/modeling_pi05_paligemma.py (precompute_step_mods)",
+        "src/tt_symbiote/models/pi05/modeling_pi05.py (_ensure_step_mods cache)",
+        "tests/capabilities/pi05/sweep_results/matmul_grid_sweep_round2.txt",
+        "tests/capabilities/pi05/sweep_results/sharded_l1_sweep.txt",
+        "tests/capabilities/pi05/sweep_results/bfloat4_matmul_sweep.txt",
+        "tests/capabilities/pi05/sweep_results/lofi_fidelity_sweep.txt",
+        "tests/capabilities/pi05/sweep_results/tracy_matmul_grid_sweep.csv",
+        "tests/capabilities/pi05/profile_modules.py",
+        "tests/capabilities/pi05/sweep_results/tracy_per_module.csv",
+        "tests/capabilities/pi05/sweep_results/gelu_approx_sweep.txt",
+        "tests/capabilities/pi05/test_traced_modules_pi05.py"
+      ],
+      "notes": "PERF PASS (tracy-driven). APPLIED: 1D width-shard core_grid (1 core row) on the small-M expert matmuls -- micro-bench validated down 64x4096x1024 67->29us (2.3x), o 35->22us (1.6x), qkv 25->21us (1.2x), PCC>=0.9998; gate/up kept on default 2D grid (1D was slower). Applied via core_grid= on MLP down_proj + attention QKV/o (guarded to seq<=96 so VLM prefill keeps the 2D grid). SDPA: micro-benched program configs (chunk sizes) -- DEFAULT heuristic is already fastest (47us; explicit configs 51-59us), so NO SDPA change. Head-split env flags (QWEN_NLP_*): no-op on our code path (no change). Result: traced denoise step 6.02->5.01ms (-17%); full chunk eager 156->142ms. Tier-4 E2E PCC preserved (0.9961). All 20 tests pass. | OP-SWEEP ROUND 2 (dtype x fidelity x core_grid on prefill matmuls): VLM down_proj 288x16384x2048 -> FULL 2D grid (509->225us, PCC0.9999); SigLIP fc2 256x4320x1152 -> FULL grid (173->57us, 3x, PCC0.9998); made Gemma-MLP down_proj grid SEQ-CONDITIONAL (row for expert M<=96, full for VLM M=288 -- the prior blanket row-grid had REGRESSED VLM down to 804us). Confirmed-optimal (no change): VLM gate/up 288x2048x16384 default bf8_b (bf16+default catastrophic 10ms), SigLIP fc1 default, expert gate/up default, expert down row. Re-profiled: SigLIP 14.1->10.8ms (-23%), VLM prefill 54.5->49.6ms (-9%). Full chunk eager 142->135ms. Tier-4 PCC 0.9963. 20/20 tests pass.",
+      "started_at": "2026-06-03T02:20:00Z",
+      "completed_at": "2026-06-03T02:45:00Z",
+      "sharded_l1_investigation": {
+        "outcome": "NOT APPLIED (op-by-op sharding regresses; PCC fine but slower).",
+        "measured": {
+          "expert_rmsnorm": "16.4->33.6us (0.49x)",
+          "VLM_rmsnorm": "26.2->67.3us (0.39x)",
+          "SigLIP_rmsnorm": "17.9->69.2us (0.26x)",
+          "SigLIP_fc2_blockshard": "53.4->61.0us (0.88x)"
+        },
+        "root_cause": "Per-op interleaved<->block-sharded to_memory_config conversion dominates for these tensor sizes; sharding only nets out if activations stay RESIDENT sharded across many consecutive ops (reference forward_bs: convert once, 27 SigLIP layers sharded, convert back once). Small-M expert (2 tiles) also can't divide a 2D block grid.",
+        "decision": "Keep validated core_grid + interleaved-L1 configs. The only viable sharded-L1 win is a full resident-sharded SigLIP encoder restructure (reference PI0_SIGLIP_BS) -- high risk/effort for ~5ms (SigLIP is only 8% of the 135ms chunk); poor ROI on a single P150. Deferred with this rationale.",
+        "config_builders_ported_for_reference": [
+          "LayerNormShardedMultiCoreProgramConfig",
+          "create_sharded_memory_config(BLOCK,ROW_MAJOR)",
+          "MatmulMultiCoreReuseMultiCastProgramConfig"
+        ]
+      },
+      "resident_sharded_siglip_attempt": {
+        "outcome": "IMPLEMENTED, VALIDATED, MEASURED REGRESSION, REVERTED (not shipped).",
+        "grid_for_11x10": "(gx=9, gy=8)=72 cores (gcd(36 hidden,144 qkv,135 intermediate)=9; gy=8 divides 8 M-tiles). O-proj K padded 48->54 tiles (not div by 9).",
+        "pcc": {
+          "resident_bs_on": 0.9982,
+          "interleaved_off": 0.9992,
+          "gate": 0.95
+        },
+        "tower_latency_ms": {
+          "interleaved": 10.83,
+          "resident_bs": 12.73
+        },
+        "result": "resident block-sharded SigLIP is ~18-22% SLOWER at batch=1; PCC fine (0.998). Reverted to interleaved baseline (diff-identical, test re-passes).",
+        "root_cause": "Sharding amortization needs the M dim to fill the grid. At batch=1, 256 tokens=8 M-tiles -> per_core_M=1 on the 72-core grid (severe underutilization). The per-layer BS<->interleaved reshard round-trip around SDPA (SDPA can't consume block-sharded) dominates, plus the O-proj K-pad (48->54, +12.5% FLOPs) forced by 11x10. The reference's win was tuned for batch=2/512 tokens/16 M-tiles on a 12x8 grid. The existing interleaved baseline already uses full-grid matmuls + (interleaved) LN, so the headroom isn't there at batch=1 on this device.",
+        "decision": "Confirms the earlier op-sweep negative result with a full resident implementation. Single-P150 batch=1 pi0.5 does not benefit from block-sharded SigLIP. Not shipped."
+      },
+      "bfloat4_investigation": {
+        "outcome": "SWEPT, NOT ENABLED (default stays bfloat8_b). Available behind PI05_VLM_MLP_BF4=1.",
+        "per_op_pcc_bf4": "~0.9937 (vs ~0.9999 bf8_b)",
+        "per_op_speed": {
+          "VLM_gate_up": "118->101us (-14%)",
+          "VLM_down": "224->200us (-11%)",
+          "SigLIP_fc2": "54->52us (~flat)",
+          "expert_down": "30->32us SLOWER",
+          "expert_gate_up": "25->27us SLOWER"
+        },
+        "e2e_pcc": {
+          "all_mlp_bf4": 0.9759,
+          "vlm_only_bf4": 0.9793,
+          "baseline_bf8": 0.9963
+        },
+        "full_chunk_ms": {
+          "vlm_only_bf4": 133.8,
+          "baseline": 135.3
+        },
+        "decision": "bf4 only helps the bandwidth-bound VLM MLP (~1.5ms / ~1% chunk) and HURTS the compute-bound expert. E2E PCC drops 0.9963->0.979 even VLM-only (prefill loss propagates via KV cache through all 10 denoise steps). For a VLA robotics policy, ~1% latency is not worth ~0.017 action-accuracy loss -- matches the reference's choice to use bf8_b (not bf4) for these weights. Default kept at bf8_b; bf4 left as an off-by-default knob."
+      },
+      "lofi_fidelity_investigation": {
+        "outcome": "SWEPT, NO CHANGE. LoFi provides no benefit on this model/device.",
+        "sdpa": {
+          "LoFi": "47.2us pcc=0.9972",
+          "HiFi2(current)": "47.7us pcc=0.9999",
+          "HiFi4": "48.5us pcc=0.9999"
+        },
+        "matmul_vlm_gate_up": {
+          "default": "121.4us pcc=1.0002",
+          "LoFi": "122.3us pcc=1.0001",
+          "HiFi2": "120.0us pcc=1.0002"
+        },
+        "decision": "LoFi SDPA is same-speed but lower PCC (0.9999->0.9972) -> keep HiFi2 (matches reference PI0_SDPA_HIFI=2). Matmul fidelity is within-noise across LoFi/HiFi2/default -> no change (model uses ttnn default). Root cause: at batch=1 the matmuls are bandwidth/dispatch-bound, not math-throughput-bound, so reducing fidelity frees nothing -- unlike YoloV4's compute-bound convs. No code change."
+      },
+      "tracy_device_revalidation": {
+        "trigger": "User flagged that the op-sweep used host wall-clock, not tracy device kernel duration.",
+        "method": "Re-ran the matmul-config sweep UNDER tracy with per-config signposts; read DEVICE KERNEL DURATION per config. Then validated each change by the IN-MODEL traced denoise step (the production metric).",
+        "findings": {
+          "VLM_gate_up": "wall-clock said default(119us) best -> WRONG. tracy device: default 303us vs full 135us. FIXED: VLM gate/up now uses full 2D grid. In-model VLM prefill device time 49.6ms->16.1ms.",
+          "expert_o_proj": "wall-clock said row(22us) best; standalone tracy device said default(32.5us) beats row(58us); but IN-MODEL traced step said row(5.01ms) beats default(5.24ms). Kept ROW -- trust the in-model traced measurement over both standalone benches (concat_heads input layout differs from random-tensor bench).",
+          "confirmed_correct": "expert down=row (31 vs 65us device), VLM down=full (244 vs 480), SigLIP fc2=full (52 vs 159), expert qkv=row (20.9 vs 22.9), expert gate/up=default."
+        },
+        "lesson": "Metric hierarchy: host wall-clock (pipelined, dispatch-hidden) < standalone tracy device (real kernel, but wrong tensor layout/cache) < IN-MODEL traced step (authoritative for production). Use the in-model traced step to settle config choices."
+      },
+      "per_module_bottom_up_pass": {
+        "method": "Tracy-profiled every TTNNModule individually (signpost per module, warmup outside) -> real DEVICE KERNEL DURATION per module + per op. Optimized bottom-up, validating each change by the in-model traced step / E2E PCC.",
+        "per_module_device_us_per_iter": {
+          "GemmaMLP_expert": 93.8,
+          "GemmaAttn_expert": 145.7,
+          "AdaRMSBlock_expert": 309.6,
+          "GemmaMLP_vlm": 619.1,
+          "GemmaAttn_vlm": 325.3,
+          "GemmaBlock_vlm": 921.7,
+          "SigLIP_MLP": 143.7,
+          "SigLIP_Attn": 240.0,
+          "SigLIP_Block": 388.5,
+          "MMProjector": 42.0,
+          "Suffix_action_in": 6.7,
+          "Suffix_action_out": 31.2,
+          "Suffix_adarms_cond": 37.3
+        },
+        "key_observations": [
+          "GemmaAttn_expert: non-matmul (ConcatHeads 28.7 + RoPE 28.6) > matmul (46.6) -- attention glue dominates the small expert.",
+          "GemmaMLP_vlm: Unary(gelu) 90us was the 2nd-biggest op after matmul (gelu on 16384-wide intermediate).",
+          "SigLIP_Attn: NlpCreateHeads 50us (head_dim 72->96 pad path) -- fixed kernel, not config-tunable.",
+          "Suffix_action_out/adarms matmuls ~30us each despite tiny N (fixed overhead-bound; grids won't help N=1 tile)."
+        ],
+        "applied": [
+          {
+            "change": "gelu fast_and_approximate_mode=True (Gemma + SigLIP MLP)",
+            "evidence": "VLM gelu 96->33us (2.9x); matches reference tanh-approx gelu",
+            "pcc": "per-op 0.9994; E2E 0.9973 preserved"
+          },
+          {
+            "change": "RoPE rotary_embedding memory_config=_L1 (was defaulting to DRAM)",
+            "evidence": "traced denoise step 5.01->4.91ms",
+            "pcc": "E2E 0.9971 preserved"
+          }
+        ],
+        "not_applied": [
+          "Suffix action_out/adarms grids (N=1 tile, overhead-bound, no headroom)",
+          "SigLIP create/concat-heads + expert RoPE/concat kernels (fixed, not config-tunable)"
+        ]
+      },
+      "dispatch_routing_refactor": {
+        "directive": "User: don't call .forward() directly; route through __call__ + @trace_enabled so the framework runtime (signposts, trace capture/replay) works.",
+        "applied": "_bypass_tensor_wrapping=True on all pi05 modules; @trace_enabled on 8 leaf/block classes (GemmaMLP, GemmaAttention, GemmaBlock, AdaRMSGemmaBlock, SigLIP MLP/Attn/Block, MMProjector); internal submodule calls .forward(x)->(x) for single-forward modules (blocks->attn/mlp, backbone loops->block, tower->blocks). Orchestrators (Model/Backbone/Suffix) stay method-based (multi-method/python-loop). Added trace-safe ones-weight for the adaRMS weightless rms_norm (PCC-neutral).",
+        "validation": {
+          "NORMAL_suite": "20/20, E2E PCC 0.9970",
+          "builtin_signpost_TT_SYMBIOTE_SIGNPOST_MODE": "now fires (2 rows: GemmaAttention, GemmaMLP) -- was 0 before",
+          "device_guards": "7/7 (no-torch-in-forward AST holds)",
+          "TRACED_blocks": "warmup->capture->replay works per-block: GemmaMLP 0.9953, GemmaAttn 0.9995, AdaRMS block 0.9999"
+        },
+        "traced_e2e_blocker": "Full sample_actions under TT_SYMBIOTE_RUN_MODE=TRACED fails at the expert KV-cache ttnn.concat ('Writes not supported during trace capture') -- the per-block framework trace captures the prefix-KV concat which allocates during capture. Needs static pre-allocated KV buffers + in-place fill (reference's keep_padded path) -- a model change with PCC risk, deferred. The manual whole-forward_expert trace (test_traced_pi05.py) still works as the production trace path.",
+        "note": "NORMAL mode now incurs per-module dispatch overhead (was bypassed by direct .forward); production benefit is realized under TRACED. Built-in TT_SYMBIOTE_SIGNPOST_MODE supersedes the custom PI05_TRACY_SIGNPOST fixture for module-granularity profiling (fixture kept for per-test segmentation)."
+      },
+      "static_kv_trace_support": {
+        "directive": "Add KV trace support so the action-expert denoise path is trace-capturable (the prefix-KV ttnn.concat allocated during trace capture and broke it).",
+        "mechanism": "Replaced per-call ttnn.concat([past_kv,new_kv]) with a pre-allocated STATIC KV buffer per expert layer [1,1,prefix_len+ahp,256] bf8_b + in-place ttnn.fill_cache writes (allocation-free, trace-safe; update_idx tile-aligned, prefix_len=288=9*32). Prefix region filled once outside the trace from vlm_cache; suffix K/V written in-place at update_idx=prefix_len each step; SDPA reads the full static buffer; phantom mask unchanged.",
+        "wiring": "TTNNPi05GemmaAttention.init_static_kv/fill_static_prefix + fill_cache in forward; AdaRMSGemmaBlock delegates; PaliGemmaBackbone.init_expert_static_kv(vlm_cache,...) allocs+prefills 18 layers; Model.sample_actions calls it after VLM prefill, before the denoise loop. Eager concat path kept as fallback.",
+        "validation": {
+          "NORMAL_suite": "21/21 (added test_traced_static_kv_denoise_e2e), E2E PCC 0.9966",
+          "traced_denoise_step": "eager 11.8ms -> traced 5.01ms (2.36x)",
+          "TRACED_E2E_static_kv": "captured 10 step traces + replayed 10 steps @ 5.41ms/step; E2E action PCC (traced-replay vs torch) 0.9973; no 'Writes not supported' from KV path"
+        },
+        "remaining_env_framework_blocker": "Running sample_actions via TT_SYMBIOTE_RUN_MODE=TRACED (per-block auto warm/capture/replay dispatch) still fails -- but now on ttnn.rms_norm->LayerNormDeviceOperation::load_binaries (a JIT kernel-binary load during capture in the adaRMS _apply_ada), a separate pre-existing framework limitation, NOT the KV path. The explicit begin/end_trace_capture production path (validated above) is unaffected.",
+        "result": "KV trace blocker fully resolved. Production trace path (explicit-capture static-KV denoise step, replayed per step) works E2E at PCC 0.9973, ~5.4ms/step."
+      },
+      "framework_traced_bottom_up": {
+        "tier1_submodules": "PASS (9/9) -- per-submodule TRACED validation: each @trace_enabled module driven 3x via __call__ under TT_SYMBIOTE_RUN_MODE=TRACED warms->captures->replays (TracedRun.cache grows) with replay PCC>=0.99 vs torch golden. Covers GemmaMLP(vlm,expert), GemmaAttention, GemmaBlock, AdaRMSGemmaBlock, SigLIP MLP/Attn/Block, MMProjector.",
+        "mechanism_note": "Run impl is bound at import from TT_SYMBIOTE_RUN_MODE (env precedence); set_run_mode is one-shot. The test file is gated to run only under TT_SYMBIOTE_RUN_MODE=TRACED (skipif otherwise) so NORMAL suite is unaffected.",
+        "purpose": "Confirms the user's point: @trace_enabled on submodules enables fast per-module traced validation. All Tier-1 submodules trace+replay correctly standalone.",
+        "tier2_4_status": "Tier1 (submodules) + Tier2 (SigLIP tower) PASS under framework TRACED. Tier3 (backbone) is multi-method (forward_vlm/forward_expert -- not a single forward); Tier4 (model.sample_actions) has a python denoise loop + host noise (not one forward) -- both need either a single-forward trace_enabled wrapper or the explicit whole-graph capture (static-KV denoise already 0.9973).",
+        "run_cmd": "TT_SYMBIOTE_RUN_MODE=TRACED MESH_DEVICE=P150 ... pytest tests/capabilities/pi05/test_traced_modules_pi05.py",
+        "tier2_tower": "PASS. Made TTNNPi05SigLIPVisionTower @trace_enabled and added test_traced_siglip_vision_tower: driven 3x under TT_SYMBIOTE_RUN_MODE=TRACED, the WHOLE 27-block tower is captured as ONE trace (child SigLIP blocks run '[Not Trace-Enabled, Already Running Trace Elsewhere]' inside the tower capture) and replayed at PCC 0.9977 vs torch golden. Key: trace at the repeatedly-called module level (tower), not the run-once blocks. NORMAL Tier2/3/4 unaffected (3 passed, E2E PCC 0.9966).",
+        "tier3_backbone": "PASS. forward_vlm(18-layer Gemma-2B, use_cache=False) wrapped in a single-forward @trace_enabled adapter, driven 3x: whole prefill captured as one trace, replay PCC 0.9969 vs torch (real weights).",
+        "tier4_full_model": "PASS. Per-step denoise velocity (embed_actions -> forward_expert[static-KV] -> project_output) wrapped in a @trace_enabled adapter, driven over the 10-step Euler loop: step1 warmup, step2 captures the WHOLE step as one trace, steps3-10 replay. E2E action PCC (framework-TRACED vs torch) = 0.9975. KEY FIX: the framework's _copy_inputs_to_trace_buffer only copies TOP-LEVEL ttnn.Tensor args (not nested lists), so per-step adaRMS mods were baked in as step-2's values (E2E PCC -0.33 garbage). Passing all per-step mods as FLAT top-level tensor args (110 tensors) makes each get a trace buffer + per-replay copy -> correct (0.9975).",
+        "status": "ALL TIERS PASS under framework TT_SYMBIOTE_RUN_MODE=TRACED: Tier1 submodules (9/9), Tier2 SigLIP tower (0.9977), Tier3 backbone VLM prefill (0.9969), Tier4 full denoise E2E (0.9975).",
+        "pattern": "Trace at the module invoked REPEATEDLY with stable shapes (tower/backbone-prefill/denoise-step via single-forward @trace_enabled adapters); run-once children captured inside via the _TRACE_RUNNING guard. Per-step-varying inputs MUST be flat top-level tensor args (framework input-copy doesn't recurse)."
+      }
+    },
+    "traced_execution": {
+      "status": "completed",
+      "artifacts": [
+        "tests/capabilities/pi05/test_traced_pi05.py",
+        "src/tt_symbiote/models/pi05/modeling_pi05_gemma.py (TTNNPi05GemmaAttention VLM prefix store: init_vlm_prefix_store/clear_vlm_prefix_store + in-place fill_cache forward branch)",
+        "src/tt_symbiote/models/pi05/modeling_pi05_paligemma.py (init_vlm_static_kv/clear_vlm_static_kv/init_expert_static_kv_from_vlm; store-aware forward_vlm)",
+        "src/tt_symbiote/models/pi05/modeling_pi05.py (sample_actions: store-path prefill)",
+        "tests/capabilities/pi05/test_traced_modules_pi05.py (test_traced_backbone_forward_vlm_static_kv; Tier4 store-path prefill)"
+      ],
+      "notes": "TTNN trace capture/replay validated on the per-step denoise graph (forward_expert 18-layer adaRMS expert + action projection, the dominant hot loop), using precomputed-DRAM modulations so the captured graph carries no mod-matmuls. Result (post adaRMS precompute): traced 6.02ms/step vs eager 10.94ms/step (1.82x); replay PCC vs eager >= 0.99 (trace preserves numerics). Trace works on the full op set (fused-QKV, nlp_create/concat_heads, rotary_embedding, SDPA w/ KV-cache concat). Remaining gap to the reference ~3.6ms/step traced is block-sharded matmul/LayerNorm (8x2 grid) + SigLIP block-sharded encoder -- a large perf-infra effort (reference build_matmul_pcfg/build_sharded_norm_pcfg).",
+      "started_at": "2026-06-03T02:00:00Z",
+      "completed_at": "2026-06-03T02:10:00Z",
+      "prefill_trace_support": {
+        "summary": "VLM prefill (forward_vlm, cache-building) is now trace-capturable end-to-end via a pre-allocated VLM prefix K/V store written in-place with ttnn.fill_cache (update_idx=0), mirroring the proven expert static-KV pattern. Removes the per-layer persistent-cache allocation that previously blocked capture.",
+        "results": {
+          "tier1_traced_submodules": "9/9 passed",
+          "tier2_traced_siglip_tower": "PCC 0.9978",
+          "tier3_traced_forward_vlm_store": "replay PCC 0.9969, stores_populated=True",
+          "tier4_traced_sample_actions_e2e": "E2E PCC 0.9976 (store-path prefill + traced denoise)",
+          "normal_regression": "test_ops/test_composites/test_modeling all pass; eager E2E PCC 0.9962"
+        }
+      }
+    }
+  },
+  "perf_measurement": {
+    "baseline_eager_ms_per_chunk": 207.2,
+    "optimized_eager_ms_per_chunk": 126.7,
+    "eager_speedup": "1.33x (-25%) from adaRMS modulation precompute+cache",
+    "traced_denoise_step_ms": 4.91,
+    "eager_denoise_step_ms": 10.94,
+    "traced_step_speedup": "1.82x vs eager step",
+    "denoise_steps": 10,
+    "device": "P150 (single Blackhole)",
+    "reference_traced_baseline_ms_per_chunk": 64.85,
+    "note": "Functionality-first interleaved baseline + adaRMS precompute (reference TIER A). Further gains require block-sharded matmul/LN + SigLIP BS encoder (reference perf path).",
+    "eager_chunk_speedup": "1.63x (-39%) cumulative: adaRMS precompute + tracy-validated grids + approx-gelu + RoPE L1-pin",
+    "traced_step_progression_ms": [
+      7.29,
+      6.02,
+      5.01
+    ],
+    "traced_step_progression_note": "baseline -> +adaRMS precompute -> +matmul 1D width-shard",
+    "matmul_vs_nonmatmul": "69.6% / 30.4% of device time (tracy)",
+    "prefill_phase_us_after_sweep2": {
+      "SigLIP": 10798,
+      "VLM_prefill": 49625,
+      "denoise_10x": 49602
+    },
+    "vlm_prefill_device_ms": {
+      "before": 49.6,
+      "after": 16.1,
+      "note": "VLM gate/up full-grid fix (uncovered by tracy device profiling)"
+    },
+    "trace_replay_e2e_10steps": {
+      "denoise_replay_10steps_ms": 55.86,
+      "denoise_per_step_ms": 5.59,
+      "prefill_eager_ms": 25.49,
+      "full_e2e_ms": 81.35,
+      "method": "Denoise: per-step velocity (static-KV expert) captured as 1 trace, replayed 10x (30 steady-state loops, warmup/capture excluded). Prefill: eager (one-time; can't trace -- builds KV cache), 10-iter steady-state. Full E2E = prefill_eager + denoise_replay.",
+      "reference_compare": "Reference pi05_base ~64.85ms/chunk traced (action_horizon=50, N=10) -- they trace the WHOLE chunk incl prefill; our prefill is eager (25.5ms) and denoise step 5.59ms vs their 3.6ms (gap = block-sharded perf path not fully ported)."
+    },
+    "traced_chunk_with_traced_prefill": {
+      "harness": "tests/capabilities/pi05/measure_traced_chunk.py (single-forward @trace_enabled adapter per stage; host wall-clock around synchronize_device)",
+      "device": "single Blackhole P150",
+      "traced_replay_ms": {
+        "tower": 10.505,
+        "forward_vlm": 15.152,
+        "prefix_tower_plus_vlm": 25.657,
+        "denoise_step": 5.19,
+        "denoise_x10": 51.9,
+        "full_chunk": 77.557
+      },
+      "eager_ms": {
+        "tower": 10.611,
+        "forward_vlm": 15.235,
+        "prefix_tower_plus_vlm": 25.846,
+        "denoise_step": 11.625,
+        "denoise_x10": 116.249,
+        "full_chunk": 142.096
+      },
+      "findings": [
+        "VLM prefill is now trace-capturable (was impossible before the prefix store); standalone it is compute/matmul-bound so traced (15.15ms) ~= eager (15.24ms) -- tracing the prefill enables composition, not a standalone speedup.",
+        "denoise step is dispatch-bound: traced 5.19ms vs eager 11.63ms = 2.24x; this is where tracing wins.",
+        "full chunk: traced 77.56ms vs eager 142.1ms = 1.83x. vs prior 81.4ms (eager-prefill+traced-denoise) the gain is modest (slightly faster denoise/step); vs reference ~64.85ms the remaining gap is dominated by the 51.9ms denoise (10x 5.19ms/step)."
+      ]
+    }
+  },
+  "decision_log": [
+    {
+      "timestamp": "2026-06-03T00:00:00Z",
+      "decision": "model_discovery",
+      "reason": "model_id=lerobot/pi05_base. Not in transformers.models (lerobot/openpi checkpoint). Per decision profile (Recipe if in HF transformers; Manual if custom) => integration_path=manual. Golden reference = reference/torch_*.py.",
+      "result": "pass"
+    },
+    {
+      "timestamp": "2026-06-03T00:00:00Z",
+      "decision": "device_arch",
+      "reason": "User specified single P150. DeviceArch.P150 exists in core/module.py. Using @run_on_devices(DeviceArch.P150) on all forward() methods (NOT the T3K default). Host has Blackhole p300c boards; single-device mesh.",
+      "result": "pass"
+    },
+    {
+      "timestamp": "2026-06-03T00:00:00Z",
+      "decision": "tt_metal_commit",
+      "reason": "Reference pi0_5 lives on branch tt/pi0.5_bh (b0703a5), but the installed/built ttnn is main (b2af0cd). Code executes against the installed runtime, so TT_METAL_COMMIT records b2af0cd; reference commit b0703a5 recorded separately. Reference accessed via read-only git worktree to avoid disturbing the built runtime.",
+      "result": "pass"
+    },
+    {
+      "timestamp": "2026-06-03T00:00:00Z",
+      "decision": "weights_blocker",
+      "reason": "pi05_base weights (~14.5GB, gated) missing and no HF auth. Surfaced to user (genuine credential/resource blocker). User chose to authenticate + download. Scaffold + pcc_test_gen proceed without weights; op_sweep/tracy/perf/config_optimize/traced_execution + Tier-4 semantic validation blocked until weights land.",
+      "result": "pass"
+    },
+    {
+      "timestamp": "2026-06-03T01:00:00Z",
+      "decision": "random_weight_validation",
+      "reason": "Key unblock: component (Tier 1/2/3) PCC tests compare TTNN vs torch golden on IDENTICAL random weights, so they validate the port on real P150 hardware WITHOUT the gated checkpoint (mirrors the reference suite's use_pretrained=False path). Only Tier-4 E2E semantic needs real weights. This let the entire transformer core be hardware-validated this session.",
+      "result": "pass"
+    },
+    {
+      "timestamp": "2026-06-03T01:05:00Z",
+      "decision": "bugfix_adarms_broadcast",
+      "reason": "Hardware PVE loop caught a real bug: adaRMS modulation slices (scale/shift/gate) were rank-2 (B,w) and didn't broadcast over the seq dim of rank-3 activations. Fixed by reshaping to (B,1,w) in TTNNPi05AdaRMSGemmaBlock._ada_rms_norm and the backbone final adaRMS (matches torch cond.unsqueeze(1)). AdaRMSGemmaBlock then PASSED at PCC>=0.99. Also: action_horizon=50 is not tile-aligned -> Tier-1 adaRMS test uses seq=64 (the full model pads ah to 64).",
+      "result": "pass"
+    },
+    {
+      "timestamp": "2026-06-03T01:10:00Z",
+      "decision": "device_fixture_pattern",
+      "reason": "The ttnn pytest-plugin device/device_params fixtures are NOT loaded in this repo's pytest setup. Adopted the in-repo dots_ocr pattern: a module-scoped 'dev' fixture opening device 0 directly (ttnn.open_device, l1_small_size=24576, trace_region_size=128MiB). @run_on_devices requires MESH_DEVICE=P150 in env -> tests run with MESH_DEVICE=P150.",
+      "result": "pass"
+    },
+    {
+      "timestamp": "2026-06-03T01:15:00Z",
+      "decision": "downstream_stages_gating",
+      "reason": "op_sweep/tracy_profiling/perf_analysis/config_optimize/traced_execution all require a runnable end-to-end forward (Tier-4 sample_actions) on real weights, which is blocked on (a) the gated 14.5GB download (not yet started; user HF login pending) and (b) completing the scaffolded denoise loop + host mask building. These stages are deferred, not failed; resume once weights land and sample_actions is completed.",
+      "result": "deferred"
+    },
+    {
+      "timestamp": "2026-06-04",
+      "decision": "vlm_prefix_static_kv_for_traceable_prefill",
+      "reason": "Extended the expert static-KV fill_cache pattern to the VLM: a write-only prefix store lets forward_vlm mirror per-layer K/V in-place instead of returning freshly-allocated persistent K/V, so the cache-building prefill captures+replays. Validated bottom-up Tier1->4 (TRACED) plus NORMAL regression.",
+      "result": "pass"
+    }
+  ],
+  "retry_counts": {
+    "scaffold": 0,
+    "pcc_test_gen": 0,
+    "op_sweep": 0,
+    "tracy_profiling": 0,
+    "perf_analysis": 0,
+    "config_optimize": 0,
+    "traced_execution": 0
+  },
+  "semantic_validation": {
+    "input": "1x (224x224x3) image (random) + 32 language tokens; 10-step flow-matching denoise from seeded N(0,I) noise.",
+    "output": "Action chunk shape (1, 50, 32); all finite (no NaN/inf); non-degenerate (std > 1e-4); E2E PCC 0.996 vs torch reference under shared noise.",
+    "status": "coherent"
+  }
+}

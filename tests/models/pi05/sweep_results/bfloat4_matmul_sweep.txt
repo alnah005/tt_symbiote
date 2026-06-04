@@ -1,0 +1,40 @@
+
+### VLM_gate/up 288x2048x16384 (grid=default) ###
+  bfloat16  HiFi2   1871.9us pcc=1.0002
+  bfloat16  LoFi    1862.8us pcc=1.0001
+  bfloat8_b HiFi2    117.9us pcc=1.0002
+  bfloat8_b LoFi     119.6us pcc=1.0001
+  bfloat4_b HiFi2    110.8us pcc=0.9939
+  bfloat4_b LoFi     101.6us pcc=0.9939
+
+### VLM_down 288x16384x2048 (grid=full/row) ###
+  bfloat16  HiFi2    270.2us pcc=0.9999
+  bfloat16  LoFi     278.0us pcc=0.9998
+  bfloat8_b HiFi2    223.9us pcc=0.9999
+  bfloat8_b LoFi     230.0us pcc=0.9998
+  bfloat4_b HiFi2    200.1us pcc=0.9936
+  bfloat4_b LoFi     201.2us pcc=0.9936
+
+### SigLIP_fc2 256x4320x1152 (grid=full/row) ###
+  bfloat16  HiFi2     63.8us pcc=0.9999
+  bfloat16  LoFi      61.8us pcc=0.9999
+  bfloat8_b HiFi2     56.3us pcc=0.9999
+  bfloat8_b LoFi      53.7us pcc=0.9998
+  bfloat4_b HiFi2     52.6us pcc=0.9936
+  bfloat4_b LoFi      52.4us pcc=0.9936
+
+### EXP_down 64x4096x1024 (grid=full/row) ###
+  bfloat16  HiFi2     34.5us pcc=0.9999
+  bfloat16  LoFi      32.7us pcc=0.9999
+  bfloat8_b HiFi2     31.7us pcc=0.9999
+  bfloat8_b LoFi      30.2us pcc=0.9998
+  bfloat4_b HiFi2     32.7us pcc=0.9937
+  bfloat4_b LoFi      31.7us pcc=0.9937
+
+### EXP_gate/up 64x1024x4096 (grid=default) ###
+  bfloat16  HiFi2     26.6us pcc=1.0000
+  bfloat16  LoFi      24.8us pcc=0.9999
+  bfloat8_b HiFi2     25.7us pcc=0.9999
+  bfloat8_b LoFi      25.0us pcc=0.9999
+  bfloat4_b HiFi2     27.2us pcc=0.9937
+  bfloat4_b LoFi      26.7us pcc=0.9937

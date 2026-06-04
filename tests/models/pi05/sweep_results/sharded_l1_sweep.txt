@@ -1,0 +1,15 @@
+=== SHARDED RMSNorm vs interleaved ===
+  expert  interleaved     16.4us pcc=1.0000
+  expert  sharded(8x2)     33.6us pcc=1.0000  [0.49x]
+  VLM     interleaved     26.2us pcc=1.0000
+  VLM     sharded(8x9)     67.3us pcc=1.0000  [0.39x]
+  SigLIP  interleaved     17.9us pcc=1.0000
+  SigLIP  sharded(9x8)     69.2us pcc=1.0000  [0.26x]
+
+=== BLOCK-SHARDED matmul vs core_grid(best) ===
+  SigLIP_fc2  core_grid(full)     53.4us pcc=0.9998
+  SigLIP_fc2  block-shard(9x8)     61.0us pcc=0.9999  [0.88x vs core_grid]
+  EXP_down    core_grid(full)     67.6us pcc=0.9998
+  EXP_down    block-shard SKIP (divisibility: mt2%gy8,nt32%gx8,kt128%gx8)
+  VLM_down    core_grid(full)    229.7us pcc=0.9998
+  VLM_down    block-shard SKIP (divisibility: mt9%gy8,nt64%gx8,kt512%gx8)

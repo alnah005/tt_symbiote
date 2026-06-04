@@ -1,0 +1,115 @@
+grid 11x10
+
+### VLM_gate/up  288x2048x16384 ###
+  bfloat8_b HiFi2 default     119.5us pcc=1.0002
+  bfloat8_b HiFi2 full        145.4us pcc=1.0002
+  bfloat8_b HiFi2 8x8         171.9us pcc=1.0002
+  bfloat8_b HiFi2 row         813.7us pcc=1.0002
+  bfloat8_b LoFi  default     119.4us pcc=1.0001
+  bfloat8_b LoFi  full        144.7us pcc=1.0001
+  bfloat8_b LoFi  8x8         148.0us pcc=1.0001
+  bfloat8_b LoFi  row         542.5us pcc=1.0001
+  bfloat16  HiFi2 default   10484.8us pcc=1.0002
+  bfloat16  HiFi2 full        192.7us pcc=1.0002
+  bfloat16  HiFi2 8x8         213.0us pcc=1.0002
+  bfloat16  HiFi2 row       11751.3us pcc=1.0002
+  bfloat16  LoFi  default   10005.1us pcc=1.0001
+  bfloat16  LoFi  full        190.8us pcc=1.0001
+  bfloat16  LoFi  8x8         210.8us pcc=1.0001
+  bfloat16  LoFi  row       11092.8us pcc=1.0002
+  >>> BEST(pcc>=0.99): bfloat8_b/LoFi/default 119.4us pcc=1.0001
+
+### VLM_down  288x16384x2048 ###
+  bfloat8_b HiFi2 default     509.1us pcc=0.9998
+  bfloat8_b HiFi2 full        225.0us pcc=0.9999
+  bfloat8_b HiFi2 8x8         265.1us pcc=0.9999
+  bfloat8_b HiFi2 row         804.8us pcc=0.9999
+  bfloat8_b LoFi  default     510.0us pcc=0.9997
+  bfloat8_b LoFi  full        232.8us pcc=0.9998
+  bfloat8_b LoFi  8x8         263.2us pcc=0.9998
+  bfloat8_b LoFi  row         485.8us pcc=0.9998
+  bfloat16  HiFi2 default     511.2us pcc=0.9998
+  bfloat16  HiFi2 full        271.2us pcc=0.9999
+  bfloat16  HiFi2 8x8         334.9us pcc=0.9999
+  bfloat16  HiFi2 row         800.0us pcc=0.9999
+  bfloat16  LoFi  default     512.9us pcc=0.9997
+  bfloat16  LoFi  full        280.7us pcc=0.9998
+  bfloat16  LoFi  8x8         327.5us pcc=0.9998
+  bfloat16  LoFi  row         513.6us pcc=0.9998
+  >>> BEST(pcc>=0.99): bfloat8_b/HiFi2/full 225.0us pcc=0.9999
+
+### SigLIP_fc2  256x4320x1152 ###
+  bfloat8_b HiFi2 default     172.9us pcc=0.9999
+  bfloat8_b HiFi2 full         57.3us pcc=0.9999
+  bfloat8_b HiFi2 8x8          62.2us pcc=0.9999
+  bfloat8_b HiFi2 row         137.5us pcc=0.9999
+  bfloat8_b LoFi  default     172.8us pcc=0.9998
+  bfloat8_b LoFi  full         56.7us pcc=0.9998
+  bfloat8_b LoFi  8x8          61.9us pcc=0.9998
+  bfloat8_b LoFi  row         107.2us pcc=0.9998
+  bfloat16  HiFi2 default     172.9us pcc=0.9999
+  bfloat16  HiFi2 full         65.7us pcc=0.9999
+  bfloat16  HiFi2 8x8          72.4us pcc=0.9999
+  bfloat16  HiFi2 row         136.8us pcc=0.9999
+  bfloat16  LoFi  default     173.4us pcc=0.9998
+  bfloat16  LoFi  full         64.0us pcc=0.9999
+  bfloat16  LoFi  8x8          71.3us pcc=0.9999
+  bfloat16  LoFi  row         108.0us pcc=0.9999
+  >>> BEST(pcc>=0.99): bfloat8_b/LoFi/full 56.7us pcc=0.9998
+
+### SigLIP_fc1  256x1152x4320 ###
+  bfloat8_b HiFi2 default      45.1us pcc=1.0000
+  bfloat8_b HiFi2 full         62.7us pcc=1.0000
+  bfloat8_b HiFi2 8x8          61.0us pcc=1.0000
+  bfloat8_b HiFi2 row         121.1us pcc=1.0000
+  bfloat8_b LoFi  default      45.2us pcc=0.9999
+  bfloat8_b LoFi  full         62.2us pcc=0.9999
+  bfloat8_b LoFi  8x8          58.9us pcc=0.9999
+  bfloat8_b LoFi  row          82.9us pcc=0.9999
+  bfloat16  HiFi2 default      46.7us pcc=1.0000
+  bfloat16  HiFi2 full         63.3us pcc=1.0000
+  bfloat16  HiFi2 8x8          60.9us pcc=1.0000
+  bfloat16  HiFi2 row         120.7us pcc=1.0000
+  bfloat16  LoFi  default      45.8us pcc=0.9999
+  bfloat16  LoFi  full         62.6us pcc=0.9999
+  bfloat16  LoFi  8x8          60.1us pcc=0.9999
+  bfloat16  LoFi  row          81.9us pcc=0.9999
+  >>> BEST(pcc>=0.99): bfloat8_b/HiFi2/default 45.1us pcc=1.0000
+
+### EXP_gate/up  64x1024x4096 ###
+  bfloat8_b HiFi2 default      26.0us pcc=0.9999
+  bfloat8_b HiFi2 full         42.9us pcc=0.9999
+  bfloat8_b HiFi2 8x8          40.5us pcc=0.9999
+  bfloat8_b HiFi2 row          35.9us pcc=0.9999
+  bfloat8_b LoFi  default      24.7us pcc=0.9999
+  bfloat8_b LoFi  full         40.2us pcc=0.9999
+  bfloat8_b LoFi  8x8          40.0us pcc=0.9999
+  bfloat8_b LoFi  row          26.4us pcc=0.9999
+  bfloat16  HiFi2 default      26.5us pcc=1.0000
+  bfloat16  HiFi2 full         42.9us pcc=1.0000
+  bfloat16  HiFi2 8x8          42.5us pcc=1.0000
+  bfloat16  HiFi2 row          36.7us pcc=1.0000
+  bfloat16  LoFi  default      25.7us pcc=0.9999
+  bfloat16  LoFi  full         42.9us pcc=0.9999
+  bfloat16  LoFi  8x8          40.2us pcc=0.9999
+  bfloat16  LoFi  row          33.1us pcc=0.9999
+  >>> BEST(pcc>=0.99): bfloat8_b/LoFi/default 24.7us pcc=0.9999
+
+### EXP_down  64x4096x1024 ###
+  bfloat8_b HiFi2 default      69.5us pcc=0.9999
+  bfloat8_b HiFi2 full         68.1us pcc=0.9999
+  bfloat8_b HiFi2 8x8          68.1us pcc=0.9999
+  bfloat8_b HiFi2 row          33.2us pcc=0.9999
+  bfloat8_b LoFi  default      68.2us pcc=0.9998
+  bfloat8_b LoFi  full         68.0us pcc=0.9998
+  bfloat8_b LoFi  8x8          67.9us pcc=0.9998
+  bfloat8_b LoFi  row          29.7us pcc=0.9998
+  bfloat16  HiFi2 default      69.9us pcc=0.9999
+  bfloat16  HiFi2 full         67.9us pcc=0.9999
+  bfloat16  HiFi2 8x8          70.4us pcc=0.9999
+  bfloat16  HiFi2 row          35.6us pcc=0.9999
+  bfloat16  LoFi  default      68.3us pcc=0.9998
+  bfloat16  LoFi  full         67.7us pcc=0.9998
+  bfloat16  LoFi  8x8          67.9us pcc=0.9998
+  bfloat16  LoFi  row          34.0us pcc=0.9999
+  >>> BEST(pcc>=0.99): bfloat8_b/LoFi/row 29.7us pcc=0.9998

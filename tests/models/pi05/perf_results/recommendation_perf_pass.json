@@ -1,0 +1,66 @@
+{
+  "profile_source": "tests/capabilities/pi05/ops_perf_results_denoise.csv (tracy, 10 denoise steps + 1 prefill, P150)",
+  "totals": {
+    "device_kernel_us": 144535,
+    "matmul_pct": 69.6,
+    "non_matmul_pct": 30.4
+  },
+  "matmul_ranking_per_op_avg_us": {
+    "VLM_MLP_gate_up_288x2048x16384": 1066.3,
+    "VLM_MLP_down_288x16384x2048": 1044.4,
+    "SigLIP_fc2_256x4320x1152": 170.7,
+    "EXPERT_MLP_down_64x4096x1024": 64.0,
+    "EXPERT_o_proj_64x2048x1024": 31.0,
+    "EXPERT_qkv_64x1024x2560": 23.0,
+    "EXPERT_MLP_gate_up_64x1024x4096": 22.0
+  },
+  "non_matmul_ranking_total_us": {
+    "SDPAOperation": 8120,
+    "BinaryNg_add_mul": 6411,
+    "LayerNorm_RMSNorm": 6394,
+    "NlpCreateHeads": 6354,
+    "NLPConcatHeads": 6098,
+    "RotaryEmbedding": 5827,
+    "Unary_silu_gelu": 3691,
+    "Concat_kvcache": 511,
+    "Reshape": 226,
+    "Permute": 126,
+    "Slice": 121,
+    "Copy": 109
+  },
+  "findings": [
+    "Matmuls are 70% of device time; non-matmul 30% is dominated by attention glue (SDPA + create/concat heads + RoPE = ~26ms across the profile).",
+    "EXPERT MLP down_proj (64x4096x1024) is the slowest expert matmul (64us, ~3x the gate/up at 22us) -- large-K with no matmul program_config; prime target.",
+    "NlpCreateHeads (26us) + NLPConcatHeads (25us) are expensive for seq=64; the reference enables a head-split fast path via QWEN_NLP_CREATE_HEADS_HEAD_SPLIT=1 / QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT=1.",
+    "SDPA (33us avg) is called without a program_config (chunk sizes); wiring sdpa_prefill_chunk_sizes may help.",
+    "2310 BinaryNg ops (6.4ms) are the residual/gate/modulation-apply adds+muls -- op-count bound; hard to cut without fusion.",
+    "VLM prefill MLP (288x2048x16384 @ ~1066us) is the single largest cost but is FIXED (once/inference); block-sharding it is the biggest lever for end-to-end chunk latency."
+  ],
+  "recommendations": [
+    {
+      "target": "attention create/concat heads",
+      "action": "enable QWEN_NLP_CREATE_HEADS_HEAD_SPLIT=1 + QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT=1 env in tests/run path",
+      "risk": "low",
+      "expected": "halve create/concat-heads dispatch on the expert side"
+    },
+    {
+      "target": "SDPA",
+      "action": "pass SDPAProgramConfig with sdpa_prefill_chunk_sizes(q,kv) + the tuned compute_kernel_config",
+      "risk": "low-medium",
+      "expected": "reduce SDPA chunks for kv~352"
+    },
+    {
+      "target": "EXPERT MLP matmuls (down/gate/up)",
+      "action": "add matmul program_config (2D block-shard; 1D width-shard for small-M=64) sized to the 110-core BH grid",
+      "risk": "medium",
+      "expected": "speed the 64us down_proj + 22us gate/up"
+    },
+    {
+      "target": "VLM/SigLIP prefill MLP",
+      "action": "block-shard 288x2048x16384 and 256xKx4320 (future, larger effort)",
+      "risk": "high",
+      "expected": "largest fixed-cost reduction"
+    }
+  ],
+  "validation": "every change must preserve Tier-4 E2E PCC >= 0.99 (currently 0.9969)."
+}

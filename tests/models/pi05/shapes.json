@@ -1,0 +1,25 @@
+{
+  "model": "pi05",
+  "model_id": "lerobot/pi05_base",
+  "notes": "Canonical pi0.5 component I/O shapes (batch=1). action_horizon=50 is padded to 64 (tile-aligned) on device; prefix length depends on #images*256 + lang tokens.",
+  "configs": {
+    "vlm_gemma_2b": {"width": 2048, "depth": 18, "mlp_dim": 16384, "num_heads": 8, "num_kv_heads": 1, "head_dim": 256, "rope_base": 10000.0, "rms_norm_eps": 1e-06},
+    "expert_gemma_300m": {"width": 1024, "depth": 18, "mlp_dim": 4096, "num_heads": 8, "num_kv_heads": 1, "head_dim": 256, "rope_base": 10000.0, "rms_norm_eps": 1e-06},
+    "siglip": {"hidden_size": 1152, "num_hidden_layers": 27, "num_attention_heads": 16, "head_dim": 72, "image_size": 224, "patch_size": 14, "num_patches": 256, "intermediate_size": 4304, "layer_norm_eps": 1e-06},
+    "suffix": {"action_dim": 32, "action_horizon": 50, "expert_width": 1024, "time_emb_dim": 1024},
+    "denoise": {"num_steps": 10, "noise_scale": 1.0}
+  },
+  "components": {
+    "GemmaMLP[vlm]": {"in": [1, "seq", 2048], "out": [1, "seq", 2048], "weights": {"gate_proj": [16384, 2048], "up_proj": [16384, 2048], "down_proj": [2048, 16384]}},
+    "GemmaMLP[expert]": {"in": [1, "seq", 1024], "out": [1, "seq", 1024], "weights": {"gate_proj": [4096, 1024], "up_proj": [4096, 1024], "down_proj": [1024, 4096]}},
+    "GemmaAttention[vlm]": {"in": [1, "seq", 2048], "out": [1, "seq", 2048], "weights": {"q_proj": [2048, 2048], "k_proj": [256, 2048], "v_proj": [256, 2048], "o_proj": [2048, 2048]}, "rope_cos_sin_meta": [1, 1, "seq", 256]},
+    "AdaRMSGemmaBlock[expert]": {"in": [1, "seq=64", 1024], "cond": [1, 1024], "out": [1, "seq=64", 1024], "mod_dense": [3072, 1024]},
+    "SigLIPBlock": {"in": [1, 256, 1152], "out": [1, 256, 1152]},
+    "SigLIPVisionTower": {"in": [1, 3, 224, 224], "out": [1, 256, 1152]},
+    "MultiModalProjector": {"in": [1, 256, 1152], "out": [1, 256, 2048], "weights": {"linear": [2048, 1152]}},
+    "SuffixEmbedding.action_in_proj": {"in": [1, "ah", 32], "out": [1, "ah", 1024]},
+    "SuffixEmbedding.action_out_proj": {"in": [1, "ah", 1024], "out": [1, "ah", 32]},
+    "SuffixEmbedding.adarms_cond": {"in_timestep": [1], "out": [1, 1024]},
+    "Model.sample_actions": {"images": "list[(1,3,224,224)]", "lang_tokens": [1, "<=200"], "out_actions": [1, 50, 32]}
+  }
+}

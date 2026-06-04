@@ -1,0 +1,12 @@
+=== SDPA math-fidelity sweep (expert shape, GQA 8q/1kv, scale=1/sqrt(256)) ===
+  LoFi  fp32_dest=True      49.1us  pcc=0.99722
+  LoFi  fp32_dest=False     47.2us  pcc=0.99718
+  HiFi2 fp32_dest=True      47.7us  pcc=0.99991
+  HiFi2 fp32_dest=False     47.7us  pcc=0.99991
+  HiFi4 fp32_dest=True      49.3us  pcc=0.99992
+  HiFi4 fp32_dest=False     48.5us  pcc=0.99992
+
+=== Matmul: DEFAULT (no ck) vs explicit LoFi/HiFi2 (VLM gate/up 288x2048x16384, bf8_b) ===
+  DEFAULT(none)     121.4us pcc=1.00023
+  LoFi              122.3us pcc=1.00012
+  HiFi2             120.0us pcc=1.00023

@@ -1,0 +1,54 @@
+{
+  "op": "gemma_expert_mlp (GeGLU, W=1024 MLP=4096, seq=64)",
+  "threshold_pcc": 0.99,
+  "all_configs": [
+    {
+      "weight_dtype": "bfloat16",
+      "math_fidelity": "LoFi",
+      "pcc": 0.99958,
+      "latency_us": 123.6
+    },
+    {
+      "weight_dtype": "bfloat16",
+      "math_fidelity": "HiFi2",
+      "pcc": 0.99985,
+      "latency_us": 123.7
+    },
+    {
+      "weight_dtype": "bfloat16",
+      "math_fidelity": "HiFi4",
+      "pcc": 0.99985,
+      "latency_us": 125.3
+    },
+    {
+      "weight_dtype": "bfloat8_b",
+      "math_fidelity": "LoFi",
+      "pcc": 0.99952,
+      "latency_us": 122.5
+    },
+    {
+      "weight_dtype": "bfloat8_b",
+      "math_fidelity": "HiFi2",
+      "pcc": 0.99979,
+      "latency_us": 122.3
+    },
+    {
+      "weight_dtype": "bfloat8_b",
+      "math_fidelity": "HiFi4",
+      "pcc": 0.99978,
+      "latency_us": 124.1
+    }
+  ],
+  "recommended": {
+    "weight_dtype": "bfloat8_b",
+    "math_fidelity": "HiFi2",
+    "pcc": 0.99979,
+    "latency_us": 122.3
+  },
+  "current_port_config": {
+    "weight_dtype": "bfloat8_b",
+    "math_fidelity": "HiFi2 (SDPA) / default matmul",
+    "note": "matches reference dtype map"
+  },
+  "finding": "Recommended bfloat8_b/HiFi2 (PCC 0.99979, 122.3us). bfloat8_b is Pareto-optimal (fast + PCC>=0.99), confirming the reference dtype map; bfloat16 only needed where residual precision matters (o_proj)."
+}

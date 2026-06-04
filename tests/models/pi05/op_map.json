@@ -1,0 +1,28 @@
+{
+  "model": "pi05",
+  "notes": "TTNN ops used per pi0.5 component in the tt_symbiote port (functionality-first / interleaved baseline). Drives the op-sweep + config-optimize stages.",
+  "components": {
+    "TTNNPi05GemmaMLP": ["ttnn.linear (gate, bfloat8_b)", "ttnn.gelu (tanh)", "ttnn.linear (up)", "ttnn.multiply", "ttnn.linear (down)", "ttnn.deallocate"],
+    "TTNNPi05GemmaAttention": ["ttnn.linear (fused qkv, bfloat8_b)", "ttnn.experimental.nlp_create_qkv_heads", "ttnn.experimental.rotary_embedding", "ttnn.concat (kv-cache)", "ttnn.transformer.scaled_dot_product_attention", "ttnn.experimental.nlp_concat_heads", "ttnn.linear (o_proj, bfloat16)", "ttnn.reshape", "ttnn.deallocate"],
+    "TTNNPi05GemmaBlock": ["ttnn.rms_norm", "ttnn.add (residual)", "+ attention ops", "+ mlp ops"],
+    "TTNNPi05AdaRMSGemmaBlock": ["ttnn.rms_norm (weightless)", "ttnn.linear (mod dense)", "ttnn.slice (scale/shift/gate)", "ttnn.reshape", "ttnn.add (1+scale)", "ttnn.multiply (modulate + gate)", "ttnn.add (gated residual)", "+ attention ops", "+ mlp ops"],
+    "TTNNPi05SigLIPAttention": ["ttnn.linear (fused qkv, head_dim 72->96 pad)", "ttnn.experimental.nlp_create_qkv_heads", "ttnn.transformer.scaled_dot_product_attention", "ttnn.experimental.nlp_concat_heads", "ttnn.linear (o_proj)"],
+    "TTNNPi05SigLIPMLP": ["ttnn.linear (fc1, bfloat8_b)", "ttnn.gelu (tanh)", "ttnn.linear (fc2, bfloat8_b)"],
+    "TTNNPi05SigLIPBlock": ["ttnn.layer_norm", "ttnn.add (residual)", "+ attention ops", "+ mlp ops"],
+    "TTNNPi05SigLIPVisionTower": ["unfold (reshape/permute) patch embed", "ttnn.linear (patch proj)", "ttnn.embedding (position)", "ttnn.add", "27x SigLIPBlock", "ttnn.layer_norm (post)"],
+    "TTNNPi05MultiModalProjector": ["ttnn.linear (bfloat8_b)"],
+    "TTNNPi05SuffixEmbedding": ["ttnn.linear (action_in/out, time_mlp_in/out)", "ttnn.silu", "create_sinusoidal_pos_embedding (host->bf16)"],
+    "TTNNPi05PaliGemmaBackbone": ["ttnn.embedding (vlm tokens)", "precompute_freqs_cis_meta", "ttnn.slice (rope)", "18x GemmaBlock (vlm)", "18x AdaRMSGemmaBlock (expert)", "ttnn.rms_norm (vlm final)", "adaRMS final (expert)"]
+  },
+  "sweep_candidates": {
+    "primary": "ttnn.linear weight dtype (bfloat16 vs bfloat8_b) + math fidelity (HiFi2 vs HiFi4) + fp32_dest_acc",
+    "per_reference_dtype_map": {
+      "siglip_attn_qkv_o": "bfloat16 weight, bfloat8_b out, fp32_dest ON",
+      "siglip_mlp": "bfloat8_b weight+out, fp32_dest ON",
+      "gemma_qkv": "bfloat8_b weight+out",
+      "gemma_o_proj": "bfloat8_b weight, bfloat16 out (residual path)",
+      "gemma_mlp": "bfloat8_b weight, bfloat16 out",
+      "sdpa": "HiFi2, fp32_dest ON, packer_l1 ON, exp_approx OFF"
+    }
+  }
+}
