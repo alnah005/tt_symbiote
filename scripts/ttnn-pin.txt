@@ -1,19 +1,16 @@
-# scripts/ttnn-pin.txt
+# scripts/ttnn-pin.txt — tt_metal SOURCE BUILD config (no PyPI ttnn wheel; no global commit pin).
 #
-# (ttnn version, matching sfpi version) pair that scripts/bootstrap_venv.sh
-# installs. Sourced as shell variables.
+# ttnn is provided by a tt_metal SOURCE BUILD at $TT_METAL_HOME, NOT a PyPI wheel.
 #
-# How to choose / bump:
-# - Find the sfpi version installed system-wide:
-#     /opt/tenstorrent/sfpi/compiler/bin/riscv-tt-elf-g++ --version
-#   The trailing string like "sfpi:7.35.3[426]" gives the version.
-# - Find the matching PyPI ttnn release by inspecting
-#     pip download --no-deps ttnn==<v> -d /tmp/ttnn-probe
-#     unzip -p /tmp/ttnn-probe/ttnn-*.whl ttnn/tt_metal/sfpi-version
-#   sfpi_version='X.Y.Z' is the line to match.
-# - Set both vars below to the chosen pair.
+# There is deliberately NO single repo-wide tt-metal commit pin. Each model declares
+# its OWN tt_metal commit in two places, and that per-model value is the source of truth:
+#   - tests/<tree>/<model>/test_config.json              ("tt_metal_commit")
+#   - src/tt_symbiote/models/<model>/modeling_<model>.py  (TT_METAL_COMMIT constant)
+# Per-model drift is reported at test time by the autouse tt_metal_commit_check fixture
+# (tests/conftest.py, non-blocking). bootstrap_venv.sh builds against whatever commit your
+# $TT_METAL_HOME checkout happens to be on — it does not assert a global commit here.
 #
-# Today's pair (verified end-to-end on T3K, May 2026):
-
-TTNN_VERSION='0.68.0'
-SFPI_REQUIRED='7.35.3'
+# This file is sourced by scripts/bootstrap_venv.sh ONLY for the optional SFPI override.
+# SFPI is auto-derived from $TT_METAL_HOME/tt_metal/sfpi-version (format: sfpi_version='X.Y.Z').
+# Leave SFPI_REQUIRED empty to auto-derive; set it only to assert/override.
+SFPI_REQUIRED=''

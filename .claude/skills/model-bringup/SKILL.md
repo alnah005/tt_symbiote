@@ -46,7 +46,10 @@ The orchestrator automatically selects validation inputs based on model architec
 
 **File naming**: Model directories use HuggingFace `transformers` snake_case naming.
   - Model source: `src/tt_symbiote/models/<model_name>/modeling_<model_name>.py`
-  - Model tests: `tests/models/<model_name>/test_modeling_<model_name>.py`
+  - Model tests: `tests/models/<model_name>/Tier4/test_modeling_<model_name>.py` (tier-dir layout:
+    Tier1=ops, Tier2=composites, Tier3=decoder, Tier4=full model; each tier dir has an `__init__.py`;
+    ROOT keeps `test_config.json`/`shapes.json`/`op_map.json`; tier files load ROOT artifacts via
+    `Path(__file__).parent.parent`)
 
 **Test location**: Per-model RICH tests go under `tests/models/<model_name>/` (e2e-traced
   correct); partial-TTNN bring-ups under `tests/experimental/<model_name>/` (MINIMAL floor:
@@ -204,6 +207,37 @@ echo "TT_METAL_COMMIT=$TT_METAL_COMMIT"
 ```
 
 This hash will be embedded in the generated modeling file.
+
+### 0d. Structure Preflight
+
+Before scaffolding, run the check-only structure auditor SCOPED to this model to learn which
+tier dirs/files already exist and to seed the scaffold planner with concrete failure codes. The
+script is check-only -- it never mutates the filesystem.
+
+```bash
+REPORT=$(python scripts/check_tier_structure.py --model "$MODEL" --skip-lint --format json 2>/dev/null) || true
+python - "$MODEL" "$REPORT" <<'PY'
+import json, sys
+name, raw = sys.argv[1], sys.argv[2]
+try: r = json.loads(raw)
+except Exception: print("CONTRACT_UNAVAILABLE"); sys.exit(0)
+if r.get("schema_version") != 1: print("CONTRACT_UNKNOWN_VERSION"); sys.exit(0)
+fails = [f for grp in r["checks"].values() for f in grp.get("failures", [])
+         if name in f.get("path","")]
+print("STRUCTURE_OK" if not fails else "MISSING:" + ",".join(f["code"] for f in fails))
+PY
+```
+
+Parse the FROZEN report contract (`schema_version: 1`; see pcc-test-gen for the closed `code`
+vocabulary). Key ONLY off `summary.errors` and `failures[].code` -- never off English text. Seed
+`bringup_status.json.structure_preflight` with the parsed result and feed each `failures[].code`
+(e.g. `MISSING_TIER_DIR`, `MISSING_CONFIG`) to the scaffold planner so scaffolding creates the
+missing `Tier1..Tier4/` dirs + ROOT `test_config.json`. A `--model`-scoped preflight does NOT
+exercise the whole-repo invariants or check-mode lint -- it is a preflight, not full validation.
+
+A FINAL structure gate runs AFTER `traced_execution` completes, also `--model`-scoped (so an
+unrelated dir cannot block this bring-up): require `summary.errors == 0` for THIS model before
+marking the bring-up complete.
 
 ## Architecture: Autonomous Deep-Work Driver
 
@@ -794,9 +828,9 @@ the sub-agent reports failure back to the orchestrator.
 - Test file path (Tier 4 test)
 
 **Autonomous decisions injected**:
-- Test file: `tests/models/<model_name>/test_modeling_<model_name>.py`
+- Test file: `tests/models/<model_name>/Tier4/test_modeling_<model_name>.py`
 - Decoder layer limiting: Yes, limit to 2 layers
-- Output directory: `tests/models/<model_name>/`
+- Output directory: `tests/models/<model_name>/` (tier subdirs Tier1..Tier4/)
 
 **Expected artifacts**: ops_perf_results_*.csv, perf_report.txt
 
@@ -903,14 +937,14 @@ FILES CREATED/MODIFIED:
   - src/tt_symbiote/models/<model_name>/modeling_<model_name>.py
   - src/tt_symbiote/models/<model_name>/__init__.py
   - src/tt_symbiote/models/__init__.py (if recipe path)
-  - tests/models/<model_name>/shapes.json
-  - tests/models/<model_name>/op_map.json
-  - tests/models/<model_name>/test_ops_<model_name>.py
-  - tests/models/<model_name>/test_composites_<model_name>.py
-  - tests/models/<model_name>/test_decoder_<model_name>.py
-  - tests/models/<model_name>/test_modeling_<model_name>.py
-  - tests/models/<model_name>/test_device_guards_<model_name>.py
-  - tests/models/<model_name>/test_traced_<model_name>.py
+  - tests/models/<model_name>/shapes.json            (ROOT artifact)
+  - tests/models/<model_name>/op_map.json            (ROOT artifact)
+  - tests/models/<model_name>/Tier1/test_ops_<model_name>.py
+  - tests/models/<model_name>/Tier2/test_composites_<model_name>.py
+  - tests/models/<model_name>/Tier3/test_decoder_<model_name>.py
+  - tests/models/<model_name>/Tier4/test_modeling_<model_name>.py
+  - tests/models/<model_name>/Tier4/test_device_guards_<model_name>.py
+  - tests/models/<model_name>/Tier4/test_traced_<model_name>.py
   - tests/models/<model_name>/sweep_results/*.csv
   - tests/models/<model_name>/perf_results/recommendation.json
   - tests/models/<model_name>/bringup_status.json

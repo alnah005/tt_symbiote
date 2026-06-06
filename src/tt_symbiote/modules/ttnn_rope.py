@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import ttnn
 
-from tt_symbiote.core.module import TTNNModule
+from tt_symbiote.core.module import TTNNModule, DeviceArch, run_on_devices
 
 
 def rotate_half(x):
@@ -65,6 +65,7 @@ class TorchRotaryPositionEmbedding(nn.Module):
 class TTNNRotaryPositionEmbedding(TTNNModule):
     """TTNN-accelerated Rotary Position Embedding."""
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(
         self,
         q: ttnn.Tensor,
@@ -201,6 +202,7 @@ class TTNNDistributedRotaryPositionEmbedding(TTNNModule):
                 )
                 self._trans_mat_cache[cache_key] = trans_mat_tensor
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(
         self,
         q: ttnn.Tensor,

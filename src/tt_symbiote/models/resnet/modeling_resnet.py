@@ -44,7 +44,7 @@ from transformers.models.resnet.modeling_resnet import (
     ResNetShortCut,
 )
 
-from tt_symbiote.core.module import TTNNModule
+from tt_symbiote.core.module import TTNNModule, SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, run_on_devices
 from tt_symbiote.core.run_config import trace_enabled
 from tt_symbiote.models.auto.auto_mappings import register_recipe
 from tt_symbiote.models.resnet.configuration_resnet import lookup_ttnn_tuning
@@ -124,6 +124,7 @@ class TTNNResNetConvLayer(TTNNModule):
         self.inner.move_weights_to_device()
         super().move_weights_to_device_impl()
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, hidden_state: ttnn.Tensor, reshape_output: bool = True) -> ttnn.Tensor:
         return self.inner(hidden_state, reshape_output=reshape_output)
 
@@ -151,6 +152,7 @@ class TTNNResNetShortCut(TTNNModule):
         self.inner.move_weights_to_device()
         super().move_weights_to_device_impl()
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, hidden_state: ttnn.Tensor, reshape_output: bool = True) -> ttnn.Tensor:
         return self.inner(hidden_state, reshape_output=reshape_output)
 
@@ -212,6 +214,7 @@ class TTNNResNetBasicLayer(TTNNModule):
             self.shortcut.move_weights_to_device()
         super().move_weights_to_device_impl()
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, hidden_state: ttnn.Tensor) -> ttnn.Tensor:
         residual = hidden_state if not self._has_shortcut else self.shortcut(hidden_state)
         hidden_state = self.conv1(hidden_state)
@@ -276,6 +279,7 @@ class TTNNResNetBottleNeckLayer(TTNNModule):
             self.shortcut.move_weights_to_device()
         super().move_weights_to_device_impl()
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, hidden_state: ttnn.Tensor) -> ttnn.Tensor:
         residual = hidden_state if not self._has_shortcut else self.shortcut(hidden_state)
         hidden_state = self.conv1(hidden_state)
@@ -320,6 +324,7 @@ class TTNNResNetEmbeddings(TTNNModule):
         self.embedder.move_weights_to_device()
         super().move_weights_to_device_impl()
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, pixel_values: ttnn.Tensor) -> ttnn.Tensor:
         # HF gives NCHW; we want NHWC for every conv from here on.
         if pixel_values.shape[1] == self._num_channels:
@@ -372,6 +377,7 @@ class TTNNResNetAdaptiveAvgPool2dNHWC(TTNNModule):
         new.permute = TTNNPermute()
         return new
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, hidden_state: ttnn.Tensor) -> ttnn.Tensor:
         # Reduce H, W (NHWC axes 1, 2) -> (B, 1, 1, C).
         pooled = ttnn.mean(hidden_state, dim=[1, 2], keepdim=True)

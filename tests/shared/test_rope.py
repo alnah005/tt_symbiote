@@ -8,7 +8,7 @@ import pytest
 import torch
 
 from tt_symbiote.core.tensor import TorchTTNNTensor
-from tt_symbiote.core.utils import compare_fn_outputs
+from tests.shared.pcc_utils import assert_pcc
 from tt_symbiote.modules.ttnn_rope import TorchRotaryPositionEmbedding, TTNNRotaryPositionEmbedding
 from tt_symbiote.utils.device_management import set_device
 
@@ -69,8 +69,8 @@ def test_rope_short_sequence(device):
 
     q_out_ttnn, k_out_ttnn = ttnn_model(q_torch, k_torch, cos_torch, sin_torch)
 
-    compare_fn_outputs(q_out_torch, q_out_ttnn, "RoPE Query (short sequence)")
-    compare_fn_outputs(k_out_torch, k_out_ttnn, "RoPE Key (short sequence)")
+    assert_pcc(q_out_ttnn, q_out_torch, threshold=0.99, msg="RoPE Query (short sequence)")
+    assert_pcc(k_out_ttnn, k_out_torch, threshold=0.99, msg="RoPE Key (short sequence)")
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 245760}], indirect=True)
@@ -123,5 +123,5 @@ def test_rope_glm_dimensions(device):
 
     q_out_ttnn, k_out_ttnn = ttnn_model(q_torch, k_torch, cos_torch, sin_torch)
 
-    compare_fn_outputs(q_out_torch, q_out_ttnn, "RoPE Query (GLM dimensions)")
-    compare_fn_outputs(k_out_torch, k_out_ttnn, "RoPE Key (GLM dimensions)")
+    assert_pcc(q_out_ttnn, q_out_torch, threshold=0.99, msg="RoPE Query (GLM dimensions)")
+    assert_pcc(k_out_ttnn, k_out_torch, threshold=0.99, msg="RoPE Key (GLM dimensions)")

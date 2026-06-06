@@ -12,9 +12,9 @@ from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_w
 import ttnn
 from tt_symbiote.core.module import (
     TTNNModule,
+    SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS,
     deallocate_weights_after,
     run_on_devices,
-    SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS,
 )
 from tt_symbiote.core.run_config import trace_disabled, trace_enabled
 
@@ -520,6 +520,7 @@ class TTNNLinear(TTNNModule):
             ttnn.deallocate(self.tt_bias)
         super().deallocate_weights_impl()
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass through linear layer."""
         if input_tensor.layout != ttnn.TILE_LAYOUT:
@@ -747,6 +748,7 @@ class TTNNLinearLLama(TTNNLinear):
         if self.bias is not None:
             self.tt_bias_host = preprocess_linear_bias(self.bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     @deallocate_weights_after
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass with automatic weight deallocation."""
@@ -1198,6 +1200,7 @@ class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
 class TTNNLinearLLamaBFloat16(TTNNLinear):
     """TTNN Linear layer optimized for LLaMA models using bfloat16."""
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     @deallocate_weights_after
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass with automatic weight deallocation."""
@@ -1235,6 +1238,7 @@ class TTNNLinearActivation(TTNNModule):
         new_linear.activation = ttnn_act_fn
         return new_linear
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, hidden_states):
         hidden_states = self.dense(hidden_states)
         hidden_states = self.activation(hidden_states)
@@ -1591,6 +1595,7 @@ class TTNNDotsOCRDRAMShardedLMHead(TTNNModule):
         self.tt_bias_chunks = []
         super().deallocate_weights_impl()
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         device = self.device
         num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1

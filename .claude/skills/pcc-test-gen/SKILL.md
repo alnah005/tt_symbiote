@@ -11,13 +11,16 @@ Generate comprehensive tiered PCC tests for a HuggingFace model's TTNN bring-up.
 
 **File naming**: Model directories use HuggingFace `transformers` snake_case naming.
   - Model source: `src/tt_symbiote/models/<model_name>/modeling_<model_name>.py`
-  - Model tests: `tests/models/<model_name>/test_modeling_<model_name>.py`
+  - Model tests: `tests/models/<model_name>/Tier4/test_modeling_<model_name>.py`
 
 **Test location**: Generate tiered tests into `tests/models/<model_name>/` (RICH tree) once
   end-to-end traced correctness is proven, otherwise `tests/experimental/<model_name>/`
-  (MINIMAL tree). Emit `test_config.json` (5 keys: `tt_metal_commit`, `device_arch`,
-  `pcc_threshold`, `hf_model_id`, `hf_revision`) + `shapes.json` + `op_map.json` alongside the
-  tier files. STOP writing to the removed per-model capabilities tree.
+  (MINIMAL tree). Tests live in tier subdirs: `Tier1/test_ops_*`, `Tier2/test_composites_*`,
+  `Tier3/test_decoder_*` (+ `test_sweep_decoder_*`), `Tier4/test_modeling_*` (+ traced/auto/
+  pipeline/device_guards/timing_replay/vision_traced). Each tier dir carries an `__init__.py`.
+  Emit ROOT-level `test_config.json` (5 keys: `tt_metal_commit`, `device_arch`, `pcc_threshold`,
+  `hf_model_id`, `hf_revision`) + `shapes.json` + `op_map.json` at the MODEL ROOT (above the tier
+  dirs). STOP writing to the removed per-model capabilities tree (distinct from the Tier dirs).
   - Shared capability tests: `tests/shared/` root (e.g., `test_attention.py`)
   - Auto/unit tests: `tests/auto/`
 
@@ -354,16 +357,54 @@ Also create `tests/models/<model_name>/op_map.json`:
 
 ## Step 5 -- Generate Test Files
 
-### 5a. Create test directory and __init__.py
+### 5.0 Structure Preflight (Verify Prerequisites)
+
+Before emitting any files, run the check-only structure auditor SCOPED to this model so you learn
+which tier dirs/files already exist (extend, do not overwrite). The script never mutates the tree.
 
 ```bash
-mkdir -p tests/models/<model_name>
-touch tests/models/<model_name>/__init__.py
+REPORT=$(python scripts/check_tier_structure.py --model "<model_name>" --skip-lint --format json 2>/dev/null) || true
+python - "<model_name>" "$REPORT" <<'PY'
+import json, sys
+name, raw = sys.argv[1], sys.argv[2]
+try: r = json.loads(raw)
+except Exception: print("CONTRACT_UNAVAILABLE"); sys.exit(0)
+if r.get("schema_version") != 1: print("CONTRACT_UNKNOWN_VERSION"); sys.exit(0)
+fails = [f for grp in r["checks"].values() for f in grp.get("failures", [])
+         if name in f.get("path","")]
+print("STRUCTURE_OK" if not fails else "MISSING:" + ",".join(f["code"] for f in fails))
+PY
 ```
+
+The report is the FROZEN contract (`schema_version: 1`). Closed `code` vocabulary (key off these,
+never off English text): `MISSING_TIER_DIR, EMPTY_TIER_DIR, MISSING_TIER_INIT, MISSING_ROOT_INIT,
+MISSING_CONFIG, MISSING_CONFIG_KEY, BAD_CONFIG_TYPE, MISSING_TT_METAL_COMMIT, TIER_TOKEN_MISMATCH,
+MISPLACED_TIER_FILE, NO_SRC_PACKAGE, BANNED_ALIAS, BANNED_VARIANT_SUFFIX, NONCANONICAL_NAME, ...`.
+Generate the missing tier dirs/files (5a-5f) and the ROOT `test_config.json` accordingly.
+
+### 5a. Create test directory, tier dirs, and __init__.py
+
+The test layout is the tier-dir layout: each model dir carries four `Tier1..Tier4/` subdirs, each
+with an `__init__.py` (rationale: pytest prepend-mode duplicate-basename collision avoidance; the
+collected module root is `<model_name>.Tier{N}.test_*`). ROOT artifacts
+(`shapes.json`/`op_map.json`/`test_config.json`/`__init__.py`/`conftest.py`) stay at the model ROOT.
+
+```bash
+mkdir -p tests/models/<model_name>/Tier1 tests/models/<model_name>/Tier2 \
+         tests/models/<model_name>/Tier3 tests/models/<model_name>/Tier4
+touch tests/models/<model_name>/__init__.py
+touch tests/models/<model_name>/Tier1/__init__.py tests/models/<model_name>/Tier2/__init__.py \
+      tests/models/<model_name>/Tier3/__init__.py tests/models/<model_name>/Tier4/__init__.py
+```
+
+**Artifact-load rule for ALL generated tier files:** since a tier file sits one level below the
+model root, it MUST load ROOT artifacts via `Path(__file__).parent.parent / "shapes.json"` (NOT
+`Path(__file__).parent / "shapes.json"`). `shapes.json`/`op_map.json`/`test_config.json` stay at
+the model ROOT.
 
 ### 5b. Tier 1 -- Op/Simple Module Tests
 
-Generate `tests/models/<model_name>/test_ops_<model_name>.py` following the pattern from the PLAN phase. Each test:
+Generate `tests/models/<model_name>/Tier1/test_ops_<model_name>.py` following the pattern from the PLAN phase. Each test:
 1. Creates a PyTorch module with correct shape from shapes.json
 2. `torch.set_grad_enabled(False)` and `.eval()`
 3. `TTNNModule.from_torch(torch_module)`
@@ -374,7 +415,7 @@ Generate `tests/models/<model_name>/test_ops_<model_name>.py` following the patt
 
 ### 5c. Tier 2 -- Composite Module Tests
 
-Generate `tests/models/<model_name>/test_composites_<model_name>.py`.
+Generate `tests/models/<model_name>/Tier2/test_composites_<model_name>.py`.
 
 Two patterns are used for TTNN conversion:
 - **Direct from_torch**: when an integration class provides complete TTNN replacement
@@ -384,12 +425,13 @@ Two patterns are used for TTNN conversion:
 
 ### 5d. Tier 3 -- Decoder Layer Tests
 
-Generate `tests/models/<model_name>/test_decoder_<model_name>.py` with both
-prefill (seq_len=32,128) and decode (seq_len=1) tests.
+Generate `tests/models/<model_name>/Tier3/test_decoder_<model_name>.py` with both
+prefill (seq_len=32,128) and decode (seq_len=1) tests. Decoder-scoped sweeps
+(`test_sweep_decoder_<model_name>.py`) also go in `Tier3/`.
 
 ### 5e. Tier 4 -- Full Model Test
 
-Generate `tests/models/<model_name>/test_modeling_<model_name>.py`. Two paths:
+Generate `tests/models/<model_name>/Tier4/test_modeling_<model_name>.py`. Two paths:
 
 **Path A (Recipe/Auto API)**: Uses `from tt_symbiote import AutoModelForCausalLM, set_device`.
 
@@ -398,7 +440,7 @@ Generate `tests/models/<model_name>/test_modeling_<model_name>.py`. Two paths:
 
 ### 5f. Generate Device Guard Verification Test
 
-Generate `tests/models/<model_name>/test_device_guards_<model_name>.py` to verify
+Generate `tests/models/<model_name>/Tier4/test_device_guards_<model_name>.py` to verify
 `@run_on_devices` guards are present on all TTNN module forward() methods.
 
 ## Step 6 -- compare_fn_outputs Migration Guidance
@@ -420,14 +462,20 @@ If yes, for each file:
 ## Step 7 -- Validate (Final VERIFY)
 
 ```bash
-# Verify pytest can discover the tests
+# Verify pytest can discover the tests (recurses Tier1..Tier4/ subdirs)
 pytest --collect-only tests/models/<model_name>/ 2>&1 | tail -10
 
-# Verify shapes.json is valid JSON
+# Verify shapes.json is valid JSON (ROOT artifact, above the tier dirs)
 python -c "import json; json.load(open('tests/models/<model_name>/shapes.json'))"
 
-# Verify no import errors
+# Verify no import errors -- imports the MODEL PACKAGE whose ROOT __init__.py survives the tier
+# layout and resolves via the PEP 420 `tests.models` namespace package. KEEP AS-IS (verified to
+# succeed before AND after the tier migration; do NOT rewrite to a tier-qualified dotted path).
 python -c "import tests.models.<model_name>"
+
+# Confirm the structure auditor is green for this model (check-only)
+python scripts/check_tier_structure.py --model <model_name> --skip-lint --format json 2>/dev/null \
+  | python -c "import json,sys; r=json.load(sys.stdin); print('STRUCTURE_OK' if r['summary']['errors']==0 else 'STRUCTURE_FAIL')"
 ```
 
 If any validation fails, return to PLAN, diagnose, and iterate.

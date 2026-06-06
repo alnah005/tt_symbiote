@@ -9,7 +9,7 @@ import torch
 from torch import nn
 
 from tt_symbiote.core.tensor import TorchTTNNTensor
-from tt_symbiote.core.utils import compare_fn_outputs
+from tests.shared.pcc_utils import assert_pcc
 from tt_symbiote.modules.ttnn_conv import (
     NHWCConvBNActivationPytorch,
     NHWCConvBNPytorch,
@@ -36,7 +36,7 @@ def test_conv(device):
     set_device(ttnn_model, device)
     outputs_ttnn = ttnn_model(inputs)
     outputs_ttnn.elem = None  # Force using TTNN tensor only
-    compare_fn_outputs(outputs_torch, outputs_ttnn, "Conv2dNHWC")
+    assert_pcc(outputs_ttnn, outputs_torch, threshold=0.99, msg="Conv2dNHWC")
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 245760}], indirect=True)
@@ -55,7 +55,7 @@ def test_conv_bn(device):
     set_device(ttnn_model, device)
     outputs_ttnn = ttnn_model(inputs)
     outputs_ttnn.elem = None  # Force using TTNN tensor only
-    compare_fn_outputs(outputs_torch, outputs_ttnn, "Conv2dBNNHWC")
+    assert_pcc(outputs_ttnn, outputs_torch, threshold=0.99, msg="Conv2dBNNHWC")
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 245760}], indirect=True)
@@ -75,4 +75,4 @@ def test_conv_bn_relu(device):
     set_device(ttnn_model, device)
     outputs_ttnn = ttnn_model(inputs)
     outputs_ttnn.elem = None  # Force using TTNN tensor only
-    compare_fn_outputs(outputs_torch, outputs_ttnn, "Conv2dBNActivationNHWC")
+    assert_pcc(outputs_ttnn, outputs_torch, threshold=0.99, msg="Conv2dBNActivationNHWC")

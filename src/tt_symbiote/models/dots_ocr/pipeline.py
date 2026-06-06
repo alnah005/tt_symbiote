@@ -24,7 +24,7 @@ import torch
 import ttnn
 
 
-from tt_symbiote.core.module import TTNNModule
+from tt_symbiote.core.module import TTNNModule, SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, run_on_devices
 from tt_symbiote.core.run_config import TracedRun, is_trace_enabled, trace_enabled
 from tt_symbiote.models.dots_ocr._attention import (
     PagedAttentionConfig,
@@ -353,6 +353,7 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
         ttnn.deallocate(full_vision_col_sharded)
         return fused
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(
         self, hidden_states, cache_position, *mm_args, past_key_value=None, mm_grid_thw: Optional[torch.Tensor] = None
     ):
@@ -433,6 +434,7 @@ class TTNNDotsOCRDecodeGraph(TTNNModule):
         self._d_lm = lm_head
         self._d_embedding = embedding
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, decode_input, cache_position, past_key_value):
         dev = self.device
         if _deep_sync_profile_enabled():
@@ -868,8 +870,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
                 actual_vision_seq_len = int(x_patch.shape[2])
                 vision_bucket = (
                     self.vision_tower.block_stack.nearest_bucket(actual_vision_seq_len)
-                    if self.vision_tower.block_stack is not None
-                    and is_trace_enabled(self.vision_tower.block_stack)
+                    if self.vision_tower.block_stack is not None and is_trace_enabled(self.vision_tower.block_stack)
                     else -1
                 )
                 use_vision_sdpa_mask = os.environ.get("DOTS_OCR_USE_FULL_SDPA_MASK", "").lower() in {

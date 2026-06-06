@@ -33,6 +33,66 @@ try:
 except PackageNotFoundError:  # editable install before pip resolves metadata
     __version__ = "0.0.0+unknown"
 
+
+def _ensure_ttnn_importable() -> None:
+    """Wire a source-built ``ttnn`` onto ``sys.path`` before the eager import below.
+
+    ``ttnn`` is intentionally NOT a PyPI dependency (see pyproject.toml): it is
+    provided by a tt-metal SOURCE BUILD at ``$TT_METAL_HOME``. Importing
+    ``tt_symbiote`` transitively does ``import ttnn`` at module-load time, so this
+    runs first and:
+
+    - no-ops if ``ttnn`` is already importable — a real build already on the path,
+      or the ``sys.modules`` stub installed by ``tests/auto`` for software-only runs;
+    - otherwise, if ``$TT_METAL_HOME`` is set, prepends its source tree
+      (``$TT_METAL_HOME`` and ``$TT_METAL_HOME/ttnn``) to ``sys.path`` so the import
+      resolves — the same wiring ``scripts/bootstrap_venv.sh`` writes as a ``.pth``;
+    - otherwise raises a clear, actionable error.
+
+    This can auto-WIRE an existing build; it cannot auto-PROVIDE ttnn — a built
+    tt-metal checkout and ``$TT_METAL_HOME`` remain the user's responsibility.
+    """
+    import importlib
+    import importlib.util
+    import os
+    import sys
+
+    def _importable() -> bool:
+        if "ttnn" in sys.modules:  # covers the tests/auto sys.modules stub
+            return True
+        try:
+            return importlib.util.find_spec("ttnn") is not None
+        except (ImportError, ValueError):
+            return False
+
+    if _importable():
+        return
+
+    tt_metal_home = os.environ.get("TT_METAL_HOME")
+    if tt_metal_home:
+        for path in (tt_metal_home, os.path.join(tt_metal_home, "ttnn")):
+            if os.path.isdir(path) and path not in sys.path:
+                sys.path.insert(0, path)
+        importlib.invalidate_caches()
+        if _importable():
+            return
+
+    raise ImportError(
+        "tt_symbiote requires `ttnn`, which is provided by a tt-metal SOURCE BUILD "
+        "(not a PyPI wheel). Point $TT_METAL_HOME at your built tt-metal checkout so "
+        "`ttnn` is importable:\n"
+        "    export TT_METAL_HOME=/path/to/tt-metal\n"
+        + (
+            f"(current $TT_METAL_HOME={tt_metal_home!r} has no importable ttnn under it)"
+            if tt_metal_home
+            else "($TT_METAL_HOME is not set)"
+        )
+        + "\nSee the Installation section of the README, or run scripts/bootstrap_venv.sh."
+    )
+
+
+_ensure_ttnn_importable()
+
 from tt_symbiote.models.auto import (
     AutoBackbone,
     AutoConfig,

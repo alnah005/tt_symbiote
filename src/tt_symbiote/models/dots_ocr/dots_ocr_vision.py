@@ -22,7 +22,7 @@ import torch.nn.functional as F
 import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
-from tt_symbiote.core.module import TTNNModule, TTNNLayerStack
+from tt_symbiote.core.module import TTNNModule, SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, TTNNLayerStack, run_on_devices
 from tt_symbiote.core.run_config import is_trace_enabled
 from ttnn.operations.transformer import SDPAProgramConfig
 
@@ -868,6 +868,7 @@ class TTNNDotsVisionRMSNorm(TTNNModule):
         else:
             self.tt_weight = ttnn.to_device(self.tt_weight, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, x: ttnn.Tensor, *, output_l1: bool = False) -> ttnn.Tensor:
         out_mem = ttnn.L1_MEMORY_CONFIG if output_l1 else None
         if x.layout != ttnn.TILE_LAYOUT:
@@ -1004,6 +1005,7 @@ class TTNNDotsVisionMLP(TTNNModule):
         self.tt_fc3_weight = _to_dev(getattr(self, "tt_fc3_weight", None))
         self.tt_fc3_bias = _to_dev(getattr(self, "tt_fc3_bias", None))
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -1220,6 +1222,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
             self.device, math_fidelity=VISION_NORM_MATH_FIDELITY
         )
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor = None) -> ttnn.Tensor:
         mem = ttnn.DRAM_MEMORY_CONFIG
         mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
@@ -1555,6 +1558,7 @@ class TTNNDotsVisionAttention(TTNNModule):
             ctx = ttnn.slice(ctx, (0, 0, 0, 0), (1, h, logical_seq_len, d), memory_config=ttnn.L1_MEMORY_CONFIG)
         return ctx
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(
         self,
         hidden_states: ttnn.Tensor,
@@ -1766,6 +1770,7 @@ class TTNNDotsVisionBlock(TTNNModule):
 
         return new_block
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(
         self,
         hidden_states: ttnn.Tensor,
@@ -1988,6 +1993,7 @@ class TTNNDotsPatchMerger(TTNNModule):
             self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
         )
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -2157,6 +2163,7 @@ class TTNNDotsVisionBlockStack(TTNNLayerStack):
             self.patch_merger.to_device(device)
         return self
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, hidden_states, **kwargs):
         rot_mats = kwargs.get("rot_mats")
         cu_seqlens = kwargs.get("cu_seqlens")
@@ -2451,6 +2458,7 @@ class TTNNDotsOCRVisionTower(TTNNModule):
 
         return x
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> ttnn.Tensor:
         """Run the full vision pipeline and return the result as a ttnn.Tensor on device.
 

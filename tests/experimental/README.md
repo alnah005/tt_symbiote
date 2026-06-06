@@ -15,7 +15,7 @@ This directory is one half of the two-tree per-model test taxonomy:
   `test_conv.py`, `test_moe.py`, `test_rope.py`, `test_dpl.py`).
 
 The former per-model capability tree has been **removed**; its contents moved
-to `tests/shared/` (helpers + shared tests) and `tests/models/dots_ocr/`.
+to `tests/shared/` (helpers + shared tests) and `tests/experimental/dots_ocr/`.
 
 ## MINIMAL floor
 
@@ -29,7 +29,7 @@ Every dir under `tests/experimental/<name>/` must contain at least:
   `hf_revision` (str; default `"main"`).
 
 The machine check for this floor (and the RICH floor) is
-[`tests/auto/test_structure_lint.py`](../auto/test_structure_lint.py).
+[`tests/auto/test_tier_structure.py`](../auto/test_tier_structure.py) (a thin wrapper over `scripts/check_tier_structure.py`).
 
 ## Naming rule
 
@@ -41,14 +41,14 @@ Banned bare variant suffixes as dir names: `_4_7`, `_5`, `_flash`,
 `_coder_next`. Variant test files use the `_variant_<qualifier>` form (e.g.
 `test_modeling_glm4_moe_variant_4_7.py`) and are not floor-required. The
 machine-enforced banned-name set lives in
-[`tests/auto/test_structure_lint.py`](../auto/test_structure_lint.py).
+[`tests/auto/test_tier_structure.py`](../auto/test_tier_structure.py) (a thin wrapper over `scripts/check_tier_structure.py`).
 
 ## Status
 
 These tests are:
 
 - **Excluded from default pytest collection.** The default
-  `testpaths` is now `["tests/auto", "tests/shared", "tests/models"]`;
+  `testpaths` is now `["tests/auto", "tests/shared"]`;
   `tests/experimental/` stays excluded via `addopts = "... --ignore=tests/experimental"`
   in [`pyproject.toml`](../../pyproject.toml) `[tool.pytest.ini_options]`.
 - **Excluded from the published sdist / wheel** — not guaranteed to import

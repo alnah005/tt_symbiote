@@ -5,13 +5,7 @@ import os
 
 import torch
 import ttnn
-from tt_symbiote.core.module import (
-    DeviceArch,
-    MeshShapeToDeviceArch,
-    TTNNLayerStack,
-    TTNNModule,
-    run_on_devices,
-)
+from tt_symbiote.core.module import TTNNModule, DeviceArch, MeshShapeToDeviceArch, TTNNLayerStack, run_on_devices
 from tt_symbiote.core.run_config import trace_enabled
 from tt_symbiote.models.dots_ocr.dots_ocr_attention import (
     TTNNDotsOCRAttention,
@@ -180,6 +174,7 @@ class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
             tt_out = ttnn.reshape(tt_out, [tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]])
         return tt_out
 
+    @run_on_devices(DeviceArch.T3K, DeviceArch.P150x4)
     def forward(self, inp):
         original_shape = inp.shape
         # Sharded LN fast path: decode-shape (M=1) and single-device or pure DP
@@ -372,6 +367,7 @@ class TTNNDotsOCRLayerStack(TTNNLayerStack):
                     attn._decode_cur_pos = shared_buf
         self._shared_decode_cur_pos = shared_buf
 
+    @run_on_devices(DeviceArch.T3K, DeviceArch.P150x4)
     def forward(self, hidden_states, **kwargs):
         seq_len = hidden_states.shape[-2]
         if (

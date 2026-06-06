@@ -16,7 +16,7 @@ except ImportError:
 
 import ttnn
 
-from tt_symbiote.core.module import TTNNModule
+from tt_symbiote.core.module import TTNNModule, DeviceArch, run_on_devices
 from tt_symbiote.core.tensor import TorchTTNNTensor
 from tt_symbiote.modules.ttnn_linear import (
     TTNNLinear,
@@ -387,6 +387,7 @@ class TTNNSDPAAttention(TTNNModule):
             attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
         return attn_output
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(
         self,
         module: torch.nn.Module,
@@ -573,6 +574,7 @@ class TTNNFusedQKVSelfAttention(TTNNModule):
         new_fused_qkv.linear = TTNNLinear.from_torch(torch_layer_query_key_value)
         return new_fused_qkv
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(self, hidden_states):
         """Forward pass through fused QKV linear layer."""
         if len(hidden_states.shape) == 3:
@@ -644,6 +646,7 @@ class TTNNSelfAttention(TTNNModule):
             self.sdpa.program_config = program_config
             self.sdpa.compute_kernel_config = compute_kernel_config
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(self, hidden_states, head_mask=None, output_attentions: bool = False):
         """Forward pass through ViT self-attention."""
         assert head_mask is None, "head_mask is not supported in TTNNViTSelfAttention"
@@ -774,6 +777,7 @@ class TTNNWhisperAttention(TTNNModule):
         x = ttnn.reshape(x, (bsz, seq_len, self.num_heads, self.head_dim))
         return ttnn.permute(x, (0, 2, 1, 3))
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(
         self,
         hidden_states: ttnn.Tensor,
@@ -986,6 +990,7 @@ class LlamaAttention(TTNNModule):
             new_attn.init_parameters()
         return new_attn
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(
         self,
         hidden_states,
@@ -1510,6 +1515,7 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
 
         return attn_output, None
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(
         self,
         hidden_states: ttnn.Tensor,
@@ -1702,6 +1708,7 @@ class TTNNQwen3NextGatedAttention(TTNNModule):
         self.tt_q_norm = ttnn.to_device(self.tt_q_norm, self.device)
         self.tt_k_norm = ttnn.to_device(self.tt_k_norm, self.device)
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(
         self,
         hidden_states,
@@ -2395,6 +2402,7 @@ class TTNNBailingMoEAttention(TTNNModule):
 
         return attn_output, None, past_key_values
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(
         self,
         hidden_states: ttnn.Tensor,

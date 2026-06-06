@@ -8,7 +8,7 @@ import pytest
 import torch
 
 from tt_symbiote.core.tensor import TorchTTNNTensor
-from tt_symbiote.core.utils import compare_fn_outputs
+from tests.shared.pcc_utils import assert_pcc
 from tt_symbiote.modules.ttnn_attention import (
     SelfAttention,
     SelfAttentionConfig,
@@ -37,7 +37,7 @@ def test_self_attention(device):
     ttnn_model.preprocess_weights()
     ttnn_model.move_weights_to_device()
     outputs_ttnn = ttnn_model(inputs)
-    compare_fn_outputs(outputs_torch, outputs_ttnn, "SelfAttention")
+    assert_pcc(outputs_ttnn, outputs_torch, threshold=0.99, msg="SelfAttention")
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 245760}], indirect=True)
@@ -103,7 +103,7 @@ def test_glm4_flash_attention_with_paged_kv_cache(device):
         cache_position=cache_position,
     )
 
-    compare_fn_outputs(torch_out_prefill, ttnn_out_prefill, "Glm4MoeLiteAttention_PagedPrefill")
+    assert_pcc(ttnn_out_prefill, torch_out_prefill, threshold=0.99, msg="Glm4MoeLiteAttention_PagedPrefill")
 
     assert paged_cache.get_seq_length(0) == 5
     assert dynamic_cache.get_seq_length(0) == 5

@@ -57,25 +57,36 @@ pip install tt_symbiote
 pip install "tt_symbiote[vision]"
 ```
 
-The base install pulls `ttnn==0.68.0` plus the transitive HF stack
-(`torch`, `transformers==5.9.0`, `accelerate`, `tokenizers`, …) from PyPI.
-There is no separate `[ttnn]` extra — `ttnn` is a hard dependency, because
-core modules import it at module-load time.
+The base install pulls the transitive HF stack (`torch`,
+`transformers==5.9.0`, `accelerate`, `tokenizers`, …) from PyPI.
+
+> **`ttnn` is NOT a PyPI dependency.** It is provided by a **tt_metal SOURCE
+> BUILD** at `$TT_METAL_HOME` (commit pinned in `scripts/ttnn-pin.txt`), not a
+> wheel. Core modules `import ttnn` at module-load time, so a bare
+> `pip install tt_symbiote` / `pip install -e .` needs an externally-provided
+> (source-built) `ttnn`. With `$TT_METAL_HOME` set, `import tt_symbiote`
+> auto-wires that source build onto `sys.path` (and errors clearly if it can't);
+> or use `scripts/bootstrap_venv.sh`, which points the venv at `$TT_METAL_HOME`
+> and auto-derives `sfpi` from `$TT_METAL_HOME/tt_metal/sfpi-version`. There is no
+> global tt-metal commit pin — each model records its own `tt_metal_commit`.
+> Software-only collection under `tests/auto/` does not need `ttnn` (its conftest
+> installs `sys.modules` stubs).
 
 The `[vision]` extra adds `torchvision`, which HF's multimodal
 `AutoProcessor` classes (`Gemma4VideoProcessor`, the Qwen3-VL preprocessor,
 the ResNet image processor) require at construction. This mirrors the
 upstream `transformers[vision]` extra exactly.
 
-> **System prerequisite: `sfpi 7.35.3`.** `ttnn==0.68.0` JIT-compiles
-> firmware kernels at first `open_mesh_device(...)` call using the
-> Tenstorrent `sfpi` RISC-V toolchain. Mismatched `sfpi` causes
-> `open_mesh_device()` to fail with `unrecognized command-line option`.
+> **System prerequisite: matching `sfpi`.** The source-built `ttnn`
+> JIT-compiles firmware kernels at first `open_mesh_device(...)` call using the
+> Tenstorrent `sfpi` RISC-V toolchain. The required version is auto-derived from
+> `$TT_METAL_HOME/tt_metal/sfpi-version` (e.g. `sfpi 7.52.0`). Mismatched `sfpi`
+> causes `open_mesh_device()` to fail with `unrecognized command-line option`.
 > Verify with:
 >
 > ```bash
 > /opt/tenstorrent/sfpi/compiler/bin/riscv-tt-elf-g++ --version
-> # → expect: sfpi:7.35.3 ...
+> # → must match $TT_METAL_HOME/tt_metal/sfpi-version
 > ```
 >
 > See [`docs/install_prerequisites.md`](https://github.com/alnah005/tt_symbiote/blob/transformers5.9.0/docs/install_prerequisites.md)
@@ -272,44 +283,36 @@ the headline item for the next release.
 
 ---
 
-## Recent releases
-
-- **0.1.3** — PyPI project description refresh. No code or API changes;
-  the published wheel is byte-identical in behavior to 0.1.2. Bumped
-  because PyPI metadata is immutable per-version and the project page
-  needed to reflect the user-facing narrative.
-- **0.1.2** — `[vision]` extra and strict `set_device(model, mesh)`
-  signature. `pip install "tt_symbiote[vision]"` pulls `torchvision`,
-  the implicit prerequisite for HF's multimodal `AutoProcessor` classes;
-  text-only users do not pay this cost. All runtime configuration
-  (`kv_cache_kwargs`, optional diagnostics) moved to `from_pretrained`
-  keyword arguments, leaving the binding step pure: walk the tree,
-  attach `TTNNModule`s to the mesh, allocate KV cache, return.
-- **0.1.1** — `ttnn` promoted from optional extra to hard dependency.
-  No `[ttnn]` opt-in step; `pip install tt_symbiote` resolves the
-  matching `ttnn==0.68.0` wheel directly.
-
-Full release history:
-[CHANGELOG](https://github.com/alnah005/tt_symbiote/blob/transformers5.9.0/docs/development/release_checklist.md).
-
----
-
 ## From-source install (contributors)
 
-For running the bundled e2e demos and the test suite:
+For running the bundled e2e demos and the test suite. **A built `tt-metal`
+checkout at `$TT_METAL_HOME` is required** — `ttnn` comes from that source build,
+not a wheel:
 
 ```bash
 git clone https://github.com/alnah005/tt_symbiote.git
 cd tt_symbiote
-./scripts/bootstrap_venv.sh        # creates .venv, validates sfpi, installs ttnn + tt_symbiote (editable)
+export TT_METAL_HOME=/path/to/tt-metal      # your built tt-metal checkout (provides ttnn)
+./scripts/bootstrap_venv.sh                 # creates .venv, checks sfpi, wires ttnn, installs tt_symbiote (editable) + the pre-commit hook
 source .venv/bin/activate
 ```
 
-The bootstrap script reads `(ttnn, sfpi)` from
-[`scripts/ttnn-pin.txt`](https://github.com/alnah005/tt_symbiote/blob/transformers5.9.0/scripts/ttnn-pin.txt),
-probes the system `sfpi` toolchain, **refuses to proceed if the versions
-disagree**, and then installs `ttnn`, `torch`, `transformers==5.9.0`, and
-`tt_symbiote` (editable). No `tt-metal` source checkout is required.
+The bootstrap script is an optional convenience. It requires `$TT_METAL_HOME`,
+derives the required `sfpi` version from `$TT_METAL_HOME/tt_metal/sfpi-version`
+and **refuses to proceed if the system `sfpi` toolchain disagrees**, writes a
+`.pth` pointing the venv at the source-built `ttnn`, installs `tt_symbiote`
+(editable) plus `torch`/`transformers==5.9.0`/…, and installs the git
+`pre-commit` hook. (Optional `sfpi` override lives in
+[`scripts/ttnn-pin.txt`](https://github.com/alnah005/tt_symbiote/blob/transformers5.9.0/scripts/ttnn-pin.txt);
+there is no global tt-metal commit pin — each model records its own
+`tt_metal_commit`.)
+
+You do **not** strictly need the bootstrap: with `$TT_METAL_HOME` set, a plain
+`pip install -e .` works too, because `import tt_symbiote` auto-wires the
+source-built `ttnn` from `$TT_METAL_HOME` onto `sys.path` (and raises a clear
+error if `$TT_METAL_HOME` is unset or has no `ttnn`). The bootstrap additionally
+gives you the persistent `.pth` (so a direct `import ttnn` works without
+importing `tt_symbiote` first), the `sfpi` pre-flight, and the hook.
 
 The repository layout mirrors `transformers/src/transformers/`:
 

@@ -8,7 +8,7 @@ import torch
 import ttnn
 from torch import nn
 
-from tt_symbiote.core.module import TTNNModule
+from tt_symbiote.core.module import TTNNModule, SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, run_on_devices
 from tt_symbiote.core.run_config import trace_enabled
 from tt_symbiote.modules.tt_cnn.builder import Conv2dConfiguration, MaxPool2dConfiguration, TtConv2d, TtMaxPool2d
 from tt_symbiote.modules.ttnn_activation import TTNNReLU
@@ -204,6 +204,7 @@ class TTNNConv2dNHWC(TTNNModule):
             ttnn.deallocate(self.tt_bias)
         super().deallocate_weights_impl()
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor, reshape_output=True) -> ttnn.Tensor:
         """Forward pass through linear layer."""
         input_shape = get_shape_from_module_name(self.module_name, self.model_config)
@@ -356,6 +357,7 @@ class TTNNConv2dBNActivationNHWC(TTNNConv2dBNNHWC):
         # call method from TTNNConv2dNHWC's grandparent TTNNModule
         TTNNModule.preprocess_weights_impl(self)
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor, reshape_output=True) -> ttnn.Tensor:
         """Forward pass through linear layer."""
         batch_size, input_height, input_width, _ = input_tensor.shape
@@ -439,6 +441,7 @@ class TTNNBottleneck(TTNNModule):
         new_bottleneck.initilize_submodules()
         return new_bottleneck
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass through Bottleneck block."""
         if self.downsample is not None:
@@ -534,6 +537,7 @@ class TTNNPatchEmbedding(TTNNModule):
         self.ttnn_bias = ttnn.to_device(self.ttnn_bias, self.device)
         super().move_weights_to_device_impl()
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, pixel_values, interpolate_pos_encoding: bool = False):
         batch_size, img_h, img_w, img_c = pixel_values.shape  # permuted input NHWC
         patch_size = self.patch_size
@@ -611,6 +615,7 @@ class TTNNViTEmbeddings(TTNNModule):
         self.position_embeddings = ttnn.to_device(self.position_embeddings, self.device)
         super().preprocess_weights_impl()
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, pixel_values, **kwargs):
         patch_embedding_output = self.patch_embeddings(pixel_values, **kwargs)
         batch = pixel_values.shape[0]
@@ -665,6 +670,7 @@ class TTNNMaxPool2dNHWC(TTNNModule):
         new_maxpool._fallback_torch_layer = NHWCMaxpoolPytorch(maxpool)
         return new_maxpool
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor, reshape_output=True) -> ttnn.Tensor:
         """Forward pass through linear layer."""
         input_shape = get_shape_from_module_name(self.module_name, self.model_config)
@@ -727,6 +733,7 @@ class TTNNUpsampleNHWC(TTNNModule):
         new_upsample._fallback_torch_layer = NHWCUpsamplePytorch(upsample)
         return new_upsample
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass through Upsample layer."""
         batch_size, input_height, input_width, channels = input_tensor.shape

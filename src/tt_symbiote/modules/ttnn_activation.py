@@ -7,7 +7,7 @@
 import torch
 import ttnn
 
-from tt_symbiote.core.module import TTNNModule
+from tt_symbiote.core.module import TTNNModule, DeviceArch, SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, run_on_devices
 
 
 class TTNNSilu(TTNNModule):
@@ -17,6 +17,7 @@ class TTNNSilu(TTNNModule):
         super().__init__()
         self._fallback_torch_layer = torch.nn.SiLU()
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass through SiLU activation."""
         if input_tensor.layout != ttnn.TILE_LAYOUT:
@@ -32,6 +33,7 @@ class TTNNReLU(TTNNModule):
         super().__init__()
         self._fallback_torch_layer = torch.nn.ReLU()
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass through ReLU activation."""
         if input_tensor.layout != ttnn.TILE_LAYOUT:
@@ -47,6 +49,7 @@ class TTNNGelu(TTNNModule):
         super().__init__()
         self._fallback_torch_layer = torch.nn.GELU()
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass through GELU activation."""
         if input_tensor.layout != ttnn.TILE_LAYOUT:

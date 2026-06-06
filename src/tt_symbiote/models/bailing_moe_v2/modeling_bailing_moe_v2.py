@@ -19,7 +19,7 @@ from transformers.modeling_attn_mask_utils import (
 )
 from transformers.modeling_outputs import MoeModelOutputWithPast
 
-from tt_symbiote.core.module import TTNNModule
+from tt_symbiote.core.module import TTNNModule, DeviceArch, run_on_devices
 from tt_symbiote.core.run_config import trace_enabled
 from tt_symbiote.models.auto.auto_mappings import register_recipe
 from tt_symbiote.modules.ttnn_attention import PagedAttentionConfig, TTNNBailingMoEAttention, TTNNPagedAttentionKVCache
@@ -381,6 +381,7 @@ class TTNNBailingMoEDecoderLayer(TTNNModule):
 
         return new_layer
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(
         self,
         hidden_states,
@@ -507,6 +508,7 @@ class TTNNBailingMoEDecoderLayerPadded(TTNNModule):
         ends[dim] = length
         return ttnn.slice(tensor, starts, ends)
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(
         self,
         hidden_states,

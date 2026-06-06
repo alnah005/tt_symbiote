@@ -64,32 +64,16 @@ classifiers = [
 # - `loguru` is tt_symbiote-specific (not in HF) and is needed by the vendored
 #   arch helpers in src/tt_symbiote/core/arch.py.
 #
-# - `ttnn` IS published on PyPI (https://pypi.org/project/ttnn/) and is
-#   pinned below as a HARD dependency so that `pip install tt_symbiote`
-#   gives a runnable install in one step. The pin here MUST stay in
-#   lockstep with `scripts/ttnn-pin.txt` (canonical source of truth: the
-#   bootstrap script reads it to probe the system sfpi).
-#
-#   Why a hard dep (vs an optional extra)? Several modules under
-#   `src/tt_symbiote/core/` (run_config.py, utils.py, ccl.py, arch.py)
-#   do top-level `import ttnn` to read enums, dtypes, and Config types
-#   used as dataclass defaults at module-load time. Making ttnn optional
-#   would require lazy-importing each of those sites and shimming every
-#   ttnn type referenced at module scope — feasible, but the readme's
-#   promise that `pip install tt_symbiote` *just works* matters more
-#   than supporting a no-ttnn install path for type-checking-only use.
-#
-#   Caveat the user must still understand: each `ttnn` wheel embeds a
-#   specific sfpi RISC-V toolchain version inside
-#   `ttnn/tt_metal/sfpi-version`, and JIT-compiles firmware kernels at
-#   first `open_mesh_device(...)` call using the system-installed
-#   `riscv-tt-elf-g++`. If the system sfpi at `/opt/tenstorrent/sfpi/`
-#   doesn't match the wheel's pin, every device-open fails with
-#   "unrecognized command-line option". On such hosts, users should
-#   either reinstall a matching `ttnn` wheel against their sfpi or use
-#   `scripts/bootstrap_venv.sh`, which validates the sfpi *before*
-#   pip-installing. See `docs/install_prerequisites.md` for the
-#   (ttnn, sfpi) compatibility table.
+# - `ttnn` is NOT a PyPI dependency. It is provided by a tt_metal SOURCE
+#   BUILD at `$TT_METAL_HOME` (commit pinned in `scripts/ttnn-pin.txt`),
+#   NOT a PyPI wheel. Several modules under `src/tt_symbiote/core/`
+#   (run_config.py, utils.py, ccl.py, arch.py) do top-level `import ttnn`,
+#   so a bare `pip install -e .` requires an externally-provided ttnn
+#   (source build) to be importable. `scripts/bootstrap_venv.sh` makes the
+#   source-built ttnn importable and validates the pinned tt-metal commit
+#   + derives sfpi from `$TT_METAL_HOME/tt_metal/sfpi-version`. Software-only
+#   collection under `tests/auto/` does NOT need ttnn (its conftest installs
+#   sys.modules stubs).
 #
 # - `tracy` is NOT declared. It's tt-metal-built and only needed for
 #   performance work; `tt_symbiote/core/run_config.py` already falls
@@ -97,10 +81,10 @@ classifiers = [
 dependencies = [
   # tt_symbiote-specific pin
   "transformers==5.9.0",
-  # Tenstorrent runtime. Pin MUST match scripts/ttnn-pin.txt; see the
-  # commentary above for the (ttnn, sfpi) coupling that motivates the
-  # explicit pin (vs a lower-bound range).
-  "ttnn==0.68.0",
+  # NOTE: ttnn is intentionally NOT a dependency here. It is provided by a
+  # tt_metal SOURCE BUILD at $TT_METAL_HOME (commit pinned in
+  # scripts/ttnn-pin.txt). A bare `pip install -e .` requires an
+  # externally-provided ttnn to be importable; use scripts/bootstrap_venv.sh.
   # Mirror of transformers v5.9.0's `extras["torch"]` (required for us)
   "torch>=2.4",
   "accelerate>=1.1.0",
@@ -178,14 +162,16 @@ skip = ["__init__.py"]
 line-length = 120
 
 [tool.pytest.ini_options]
-# Default collection paths:
+# Collected by default (see `testpaths` below):
 #   - tests/auto/    software-only tests (no hardware; ttnn deferred/mocked)
 #   - tests/shared/  shared helpers (pcc_utils, shared_configs) + shared
 #                    capability tests (attention/conv/moe/rope/dpl)
-#   - tests/models/  RICH per-model dirs (e2e-traced-correct)
+# NOT auto-collected (documented tree, currently empty this session):
+#   - tests/models/  RICH per-model dirs (e2e-traced-correct) — not in `testpaths`;
+#                    run explicitly when populated.
 # `tests/experimental/` is deliberately excluded (see tests/experimental/README.md)
 # — those tests target models whose `src/tt_symbiote/models/<name>/` package is
 # NOT in the supported `_RECIPE_BEARING_SUBPACKAGES` registry and are not
 # guaranteed to import.
-testpaths = ["tests/auto", "tests/shared", "tests/models"]
+testpaths = ["tests/auto", "tests/shared"]
 addopts = "-q --ignore=tests/experimental"

@@ -1,0 +1,21 @@
+{
+  "_comment": "Qwen/Qwen3-VL-2B-Instruct dimensions from config.json. No weights downloaded; leaves built from config at runtime.",
+  "hf_model_id": "Qwen/Qwen3-VL-2B-Instruct",
+  "text": {
+    "hidden_size": 2048,
+    "intermediate_size": 6144,
+    "rms_norm_eps": 1e-06,
+    "hidden_act": "silu",
+    "rms_norm_input": [1, 32, 2048],
+    "mlp_input": [1, 32, 2048]
+  },
+  "vision": {
+    "hidden_size": 1024,
+    "intermediate_size": 4096,
+    "out_hidden_size": 2048,
+    "spatial_merge_size": 2,
+    "mlp_input": [1, 64, 1024],
+    "merger_merged_dim": 4096,
+    "merger_input": [16, 4096]
+  }
+}

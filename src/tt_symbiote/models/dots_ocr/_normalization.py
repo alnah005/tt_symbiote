@@ -7,11 +7,7 @@
 from torch import nn
 import torch
 import ttnn
-from tt_symbiote.core.module import (
-    TTNNModule,
-    run_on_devices,
-    SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS,
-)
+from tt_symbiote.core.module import TTNNModule, SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, run_on_devices
 from tt_symbiote.core.run_config import trace_enabled
 
 
@@ -47,6 +43,7 @@ class TTNNLayerNorm(TTNNModule):
         if self.tt_bias is not None:
             self.tt_bias = ttnn.to_device(self.tt_bias, self.device)
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass through LayerNorm."""
         if input_tensor.layout != ttnn.TILE_LAYOUT:
@@ -99,6 +96,7 @@ class TTNNRMSNorm(TTNNModule):
         """Move weights to TTNN device."""
         self.tt_weight = ttnn.to_device(self.tt_weight, self.device)
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -166,6 +164,7 @@ class TTNNLocalRMSNorm(TTNNModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass through local RMSNorm. Input is 4D [batch, heads, seq, head_dim]."""
         if x.layout != ttnn.TILE_LAYOUT:

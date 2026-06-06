@@ -1,0 +1,43 @@
+{
+  "_comment": "inclusionAI/Ling-mini-2.0 (bailing_moe_v2) dimensions from config.json. No weights downloaded.",
+  "hf_model_id": "inclusionAI/Ling-mini-2.0",
+  "hidden_size": 2048,
+  "intermediate_size": 5120,
+  "moe_intermediate_size": 512,
+  "num_attention_heads": 16,
+  "num_key_value_heads": 4,
+  "head_dim": 128,
+  "num_experts": 256,
+  "num_experts_per_tok": 8,
+  "num_shared_experts": 1,
+  "first_k_dense_replace": 1,
+  "rms_norm_eps": 1e-06,
+  "num_hidden_layers": 20,
+  "module_shapes": {
+    "rms_norm": {
+      "weight": [2048],
+      "eps": 1e-06,
+      "input": [1, 32, 2048]
+    },
+    "q_proj": {
+      "weight": [2048, 2048],
+      "bias": null,
+      "input": [1, 32, 2048]
+    },
+    "o_proj": {
+      "weight": [2048, 2048],
+      "bias": null,
+      "input": [1, 32, 2048]
+    },
+    "gate_proj": {
+      "weight": [5120, 2048],
+      "bias": null,
+      "input": [1, 32, 2048]
+    },
+    "down_proj": {
+      "weight": [2048, 5120],
+      "bias": null,
+      "input": [1, 32, 5120]
+    }
+  }
+}

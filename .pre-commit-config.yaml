@@ -41,3 +41,14 @@ repos:
     rev: v1.35.1
     hooks:
       - id: yamllint
+
+  - repo: local
+    hooks:
+      - id: tier-structure
+        name: tt_symbiote tier-structure + CLAUDE.md checks
+        entry: python scripts/check_tier_structure.py --changed-only --skip-lint
+        language: system
+        pass_filenames: true
+        types: [python]
+        always_run: true
+        files: ^(src/tt_symbiote/|tests/(models|experimental|shared)/)

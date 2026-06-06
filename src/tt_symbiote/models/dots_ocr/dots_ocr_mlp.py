@@ -4,11 +4,7 @@
 import torch
 import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
-from tt_symbiote.core.module import (
-    TTNNModule,
-    run_on_devices,
-    SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS,
-)
+from tt_symbiote.core.module import TTNNModule, SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, run_on_devices
 from tt_symbiote.models.dots_ocr._linear import (
     TTNNLinearLLamaIColShardedWAllReducedFusedGateUp,
     TTNNLinearLLamaIColShardedWRowSharded,
@@ -365,6 +361,7 @@ class TTNNDotsOCRMLP(TTNNModule):
         self.down_proj.set_weight_dtype(dtype)
         return self
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)

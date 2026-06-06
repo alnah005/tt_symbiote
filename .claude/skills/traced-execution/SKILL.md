@@ -11,13 +11,16 @@ Set up trace capture and replay for a model test for deterministic, low-overhead
 
 **File naming**: Model directories use HuggingFace `transformers` snake_case naming.
   - Model source: `src/tt_symbiote/models/<model_name>/modeling_<model_name>.py`
-  - Model tests: `tests/models/<model_name>/test_modeling_<model_name>.py`
+  - Model tests: `tests/models/<model_name>/Tier4/test_modeling_<model_name>.py`
 
 **Test location**: Per-model tests live under `tests/models/<model_name>/` (RICH, e2e-traced)
-  or `tests/experimental/<model_name>/` (partial-TTNN); for an already-brought-up model default
-  to `tests/models/<model_name>/`. Traced tests are written to
-  `tests/models/<model_name>/test_traced_<model_name>.py`; `assert_pcc` is imported from
-  `tests/shared/pcc_utils.py`.
+  or `tests/experimental/<model_name>/` (partial-TTNN), in the tier-dir layout. Full-model and
+  trace tests go in `Tier4/`. For an already-brought-up model default to
+  `tests/models/<model_name>/Tier4/`. Traced tests are written to
+  `tests/models/<model_name>/Tier4/test_traced_<model_name>.py` (experimental:
+  `tests/experimental/<model_name>/Tier4/test_traced_<model_name>.py`); `assert_pcc` is imported
+  from `tests/shared/pcc_utils.py`. Tier files load ROOT artifacts via
+  `Path(__file__).parent.parent / "shapes.json"`.
 
 **Pure TTNN forward**: ALL `TTNNModule.forward()` methods must use pure `ttnn.*` ops only.
   No `torch.*` calls in the compute path. This is ESPECIALLY critical for traced execution,
@@ -116,14 +119,29 @@ This skill follows a mandatory loop structure. If the loop fails 5 times, report
 4. Draft the traced test file
 
 ### VERIFY Phase (no hardware, no user approval needed)
-1. Verify the base PCC test exists: `test -f tests/models/<model_name>/test_modeling_<model_name>.py`
+0. Run the check-only structure auditor to confirm `Tier4/` exists for this model before writing
+   `Tier4/test_traced_<model_name>.py`:
+   ```bash
+   python scripts/check_tier_structure.py --model <model_name> --skip-lint --format json 2>/dev/null \
+     | python -c "import json,sys; r=json.load(sys.stdin); print('OK' if r['schema_version']==1 else 'BAD')"
+   ```
+   Key off `failures[].code` (e.g. `MISSING_TIER_DIR`), never English text.
+1. Verify the base PCC test exists: `test -f tests/models/<model_name>/Tier4/test_modeling_<model_name>.py`
 2. Verify all imports resolve: `python -c "from tt_symbiote.core.run_config import TracedRun"`
 3. Verify no `torch.*` calls in any model `forward()` methods (torch ops break trace capture):
    ```bash
    grep -n "torch\." src/tt_symbiote/models/<model_name>/modeling_<model_name>.py | grep -v "import\|#\|preprocess_weights\|from_torch\|__init__"
    ```
 4. Verify `@run_on_devices` guards are present (modules without guards fall back to torch, breaking trace)
-5. If ANY verification fails, return to PLAN with failure details and re-plan
+5. **VERIFY trace discipline (D4):** no `_trace_enabled` instance flag anywhere; trace enablement is
+   expressed SOLELY via the `@trace_enabled` class decorator on the ACTUAL trace unit, and checked at
+   runtime via `is_trace_enabled(<unit>)`. NEVER decorate a parent/wrapper module just to flag a
+   child -- check `is_trace_enabled(self.<child>)` instead. The structure auditor enforces this via
+   the `TRACE_INSTANCE_FLAG` and `TOWER_TRACE_DECORATED` codes:
+   ```bash
+   grep -rn "self._trace_enabled" src/tt_symbiote/models/ | grep -v is_trace_enabled || echo "no instance trace flag (good)"
+   ```
+6. If ANY verification fails, return to PLAN with failure details and re-plan
 
 ### EXECUTE Phase (only after VERIFY passes)
 Write the traced test file and run the tests.
@@ -186,7 +204,8 @@ trace-enablement and pull it into the `TracedRun` dispatch lifecycle).
 
 ## Step 3 -- Generate Traced Test File
 
-Create `tests/models/<model_name>/test_traced_<model_name>.py` (SEPARATE from pcc-test-gen tests):
+Create `tests/models/<model_name>/Tier4/test_traced_<model_name>.py` (SEPARATE from pcc-test-gen
+tests; experimental: `tests/experimental/<model_name>/Tier4/test_traced_<model_name>.py`):
 
 ```python
 # SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
@@ -289,10 +308,10 @@ def test_traced_multiple_replays(mesh_device):
 
 ```bash
 # Run the same model test in NORMAL mode first (baseline PCC reference)
-TT_SYMBIOTE_RUN_MODE=NORMAL pytest tests/models/<model_name>/test_modeling_<model_name>.py -x -s
+TT_SYMBIOTE_RUN_MODE=NORMAL pytest tests/models/<model_name>/Tier4/test_modeling_<model_name>.py -x -s
 
 # Run traced tests (uses TRACED mode set in the test file via os.environ)
-pytest tests/models/<model_name>/test_traced_<model_name>.py -x -s
+pytest tests/models/<model_name>/Tier4/test_traced_<model_name>.py -x -s
 ```
 
 ## Step 5 -- Report PCC Delta

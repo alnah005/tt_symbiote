@@ -7,7 +7,7 @@
 import torch
 import ttnn
 
-from tt_symbiote.core.module import TTNNModule
+from tt_symbiote.core.module import TTNNModule, DeviceArch, SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, run_on_devices
 from tt_symbiote.core.utils import ensure_tile_layout
 
 
@@ -29,6 +29,7 @@ class TTNNPermute(TTNNModule):
         super().__init__()
         self._fallback_torch_layer = TorchPermute()
 
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor, perm) -> ttnn.Tensor:
         """Forward pass through Permute activation."""
         tt_output = ttnn.permute(input_tensor, perm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -53,6 +54,7 @@ class TTNNReshape(TTNNModule):
         super().__init__()
         self._fallback_torch_layer = TorchReshape()
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(self, input_tensor: ttnn.Tensor, shape) -> ttnn.Tensor:
         """Forward pass through Reshape activation."""
         tt_output = ttnn.reshape(input_tensor, shape, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -77,6 +79,7 @@ class TTNNAdd(TTNNModule):
         super().__init__()
         self._fallback_torch_layer = PyTorchAdd()
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(self, input_tensor1: ttnn.Tensor, input_tensor2: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass through Add operation."""
         input_tensor1 = ensure_tile_layout(input_tensor1)

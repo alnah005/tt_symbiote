@@ -1,7 +1,0 @@
-{
-  "tt_metal_commit": "",
-  "device_arch": "T3K",
-  "pcc_threshold": 0.99,
-  "hf_model_id": "Qwen/Qwen3-VL-2B-Instruct",
-  "hf_revision": "main"
-}

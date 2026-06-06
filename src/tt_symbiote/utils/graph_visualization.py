@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+
 def draw_model_graph(model, max_depth=None, output_file="model_graph.png"):
     """Create a clean tree visualization showing module nesting.
 

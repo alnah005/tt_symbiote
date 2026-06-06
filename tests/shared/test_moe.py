@@ -9,7 +9,7 @@ from tt_symbiote.modules.ttnn_moe import (
     TTNNMoE,
 )
 from tt_symbiote.utils.device_management import set_device
-from tt_symbiote.core.utils import compare_fn_outputs
+from tests.shared.pcc_utils import assert_pcc
 import ttnn
 
 
@@ -59,4 +59,4 @@ def test_glm4_moe_full(mesh_device, default_moe_config, real_weights):
     ttnn_model = TTNNMoE.from_torch(model)
     set_device(ttnn_model, mesh_device)
     outputs_ttnn = ttnn_model(inputs)
-    compare_fn_outputs(outputs_torch, outputs_ttnn, "Glm4MoeMoE")
+    assert_pcc(outputs_ttnn, outputs_torch, threshold=0.99, msg="Glm4MoeMoE")

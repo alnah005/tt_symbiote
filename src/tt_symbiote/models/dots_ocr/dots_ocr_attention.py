@@ -4,12 +4,7 @@
 
 import torch
 import ttnn
-from tt_symbiote.core.module import (
-    TTNNModule,
-    run_on_devices,
-    DeviceArch,
-    SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS,
-)
+from tt_symbiote.core.module import TTNNModule, DeviceArch, SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, run_on_devices
 from tt_symbiote.core.tensor import TorchTTNNTensor
 from tt_symbiote.core.run_config import trace_enabled
 from tt_symbiote.models.dots_ocr._attention import (
@@ -593,6 +588,7 @@ class TTNNDotsOCRAttention(TTNNModule):
         attn_output = ttnn.squeeze(attn_output, 1)
         return attn_output, None
 
+    @run_on_devices(DeviceArch.T3K, DeviceArch.P150x4)
     def forward(
         self,
         hidden_states,
@@ -655,9 +651,7 @@ class TTNNDotsOCRAttentionT3K(TTNNDotsOCRAttention):
 
         # Guardrail: the decode width-shard CoreRange(0,0)->(num_kv_heads-1,0)
         # requires num_kv_heads <= grid.x (8) on the per-device 8x8 grid.
-        assert new_attn.num_key_value_heads <= 8, (
-            "T3K width-shard requires num_kv_heads <= grid.x (8)"
-        )
+        assert new_attn.num_key_value_heads <= 8, "T3K width-shard requires num_kv_heads <= grid.x (8)"
 
         q_size = new_attn.num_attention_heads * new_attn.head_dim
         kv_size = new_attn.num_key_value_heads * new_attn.head_dim

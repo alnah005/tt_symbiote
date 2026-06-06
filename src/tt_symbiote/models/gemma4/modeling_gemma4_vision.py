@@ -53,7 +53,7 @@ from __future__ import annotations
 import ttnn
 from torch import nn
 
-from tt_symbiote.core.module import TTNNModule
+from tt_symbiote.core.module import TTNNModule, DeviceArch, run_on_devices
 from tt_symbiote.modules.ttnn_linear import TTNNLinear
 
 __all__ = [
@@ -137,6 +137,7 @@ class TTNNGemma4VisionMLP(TTNNModule):
         self.down_proj.move_weights_to_device()
         super().move_weights_to_device_impl()
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         gate = self.gate_proj(x)
         gate = ttnn.gelu(gate)
@@ -194,6 +195,7 @@ class TTNNGemma4MultimodalEmbedder(TTNNModule):
         self.embedding_projection.move_weights_to_device()
         super().move_weights_to_device_impl()
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(self, inputs_embeds):
         # Norm on host (weightless RMSNorm; preserves bit-exact behaviour
         # with the upstream HF reference). Projection on device.

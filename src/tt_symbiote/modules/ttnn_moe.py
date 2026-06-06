@@ -14,7 +14,7 @@ from torch.nn import functional as F
 from transformers.configuration_utils import PretrainedConfig
 from ttnn.model_preprocessing import preprocess_linear_weight
 
-from tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices
+from tt_symbiote.core.module import TTNNModule, DeviceArch, run_on_devices
 from tt_symbiote.core.run_config import disable_trace
 from tt_symbiote.core.tensor import TorchTTNNTensor
 from tt_symbiote.modules.ttnn_linear import (
@@ -22,18 +22,6 @@ from tt_symbiote.modules.ttnn_linear import (
     TTNNLinearLLamaIColShardedWRowSharded,
     TTNNLinearSilu,
 )
-
-
-# Helper to robustly convert various tensor types to a torch.Tensor
-def _to_torch_any(tensor):
-    from tt_symbiote.core.tensor import TorchTTNNTensor
-
-    if isinstance(tensor, TorchTTNNTensor):
-        return tensor.to_torch
-    if isinstance(tensor, torch.Tensor):
-        return tensor
-    # Assume it's a ttnn.Tensor
-    return TorchTTNNTensor(tensor).to_torch
 
 
 def _safe_repeat(tensor: ttnn.Tensor, shape: ttnn.Shape) -> ttnn.Tensor:
@@ -530,6 +518,7 @@ class TTNNGlm4MoeExpertLayers(TTNNModule):
 
         return module
 
+    @run_on_devices(DeviceArch.T3K)
     @disable_trace
     def forward(self, current_state: torch.Tensor, expert_idx: int) -> torch.Tensor:
         """Execute single expert forward pass."""
@@ -647,6 +636,7 @@ class TTNNGlm4MoeNaiveMoe(TTNNModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(self, x, topk_experts_indices, topk_experts_weights):
         return self.torch_layer(
             TorchTTNNTensor(x),
@@ -656,6 +646,7 @@ class TTNNGlm4MoeNaiveMoe(TTNNModule):
 
 
 class TTNNGlm4MoeTopkRouter(TTNNLinearIColShardedWRowSharded):
+    @run_on_devices(DeviceArch.T3K)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         tt_output = super().forward(input_tensor)
         tt_output = ttnn.reshape(tt_output, [-1] + [tt_output.shape[-1]])
@@ -675,6 +666,7 @@ class TTNNGlm4MoeMLP(TTNNModule):
         tt_module.down_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_layer.down_proj)
         return tt_module
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x_gate = self.gate_proj(x)
         x_up = self.up_proj(x)
@@ -721,6 +713,7 @@ class TTNNGlm4MoeRouteTokenToExperts(TTNNModule):
         self.scatter_src = ttnn.to_device(self.scatter_src, self.device)
         self.expert_scale = ttnn.to_device(self.expert_scale, self.device)
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(self, router_logits: ttnn.Tensor):
         if router_logits.layout != ttnn.TILE_LAYOUT:
             router_logits = ttnn.to_layout(
@@ -782,8 +775,10 @@ class TTNNGlm4MoeRouteTokenToExperts(TTNNModule):
         masked_scores = ttnn.mul(scores_with_bias, active_experts_mask)
         ttnn.deallocate(active_experts_mask)
 
-        # Top-k experts from active experts
-        _, topk_expert_idx = ttnn.topk(masked_scores, k=self.torch_layer.top_k, dim=3)
+        # Top-k experts from active experts (descending by masked score; matches the
+        # pure-TTNN sibling TTNNMoERouterDecode at line ~933). sorted=True makes the
+        # top_k axis already canonically ordered, removing the need for a torch re-sort.
+        _, topk_expert_idx = ttnn.topk(masked_scores, k=self.torch_layer.top_k, dim=3, largest=True, sorted=True)
         ttnn.deallocate(masked_scores)
 
         # Gather original sigmoid scores (NO bias)
@@ -807,15 +802,14 @@ class TTNNGlm4MoeRouteTokenToExperts(TTNNModule):
 
         topk_weights = ttnn.reshape(topk_weights, ttnn.Shape((T, self.torch_layer.top_k)))
 
-        # Canonicalize ordering: sort per-token by weight for deterministic output.
-        topk_idx_t = _to_torch_any(topk_expert_idx).to(torch.int64)
-        topk_w_t = _to_torch_any(topk_weights).to(torch.float32)
-        # Sort weights descending and permute indices
-        sorted_w, sorted_pos = torch.sort(topk_w_t, dim=1, descending=True)
-        sorted_idx = torch.gather(topk_idx_t, 1, sorted_pos)
-        # Convert back to ttnn formats
-        topk_expert_idx = ttnn.from_torch(sorted_idx.to(torch.int32))
-        topk_weights = ttnn.from_torch(sorted_w.to(torch.bfloat16))
+        # topk_expert_idx (int from ttnn.topk) and topk_weights (bfloat16 from the scale mul)
+        # are returned directly. The top_k axis is already descending-by-masked-score from the
+        # sorted=True topk above. The downstream consumer (Glm4MoeNaiveMoeHybrid.forward) builds
+        # a one-hot expert_mask and accumulates via index_add_ with column-consistent
+        # (expert, weight) pairing, so any reordering of the top_k axis is a pure relabeling and
+        # the MoE weighted sum is order-invariant. The former torch re-sort was redundant
+        # canonicalization. (Tie-order on equal masked-scores differs from torch.sort's stable
+        # order, but distinct-expert ties are vanishingly rare and the consumer is reorder-invariant.)
         return topk_expert_idx, topk_weights
 
 
@@ -893,6 +887,7 @@ class TTNNMoERouterDecode(TTNNModule):
             self.device,
         )
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(self, logits: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         r = self._fallback_torch_layer
 

@@ -40,17 +40,22 @@ src/tt_symbiote/
 tests/
   conftest.py        # ROOT conftest: pcc_threshold + autouse tt_metal_commit_check (non-blocking)
   auto/              # Software-only tests (no hardware needed, mock TTNN)
-    test_structure_lint.py  # stdlib-only lint enforcing the two-tree test layout
+    test_tier_structure.py  # stdlib-only pytest wrapper over scripts/check_tier_structure.py
   shared/            # Shared helpers + shared capability tests (hardware)
     pcc_utils.py     # PCC assertion helpers
     shared_configs.py  # Config presets
     conftest.py      # Shared-tree conftest (fixture-free; fixtures live in ROOT conftest.py)
     test_attention.py, test_conv.py, test_moe.py, test_rope.py, test_dpl.py
   models/            # RICH per-model dirs (e2e-traced-correct)
-    <name>/          # __init__.py, test_config.json, shapes.json, op_map.json,
-                     #   test_ops/composites/decoder/modeling/traced_<name>.py
+    <name>/          # ROOT: __init__.py, test_config.json, shapes.json, op_map.json,
+                     #   bringup_status.json, conftest.py, perf_results/ profiling/ sweep_results/
+      Tier1/         # __init__.py, test_ops_<name>.py            (leaf ops)
+      Tier2/         # __init__.py, test_composites_<name>.py     (attn/mlp/moe/norm)
+      Tier3/         # __init__.py, test_decoder_<name>.py, test_sweep_decoder_<name>.py
+      Tier4/         # __init__.py, test_modeling_<name>.py, test_traced_<name>.py, ... (full model/e2e)
   experimental/      # MINIMAL per-model dirs (partial TTNN; excluded from default collection)
-    <name>/          # __init__.py + test_config.json
+    <name>/          # ROOT: __init__.py + test_config.json; Tier1..Tier4/ (each __init__.py;
+                     #   test_modeling_<name>.py + variants -> Tier4/; Tier1-3 may be empty)
 ```
 
 ## Architecture: The TTNNModule Lifecycle
@@ -284,14 +289,30 @@ tt-metal commit + timestamp). The orchestrator is BLOCKED until this is logged; 
 additive and never removes existing keys.
 
 ### Test Location
-- RICH per-model tests (e2e-traced-correct): `tests/models/<name>/test_modeling_<name>.py`
-  (plus `test_ops/composites/decoder/traced_<name>.py`, `shapes.json`, `op_map.json`).
+- RICH per-model tests (e2e-traced-correct): `tests/models/<name>/Tier4/test_modeling_<name>.py`
+  (plus tier-scoped `Tier1/test_ops_<name>.py`, `Tier2/test_composites_<name>.py`,
+  `Tier3/test_decoder_<name>.py`, `Tier4/test_traced_<name>.py`, etc.). The ROOT-only artifacts
+  `shapes.json`, `op_map.json`, `test_config.json`, `conftest.py`, `__init__.py`, and the output
+  dirs (`perf_results/`, `profiling/`, `sweep_results/`) live at the MODEL ROOT, above the tier dirs.
+- Tier semantics: **Tier1**=leaf ops, **Tier2**=composites (attn/mlp/moe/norm), **Tier3**=decoder/
+  block layer (+ decoder-scoped sweeps), **Tier4**=full model + e2e + trace + semantic. A tier file
+  lives in the dir matching the granularity of the unit it exercises.
+- Tier test files load ROOT artifacts via `Path(__file__).parent.parent / "shapes.json"` (the tier
+  dir is one level below the model root). Each tier dir carries an `__init__.py` (rationale:
+  pytest prepend-mode collision avoidance; the collected module root is `<name>.Tier{N}.test_*`).
 - Partial-TTNN per-model tests (bring-up not yet complete): `tests/experimental/<name>/`
-  (MINIMAL floor: `__init__.py` + `test_config.json`; excluded from default collection).
+  (MINIMAL floor: ROOT `__init__.py` + `test_config.json`; four `Tier1..Tier4/` dirs each with an
+  `__init__.py`; `test_modeling_<name>.py` (+ variants) -> `Tier4/`; Tier1-3 may be empty;
+  excluded from default collection).
 - Shared helpers + shared capability tests: `tests/shared/`.
 - Software-only tests: `tests/auto/`.
-- The old per-model capabilities tree has been REMOVED; do NOT recreate it.
-- Every per-model dir (both trees) carries a `test_config.json` (see "### Per-Model test_config.json").
+- The old per-model *capabilities* tree has been REMOVED; do NOT recreate it. The tier-dir layout
+  (`Tier1..Tier4/` inside each `tests/<tree>/<name>/`) is the CURRENT layout and is distinct from
+  the removed per-model capabilities tree; do not confuse the two.
+- Structure is enforced by `scripts/check_tier_structure.py` (check-only) wired as a pre-commit hook
+  and as `tests/auto/test_tier_structure.py`.
+- Every per-model dir (both trees) carries a ROOT-level `test_config.json` (see
+  "### Per-Model test_config.json").
 
 ### PCC Testing
 - `compare_fn_outputs()` from `core/utils.py` only prints warnings -- it does NOT assert. NEVER use it as sole validation.
@@ -301,8 +322,8 @@ additive and never removes existing keys.
 - Known tech debt: Existing shared tests (test_attention.py, test_conv.py, test_moe.py, test_rope.py) still use `compare_fn_outputs()` instead of `assert_pcc()`. These should be migrated. New tests MUST NOT use `compare_fn_outputs()`.
 
 ### Per-Model test_config.json
-Every per-model dir under `tests/models/` and `tests/experimental/` carries a
-`test_config.json` with these keys (lint checks presence + types only):
+Every per-model dir under `tests/models/` and `tests/experimental/` carries a ROOT-level
+`test_config.json` (above the `Tier1..Tier4/` dirs) with these keys (lint checks presence + types only):
 ```json
 {
   "tt_metal_commit": "<40-char git hash, or '' if not yet validated>",
@@ -449,11 +470,14 @@ tt-perf-report --ignore-signposts */ops_perf_results_*.csv > perf_report.txt
 
 # Capture tt-metal commit hash
 git -C $TT_METAL_HOME rev-parse HEAD
+
+# Audit the tier-dir test structure + CLAUDE.md checks (check-only; never mutates)
+python scripts/check_tier_structure.py [--all|--model <name>] [--tree {models,experimental,both}] [--format json]
 ```
 
 ## Do Not
 - Do NOT use `register_module_replacement_dict` (deprecated alias for `register_modules`)
-- Per-model RICH tests live in `tests/models/<name>/`; partial-TTNN in `tests/experimental/<name>/`; do NOT recreate the old per-model capabilities tree
+- Per-model RICH tests live in `tests/models/<name>/Tier4/test_modeling_<name>.py` (tier-dir layout); partial-TTNN in `tests/experimental/<name>/Tier4/`; do NOT recreate the old per-model *capabilities* tree (distinct from the Tier1..Tier4/ layout)
 - Do NOT create `TTNNModule.forward()` without `@run_on_devices`
 - Do NOT use `torch.*` calls inside `TTNNModule.forward()` -- pure TTNN only
 - Do NOT reference or recreate anything related to gr00t

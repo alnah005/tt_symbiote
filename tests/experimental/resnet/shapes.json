@@ -1,0 +1,60 @@
+{
+  "_comment": "microsoft/resnet-18 dimensions (basic layers). NCHW reference shapes; TTNN wrappers consume NHWC internally. No header needed for JSON.",
+  "hf_model_id": "microsoft/resnet-18",
+  "layer_type": "basic",
+  "num_channels": 3,
+  "embedding_size": 64,
+  "hidden_sizes": [64, 128, 256, 512],
+  "depths": [2, 2, 2, 2],
+  "hidden_act": "relu",
+  "module_shapes": {
+    "conv_layer_stem": {
+      "in_channels": 3,
+      "out_channels": 64,
+      "kernel_size": 7,
+      "stride": 2,
+      "input_nchw": [1, 3, 224, 224]
+    },
+    "conv_layer_3x3": {
+      "in_channels": 64,
+      "out_channels": 64,
+      "kernel_size": 3,
+      "stride": 1,
+      "input_nchw": [1, 64, 56, 56]
+    },
+    "shortcut": {
+      "in_channels": 64,
+      "out_channels": 128,
+      "stride": 2,
+      "input_nchw": [1, 64, 56, 56]
+    },
+    "basic_layer_no_shortcut": {
+      "in_channels": 64,
+      "out_channels": 64,
+      "stride": 1,
+      "input_nchw": [1, 64, 56, 56]
+    },
+    "basic_layer_with_shortcut": {
+      "in_channels": 64,
+      "out_channels": 128,
+      "stride": 2,
+      "input_nchw": [1, 64, 56, 56]
+    },
+    "embeddings": {
+      "num_channels": 3,
+      "embedding_size": 64,
+      "input_nchw": [1, 3, 224, 224]
+    },
+    "adaptive_avg_pool": {
+      "channels": 512,
+      "input_nhwc": [1, 7, 7, 512]
+    },
+    "stage": {
+      "in_channels": 64,
+      "out_channels": 64,
+      "stride": 1,
+      "depth": 2,
+      "input_nchw": [1, 64, 56, 56]
+    }
+  }
+}

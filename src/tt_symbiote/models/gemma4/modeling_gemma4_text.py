@@ -54,7 +54,7 @@ import math
 
 import ttnn
 
-from tt_symbiote.core.module import TTNNModule
+from tt_symbiote.core.module import TTNNModule, DeviceArch, run_on_devices
 from tt_symbiote.modules.ttnn_embedding import TTNNEmbedding
 from tt_symbiote.modules.ttnn_linear import TTNNLinear
 
@@ -131,6 +131,7 @@ class TTNNGemma4RMSNorm(TTNNModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -248,6 +249,7 @@ class TTNNGemma4TextMLP(TTNNModule):
         self.down_proj.move_weights_to_device()
         super().move_weights_to_device_impl()
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         gate = self.gate_proj(x)
         # ``ttnn.gelu`` uses the tanh-approximation by default which

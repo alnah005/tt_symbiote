@@ -7,7 +7,7 @@
 from torch import nn
 
 import ttnn
-from tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
+from tt_symbiote.core.module import TTNNModule, DeviceArch, run_on_devices
 from tt_symbiote.core.run_config import (
     DistributedTensorConfig,
     trace_enabled,
@@ -92,6 +92,7 @@ class TTNNEmbedding(TTNNModule):
         ttnn.deallocate(self.tt_weight)
         super().deallocate_weights_impl()
 
+    @run_on_devices(DeviceArch.T3K, DeviceArch.P150x4)
     def forward(self, tt_indices):
         # Embedding op requires UINT32 input; tokenizer ids arrive as INT32.
         # Typecast requires last dim to be a multiple of 32 for row-major, so
@@ -181,6 +182,7 @@ class TTNNRotaryEmbeddingCompute(TTNNModule):
         new_layer._fallback_torch_layer = rotary_emb
         return new_layer
 
+    @run_on_devices(DeviceArch.T3K, DeviceArch.P150x4)
     def forward(self, tt_inv_freq, position_ids):
         # Typecast int32 -> bfloat16 (requires last dim multiple of 32)
         position_ids = ttnn.typecast(position_ids, ttnn.bfloat16)

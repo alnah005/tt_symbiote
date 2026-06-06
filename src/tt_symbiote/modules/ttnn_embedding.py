@@ -7,7 +7,7 @@
 import ttnn
 from torch import nn
 
-from tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices
+from tt_symbiote.core.module import TTNNModule, DeviceArch, run_on_devices
 from tt_symbiote.core.run_config import DistributedTensorConfig, trace_enabled
 from tt_symbiote.utils.math_utils import next_power_of_2 as _next_power_of_2
 
@@ -51,6 +51,7 @@ class TTNNEmbedding(TTNNModule):
         ttnn.deallocate(self.tt_weight)
         super().deallocate_weights_impl()
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(self, tt_indices):
         out = ttnn.embedding(
             tt_indices,
@@ -118,6 +119,7 @@ class TTNNRotaryEmbeddingCompute(TTNNModule):
         new_layer._fallback_torch_layer = rotary_emb
         return new_layer
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(self, tt_inv_freq, position_ids):
         # Typecast int32 -> bfloat16 (requires last dim multiple of 32)
         position_ids = ttnn.typecast(position_ids, ttnn.bfloat16)

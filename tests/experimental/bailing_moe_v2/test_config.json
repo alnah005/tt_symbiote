@@ -1,0 +1,7 @@
+{
+  "tt_metal_commit": "f2e12917564cfdfd50f81debcc12970a557412c8",
+  "device_arch": "T3K",
+  "pcc_threshold": 0.99,
+  "hf_model_id": "inclusionAI/Ling-mini-2.0",
+  "hf_revision": "main"
+}

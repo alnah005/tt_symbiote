@@ -1,0 +1,19 @@
+{
+  "_comment": "google/gemma-4-E2B-it dimensions from config.json. No weights downloaded; leaves built from config at runtime.",
+  "hf_model_id": "google/gemma-4-E2B-it",
+  "text": {
+    "hidden_size": 1536,
+    "intermediate_size": 6144,
+    "rms_norm_eps": 1e-06,
+    "vocab_size": 262144,
+    "hidden_act": "gelu_pytorch_tanh",
+    "rms_norm_input": [1, 32, 1536],
+    "mlp_input": [1, 32, 1536],
+    "embedding_input": [1, 32]
+  },
+  "vision": {
+    "hidden_size": 768,
+    "intermediate_size": 3072,
+    "mlp_input": [1, 64, 768]
+  }
+}

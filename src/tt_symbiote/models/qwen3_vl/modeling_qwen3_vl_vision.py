@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import ttnn
 
-from tt_symbiote.core.module import TTNNModule
+from tt_symbiote.core.module import TTNNModule, DeviceArch, run_on_devices
 from tt_symbiote.modules.ttnn_linear import TTNNLinear
 
 __all__ = [
@@ -77,6 +77,7 @@ class TTNNQwen3VLVisionMLP(TTNNModule):
         self.linear_fc2.move_weights_to_device()
         super().move_weights_to_device_impl()
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(self, hidden_state: ttnn.Tensor) -> ttnn.Tensor:
         hidden_state = self.linear_fc1(hidden_state)
         hidden_state = ttnn.gelu(hidden_state)
@@ -135,6 +136,7 @@ class TTNNQwen3VLVisionPatchMerger(TTNNModule):
         self.linear_fc2.move_weights_to_device()
         super().move_weights_to_device_impl()
 
+    @run_on_devices(DeviceArch.T3K)
     def forward(self, x):
         # LN + the two view() reshapes stay in host torch -- HF's
         # forward is a one-liner once you've picked the pre/post-shuffle
