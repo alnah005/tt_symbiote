@@ -35,7 +35,7 @@ host/device mask inputs needs on-device PCC verification against
 from __future__ import annotations
 
 import math
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import ttnn
 

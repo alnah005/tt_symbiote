@@ -6,19 +6,18 @@
 Ported from the tt-metal reference ``models/experimental/pi0_5/tt/ttnn_common.py``
 (branch ``tt/pi0.5_bh``). Covers:
 
-* SDPA compute-kernel config (HiFi2 + fp32_dest + packer_l1 defaults, env-tunable).
+* SDPA compute-kernel config (HiFi2 + fp32_dest + packer_l1 -- the main path).
 * Meta-format RoPE cos/sin precompute (``[1, 1, max_seq, head_dim]``) for
   ``ttnn.experimental.rotary_embedding``.
 * Sinusoidal flow-matching timestep embedding (host-side; uploaded bf16).
 
-The denoise-loop fp32 toggle and SDPA knobs are exposed as env vars so the
-op-sweep / config-optimize stages can A/B them without code edits.
+The SDPA fidelity config and the bf16 denoise loop are the fixed main path
+(no env switches).
 """
 
 from __future__ import annotations
 
 import math
-import os
 from typing import Tuple
 
 import torch
@@ -27,49 +26,26 @@ import ttnn
 __all__ = [
     "get_sdpa_math_fidelity",
     "get_sdpa_compute_kernel_config",
-    "denoise_loop_fp32",
     "sdpa_prefill_chunk_sizes",
     "precompute_freqs_cis_meta",
     "create_sinusoidal_pos_embedding",
 ]
 
 
-def _env_bool(name: str, default: bool) -> bool:
-    v = os.environ.get(name)
-    if v is None:
-        return default
-    return v.strip().lower() in ("1", "true", "yes", "on")
-
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, default))
-    except (TypeError, ValueError):
-        return default
-
-
 def get_sdpa_math_fidelity() -> "ttnn.MathFidelity":
-    """SDPA math fidelity. Default HiFi2 (measured-best on Blackhole with fp32 dest)."""
-    return ttnn.MathFidelity.HiFi4 if _env_int("PI0_SDPA_HIFI", 2) >= 4 else ttnn.MathFidelity.HiFi2
+    """SDPA math fidelity. HiFi2 -- measured-best on Blackhole with fp32 dest (main
+    path; no env switch)."""
+    return ttnn.MathFidelity.HiFi2
 
 
 def get_sdpa_compute_kernel_config() -> "ttnn.WormholeComputeKernelConfig":
-    """SDPA compute-kernel config matching the reference env knobs."""
+    """SDPA compute-kernel config (main path, hardcoded to the measured-best values)."""
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=get_sdpa_math_fidelity(),
         math_approx_mode=False,
-        fp32_dest_acc_en=_env_bool("PI0_SDPA_FP32_DEST", True),
-        packer_l1_acc=_env_bool("PI0_SDPA_PACKER_L1", True),
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
     )
-
-
-def denoise_loop_fp32() -> bool:
-    """Whether to stage the flow-matching Euler integration in fp32 (PI0_DENOISE_FP32=1).
-
-    The bf16 accumulator drifts ~bf16_eps*||x_t|| per step; fp32 keeps the
-    accumulator clean (biggest single accuracy lever vs bf16 drift, ~+30 ms).
-    """
-    return _env_bool("PI0_DENOISE_FP32", False)
 
 
 def sdpa_prefill_chunk_sizes(seq_len_q: int, seq_len_kv: int, *, tile: int = 32) -> Tuple[int, int]:

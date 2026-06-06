@@ -63,6 +63,12 @@ def _siglip_tower_weights(cfg: SigLIPConfig) -> dict:
     return w
 
 
+# The pi0.5 deployment feeds 3 camera views (agentview + wrist + placeholder);
+# the SigLIP tower runs ONCE PER CAMERA (each 224x224 -> 256 patches), so this
+# composite drives the tower over all 3 distinct camera images.
+_N_CAMERAS = 3
+
+
 def test_siglip_vision_tower(dev):
     require_reference()
     from models.experimental.pi0_5.reference.torch_siglip import SigLIPVisionTower
@@ -72,12 +78,15 @@ def test_siglip_vision_tower(dev):
     cfg = SigLIPConfig()
     w = _siglip_tower_weights(cfg)
     ref = SigLIPVisionTower(cfg, w)
-    pixel_values = torch.randn(1, cfg.num_channels, cfg.image_size, cfg.image_size) * 0.5
-    out_ref = ref.forward(pixel_values)  # (1, 256, 1152)
-
     tt = TTNNPi05SigLIPVisionTower.from_torch(ref, cfg)
     set_device(tt, dev)
-    px_tt = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
-    out_tt = tt.forward(px_tt)
-    # 27 bf16 layers compound; reference E2E PCC ~0.991. Gate the composite at 0.95.
-    assert_pcc(out_tt, out_ref, threshold=0.95, msg="SigLIPVisionTower(27L)")
+
+    # Drive the tower over all 3 camera inputs (a distinct image per camera).
+    for cam in range(_N_CAMERAS):
+        torch.manual_seed(SEED + 100 + cam)
+        pixel_values = torch.randn(1, cfg.num_channels, cfg.image_size, cfg.image_size) * 0.5
+        out_ref = ref.forward(pixel_values)  # (1, 256, 1152)
+        px_tt = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
+        out_tt = tt.forward(px_tt)
+        # 27 bf16 layers compound; reference E2E PCC ~0.991. Gate the composite at 0.95.
+        assert_pcc(out_tt, out_ref, threshold=0.95, msg=f"SigLIPVisionTower(27L) cam{cam}")

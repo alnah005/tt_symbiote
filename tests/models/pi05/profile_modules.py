@@ -51,7 +51,8 @@ def run(dev):
     from tt_symbiote.models.pi05.modeling_pi05_gemma import (
         TTNNPi05GemmaMLP, TTNNPi05GemmaAttention, TTNNPi05GemmaBlock, TTNNPi05AdaRMSGemmaBlock,
     )
-    for tag, cfg, seq in [("expert", GemmaConfig.gemma_300m(), 64), ("vlm", GemmaConfig.gemma_2b(), 288)]:
+    # VLM at the 3-camera prefill (3*256 patches + 32 lang = 800); expert action-sized (64).
+    for tag, cfg, seq in [("expert", GemmaConfig.gemma_300m(), 64), ("vlm", GemmaConfig.gemma_2b(), 800)]:
         torch.manual_seed(0)
         w = {
             "input_layernorm.weight": torch.randn(cfg.width) * 0.02,

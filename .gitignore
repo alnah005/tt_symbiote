@@ -66,3 +66,15 @@ model_graph.png
 # cleanly with a clear message if the file is absent. See
 # examples/e2e/README.md for the contract.
 tests/images/
+
+# pi0.5 local scratch (profiling/experiment drivers + generated reports + design md)
+tests/models/pi05/exp_*.py
+tests/models/pi05/profile_bs_ab_pi05.py
+tests/models/pi05/profile_e2e_1step_pi05.py
+tests/models/pi05/profile_qkv_input_probe.py
+tests/models/pi05/profile_upstream_e2e.py
+tests/models/pi05/profile_vlm_attn_matmul_sweep.py
+tests/models/pi05/perf_report_*.txt
+tests/models/pi05/SCOPE_*.md
+tests/models/pi05/SHAPES_CONFIG_COMPARE.md
+deep-plan-final.md

@@ -42,7 +42,6 @@ import ttnn
 from tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices
 
 from .configuration_pi05 import PaliGemmaConfig, Pi0_5ModelConfig
-from .modeling_pi05_common import create_sinusoidal_pos_embedding, denoise_loop_fp32  # noqa: F401
 from .modeling_pi05_paligemma import TTNNPi05PaliGemmaBackbone
 from .modeling_pi05_prefix import TTNNPi05PrefixEmbedding
 from .modeling_pi05_suffix import TTNNPi05SuffixEmbedding

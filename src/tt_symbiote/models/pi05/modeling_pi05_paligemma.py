@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from typing import List, Optional, Tuple
 
+import torch
 import ttnn
 
 from tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices
@@ -64,11 +65,11 @@ class TTNNPi05PaliGemmaBackbone(TTNNModule):
 
         new.vision_tower = TTNNPi05SigLIPVisionTower.from_torch(backbone.vision_tower, config.siglip_config)
         new.mm_projector = TTNNPi05MultiModalProjector.from_torch(backbone.mm_projector)
-        # VLM MLP weights -> bfloat4_b (op-sweep: ~1ms/chunk faster on the big
-        # 288x2048x16384 prefill MLP; expert stays bfloat8_b -- bf4 there is
-        # slower AND compounds over 10 denoise steps).
-        import os as _os
-        _vlm_wd = ttnn.bfloat4_b if _os.environ.get("PI05_VLM_MLP_BF4") else ttnn.bfloat8_b
+        # VLM MLP weights -> bfloat8_b (the current validated fast path). bfloat4_b
+        # was op-sweep-only ~1ms/chunk faster on the 288x2048x16384 prefill MLP but
+        # NOT E2E-PCC-validated (4-bit VLM weights propagate through the prefix KV
+        # into all 10 denoise steps), so it is not part of the main path.
+        _vlm_wd = ttnn.bfloat8_b
         new.vlm_blocks = [
             TTNNPi05GemmaBlock.from_torch(b, config.vlm_config, mlp_weight_dtype=_vlm_wd) for b in backbone.vlm_blocks
         ]
@@ -104,6 +105,15 @@ class TTNNPi05PaliGemmaBackbone(TTNNModule):
             if self._expert_norm_mod_b is not None
             else None
         )
+        # Explicit ones-gamma for the final expert RMSNorm. That norm is weightless
+        # (its gamma is folded into the adaRMS scale1 at runtime), but a weightless
+        # ``ttnn.rms_norm`` writes a default-gamma shard to device on first call --
+        # an illegal host->device WRITE inside a TTNN trace-capture region. Pre-uploading
+        # a constant ones-gamma makes the op trace-safe (rms_norm with gamma=1 ==
+        # weightless rms_norm, numerically identical).
+        self.tt_expert_norm_ones = ttnn.from_torch(
+            torch.ones(1, self._expert_width), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
         self.vision_tower.preprocess_weights()
         self.mm_projector.preprocess_weights()
         for b in self.vlm_blocks:
@@ -117,6 +127,7 @@ class TTNNPi05PaliGemmaBackbone(TTNNModule):
         self.tt_expert_norm_mod_w = ttnn.to_device(self.tt_expert_norm_mod_w, self.device, memory_config=_DRAM)
         if self.tt_expert_norm_mod_b is not None:
             self.tt_expert_norm_mod_b = ttnn.to_device(self.tt_expert_norm_mod_b, self.device, memory_config=_DRAM)
+        self.tt_expert_norm_ones = ttnn.to_device(self.tt_expert_norm_ones, self.device, memory_config=_DRAM)
         self.vision_tower.move_weights_to_device()
         self.mm_projector.move_weights_to_device()
         for b in self.vlm_blocks:
@@ -257,7 +268,9 @@ class TTNNPi05PaliGemmaBackbone(TTNNModule):
     def _ada_rms_norm_no_gate(self, x: ttnn.Tensor, cond=None, precomputed=None) -> ttnn.Tensor:
         """Final expert adaRMS (discards gate): normed*(1+scale)+shift."""
         scale1, shift = precomputed if precomputed is not None else self.precompute_final_mod(cond)
-        normed = ttnn.rms_norm(x, epsilon=self._eps_expert, memory_config=_L1)
+        # Explicit ones-gamma (trace-safe; weightless rms_norm writes a default gamma on
+        # first call -- illegal during trace capture). Numerically identical to weightless.
+        normed = ttnn.rms_norm(x, weight=self.tt_expert_norm_ones, epsilon=self._eps_expert, memory_config=_L1)
         out = ttnn.multiply(normed, scale1, memory_config=_L1)
         out = ttnn.add(out, shift, memory_config=_L1)
         ttnn.deallocate(normed)

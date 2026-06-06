@@ -35,7 +35,7 @@ already-validated ``gemma4`` port and are low-risk.
 from __future__ import annotations
 
 import math
-from typing import Dict, Optional, Tuple
+from typing import Optional, Tuple
 
 import torch
 import ttnn
@@ -58,6 +58,14 @@ __all__ = [
 
 _L1 = ttnn.L1_MEMORY_CONFIG
 _DRAM = ttnn.DRAM_MEMORY_CONFIG
+
+# Block-sharded Tier-1 optimization layer (tracy-validated program configs; falls
+# back to the core_grid/interleaved path when no clean grid divides the shape).
+from tt_symbiote.models.pi05.modeling_pi05_bs import (  # noqa: E402
+    matmul_pcfg,
+    sdpa_program_config,
+    sharded_rms_norm,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +134,33 @@ class TTNNPi05GemmaMLP(TTNNModule):
     @run_on_devices(DeviceArch.P150)
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         seq = x.shape[-2]
+        # EXPERT path (small-M, seq<=96): tuned 2D block-shard program configs on
+        # the 8x8 grid with FUSED gelu, mirroring upstream GemmaMLPTTNN. Replaces
+        # our prior core_grid=None gate/up (+ separate ttnn.gelu) and 1-row/x-core
+        # down -- on identical HW upstream's expert MLP is 0.498 vs our 0.781
+        # ms/step on gate/up (same 64 cores; pure program-config + fused-gelu win)
+        # and runs `down` on 64 cores vs our 11. Same default fidelity -> PCC-safe.
+        # Falls back to the legacy path only when matmul_pcfg declines the shape
+        # (reference builders absent / no clean grid). Main path (no env switch).
+        if seq <= 96:
+            mt = seq // 32
+            k_gu, n_gu = self.tt_gate.shape[-2] // 32, self.tt_gate.shape[-1] // 32
+            k_dn, n_dn = self.tt_down.shape[-2] // 32, self.tt_down.shape[-1] // 32
+            gate_pc = matmul_pcfg(mt, k_gu, n_gu, 8, 8, activation=(ttnn.UnaryOpType.GELU, True))
+            up_pc = matmul_pcfg(mt, k_gu, n_gu, 8, 8)
+            # Down (64x4096->1024, K-heavy): 8x8 -> 32 cores is the Phase-B-swept
+            # optimum (N=32 tiles caps the width-shard; wider/K-split grids regress:
+            # (11,2)=27.9us@22c, (11,1)=26.0us@11c, (8,2)=33.4us@16c vs (8,8)=22.0us@32c).
+            down_pc = matmul_pcfg(mt, k_dn, n_dn, 8, 8)
+            if gate_pc is not None and up_pc is not None and down_pc is not None:
+                gate = ttnn.linear(x, self.tt_gate, memory_config=_L1, program_config=gate_pc)
+                up = ttnn.linear(x, self.tt_up, memory_config=_L1, program_config=up_pc)
+                hidden = ttnn.multiply(gate, up, memory_config=_L1)
+                ttnn.deallocate(gate)
+                ttnn.deallocate(up)
+                out = ttnn.linear(hidden, self.tt_down, memory_config=_L1, program_config=down_pc)
+                ttnn.deallocate(hidden)
+                return out
         # gate/up: large-M VLM (288x2048x16384) wins on the FULL 2D grid (tracy
         # device: 303us default -> 135us full); small-M expert keeps default.
         gu_cg = self._full_cg if seq > 96 else None
@@ -138,6 +173,9 @@ class TTNNPi05GemmaMLP(TTNNModule):
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
         # down: large-M VLM -> full grid; small-M expert -> 1-row width shard.
+        # (Phase-B note: bf8_b down-proj activation was tested -> only 212->208us
+        # (~2%): the VLM down is compute-bound at LoFi, NOT activation-bandwidth-
+        # bound, so it does not justify the KV-propagation PCC risk. Not adopted.)
         down_cg = self._row_cg if seq <= 96 else self._full_cg
         out = ttnn.linear(hidden, self.tt_down, memory_config=_L1, core_grid=down_cg)
         ttnn.deallocate(hidden)
@@ -333,10 +371,18 @@ class TTNNPi05GemmaAttention(TTNNModule):
         else:
             b, _, s, _ = hidden_states.shape
 
-        # QKV: small-M (action expert, seq<=96) wins on a 1-row width shard
-        # (tracy device: expert qkv 22.9->20.9us); VLM keeps the default 2D grid.
+        # QKV matmul: prefer the tracy-validated block-sharded program config
+        # (build_matmul_pcfg: 1.24x VLM / 1.55x expert over the core_grid path);
+        # fall back to the small-M 1-row width shard (seq<=96) / default 2D grid.
         qkv_cg = self._row_cg if s <= 96 else None
-        qkv = ttnn.linear(hidden_states, self.tt_wqkv, dtype=ttnn.bfloat8_b, memory_config=_L1, core_grid=qkv_cg)
+        _g = self.device.compute_with_storage_grid_size()
+        # 2D-block matmul program config (build_matmul_pcfg: 1.24x VLM over the
+        # core_grid path); fall back to the core_grid path when no clean grid divides.
+        _qkv_pc = matmul_pcfg(s // 32, self.tt_wqkv.shape[-2] // 32, self.tt_wqkv.shape[-1] // 32, _g.x, _g.y, in0_block_w=8)
+        if _qkv_pc is not None:
+            qkv = ttnn.linear(hidden_states, self.tt_wqkv, dtype=ttnn.bfloat8_b, memory_config=_L1, program_config=_qkv_pc)
+        else:
+            qkv = ttnn.linear(hidden_states, self.tt_wqkv, dtype=ttnn.bfloat8_b, memory_config=_L1, core_grid=qkv_cg)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv,
             num_heads=self.num_heads,
@@ -382,6 +428,26 @@ class TTNNPi05GemmaAttention(TTNNModule):
                 v = ttnn.concat([past_v, v], dim=2, memory_config=_L1)
             new_cache = (k, v) if use_cache else None
 
+        # Expert SDPA (PI05_SDPA_CFG, default ON, seq<=96 only -- VLM is at parity
+        # and large-seq L1 output risks OOM): pin the SDPA output to L1. The default
+        # (no memory_config) lands it in DRAM, so the downstream nlp_concat_heads
+        # reads from DRAM; L1 closes that (ConcatHeads 0.464->0.341/step = upstream
+        # parity). The tuned SDPAProgramConfig is OPT-IN (PI05_SDPA_PCFG=1, default
+        # OFF): on our 11x10 grid + expert shape (q=64,kv=576) it REGRESSED SDPA
+        # 0.96->1.08/step (chunk bands tuned for upstream's grid; default SDPA grid
+        # selection wins here).
+        # Expert SDPA (main path, seq<=96): pin output to L1 (default DRAM would make
+        # the downstream nlp_concat_heads read DRAM) + the swept SDPAProgramConfig on
+        # grid (8,2). Grid (8,2) is the measured optimum for the small-q expert SDPA
+        # (8-head/2-tile-q, kv~576): 0.687ms/step, BEATING upstream's 0.880 (the full
+        # 110-core grid over-parallelizes -> regressed 1.078; sweep: (8,8)=0.809
+        # (8,4)=0.699 (8,2)=0.687). VLM (s>96) keeps the default SDPA.
+        _sdpa_kwargs = {}
+        if s <= 96:
+            _sdpa_kwargs["memory_config"] = _L1  # L1 output -> concat_heads reads L1 not DRAM
+            _spc = sdpa_program_config(q.shape[-2], k.shape[-2], min(_g.x, 8), min(_g.y, 2))
+            if _spc is not None:
+                _sdpa_kwargs["program_config"] = _spc
         attn_out = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
@@ -390,16 +456,17 @@ class TTNNPi05GemmaAttention(TTNNModule):
             is_causal=False,
             scale=self.scale,
             compute_kernel_config=get_sdpa_compute_kernel_config(),
+            **_sdpa_kwargs,
         )
         ttnn.deallocate(q)
 
         attn_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=_L1)
-        # o_proj: small-M expert uses the 1-row shard. NOTE: a standalone device
-        # bench said default beats row here (32.5 vs 58us), but the IN-MODEL traced
-        # step disagrees (row 5.01ms vs default 5.24ms) -- the real concat_heads
-        # input layout differs from the random-tensor bench, so we trust the
-        # in-model traced measurement (the production metric).
-        out = ttnn.linear(attn_out, self.tt_o, dtype=ttnn.bfloat16, memory_config=_L1, core_grid=qkv_cg)
+        # o_proj matmul: 2D-block pcfg (same lever as qkv), else core_grid fallback.
+        _o_pc = matmul_pcfg(s // 32, self.tt_o.shape[-2] // 32, self.tt_o.shape[-1] // 32, _g.x, _g.y, in0_block_w=8)
+        if _o_pc is not None:
+            out = ttnn.linear(attn_out, self.tt_o, dtype=ttnn.bfloat16, memory_config=_L1, program_config=_o_pc)
+        else:
+            out = ttnn.linear(attn_out, self.tt_o, dtype=ttnn.bfloat16, memory_config=_L1, core_grid=qkv_cg)
         ttnn.deallocate(attn_out)
         if len(out.shape) == 4:
             out = ttnn.reshape(out, (b, s, out.shape[-1]))
@@ -451,7 +518,8 @@ class TTNNPi05GemmaBlock(TTNNModule):
         past_key_value: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
         use_cache: bool = False,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
-        normed = _rms_norm(hidden_states, self.tt_input_ln, self._eps)
+        _m, _h = hidden_states.shape[-2], hidden_states.shape[-1]
+        normed = sharded_rms_norm(hidden_states, self.tt_input_ln, self._eps, _m, _h)
         attn_out, new_cache = self.attention(
             normed, cos, sin, attention_mask, past_key_value, use_cache
         )
@@ -459,7 +527,7 @@ class TTNNPi05GemmaBlock(TTNNModule):
         hidden_states = ttnn.add(hidden_states, attn_out, memory_config=_L1)
         ttnn.deallocate(attn_out)
 
-        normed = _rms_norm(hidden_states, self.tt_post_ln, self._eps)
+        normed = sharded_rms_norm(hidden_states, self.tt_post_ln, self._eps, _m, _h)
         mlp_out = self.mlp(normed)
         ttnn.deallocate(normed)
         hidden_states = ttnn.add(hidden_states, mlp_out, memory_config=_L1)
@@ -521,14 +589,6 @@ class TTNNPi05AdaRMSGemmaBlock(TTNNModule):
             if self._pre_ffw_mod_b is not None
             else None
         )
-        # Explicit ones-weight for the adaRMS plain RMSNorm. Weightless
-        # ``ttnn.rms_norm`` allocates+writes a default weight shard to device on
-        # first call, which is an illegal host->device WRITE inside a TTNN trace
-        # capture region. Pre-uploading a constant ones-weight makes the op
-        # trace-safe (rms_norm with a ones gamma == weightless rms_norm).
-        self.tt_ones = ttnn.from_torch(
-            torch.ones(1, self._width), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-        )
         self.attention.preprocess_weights()
         self.mlp.preprocess_weights()
 
@@ -539,7 +599,6 @@ class TTNNPi05AdaRMSGemmaBlock(TTNNModule):
             self.tt_pre_attn_mod_b = ttnn.to_device(self.tt_pre_attn_mod_b, self.device, memory_config=_DRAM)
         if self.tt_pre_ffw_mod_b is not None:
             self.tt_pre_ffw_mod_b = ttnn.to_device(self.tt_pre_ffw_mod_b, self.device, memory_config=_DRAM)
-        self.tt_ones = ttnn.to_device(self.tt_ones, self.device, memory_config=_DRAM)
         self.attention.move_weights_to_device()
         self.mlp.move_weights_to_device()
 
@@ -585,13 +644,14 @@ class TTNNPi05AdaRMSGemmaBlock(TTNNModule):
         )
 
     def _apply_ada(self, x: ttnn.Tensor, scale1: ttnn.Tensor, shift: ttnn.Tensor, eps: float) -> ttnn.Tensor:
-        # Pass an explicit ones-weight (== weightless) so the op performs no
-        # host->device write inside a TTNN trace capture region.
-        normed = ttnn.rms_norm(x, weight=self.tt_ones, epsilon=eps, memory_config=_L1)  # plain
-        out = ttnn.multiply(normed, scale1, memory_config=_L1)
-        out = ttnn.add(out, shift, memory_config=_L1)
-        ttnn.deallocate(normed)
-        return out
+        # FUSED adaRMS (main path): fold the modulation into the norm kernel --
+        # weight=(1+scale), bias=shift -> rms_norm(x)*scale1 + shift in ONE sharded op
+        # (matches upstream _modulated_rms_norm). Drops the separate ttnn.multiply +
+        # ttnn.add (2 BinaryNg per modulation x 2 modulations x 18 layers = 72 ops/
+        # step). scale1/shift are [B,1,width] (precomputed, trace-safe). sharded_rms_norm
+        # itself falls back to plain interleaved rms_norm if the reference builders
+        # are absent, so this stays correct without the BS layer.
+        return sharded_rms_norm(x, scale1, eps, x.shape[-2], x.shape[-1], bias=shift)
 
     @run_on_devices(DeviceArch.P150)
     def forward(

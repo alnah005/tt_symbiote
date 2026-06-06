@@ -26,6 +26,14 @@ from .pi05_helpers import assert_pcc
 
 PCC = 0.99
 
+# 3-camera deployment prefill length: 3 cameras x 256 SigLIP patches + 128 language
+# tokens = 896 (tile-aligned, 28 tiles). The VLM-path component tests run at this
+# real seq so regressions on the 896-token path (e.g. sharded-grid sizing) are
+# caught at Tier 1. The action expert (suffix) and per-camera SigLIP blocks are
+# camera-count-invariant and keep their action/patch-sized seqs.
+_N_CAMERAS = 3
+_VLM_SEQ = _N_CAMERAS * 256 + 128
+
 
 # --------------------------------------------------------------------------- MLP
 @pytest.mark.parametrize(
@@ -46,7 +54,9 @@ def test_gemma_mlp(dev, config_fn, name):
         "mlp.down_proj.weight": torch.randn(cfg.width, cfg.mlp_dim) * 0.02,
     }
     ref = GemmaMLP(cfg, weights)
-    x = torch.randn(1, 64, cfg.width)
+    # VLM runs the 3-camera prefill (800 tokens); the expert MLP is action-sized.
+    seq = _VLM_SEQ if name == "vlm_2b" else 64
+    x = torch.randn(1, seq, cfg.width)
     out_ref = ref.forward(x)
 
     tt = TTNNPi05GemmaMLP.from_torch(ref, cfg)
@@ -90,7 +100,7 @@ def test_gemma_attention(dev):
 
     torch.manual_seed(SEED)
     cfg = GemmaConfig.gemma_2b()
-    seq = 64
+    seq = _VLM_SEQ  # 3-camera VLM prefill (800 tokens)
     w = _attn_weights(cfg)
     ref = GemmaAttention(cfg, w, 0)
     x = torch.randn(1, seq, cfg.width) * 0.5
@@ -113,7 +123,7 @@ def test_gemma_block(dev):
 
     torch.manual_seed(SEED)
     cfg = GemmaConfig.gemma_2b()
-    seq = 64
+    seq = _VLM_SEQ  # 3-camera VLM prefill (800 tokens)
     w = {
         "input_layernorm.weight": torch.randn(cfg.width) * 0.02,
         "post_attention_layernorm.weight": torch.randn(cfg.width) * 0.02,

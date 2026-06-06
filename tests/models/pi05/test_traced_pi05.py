@@ -19,6 +19,7 @@ with a ``trace_region_size`` (the ``dev`` fixture sets 128 MiB).
 
 from __future__ import annotations
 
+import math
 import time
 
 import torch
@@ -27,8 +28,10 @@ import ttnn
 from tt_symbiote.models.pi05.configuration_pi05 import Pi0_5ModelConfig
 from tt_symbiote.utils.device_management import set_device
 
-from .pi05_helpers import assert_pcc
+from .pi05_helpers import assert_pcc, compute_pcc
 from .pi05_helpers import SEED, require_checkpoint, require_reference
+
+_L1 = ttnn.L1_MEMORY_CONFIG
 
 
 def test_traced_denoise_step(dev):
@@ -251,3 +254,4 @@ def test_traced_static_kv_denoise_e2e(dev):
     pcc = compute_pcc(actions, actions_ref)
     print(f"[static-kv-traced] E2E action PCC (TRACED-replay vs torch): {pcc:.4f}")
     assert pcc >= 0.90, f"TRACED E2E action PCC {pcc:.4f} < 0.90"
+

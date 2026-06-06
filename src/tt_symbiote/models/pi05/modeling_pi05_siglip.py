@@ -76,6 +76,13 @@ __all__ = [
 
 _L1 = ttnn.L1_MEMORY_CONFIG
 _DRAM = ttnn.DRAM_MEMORY_CONFIG
+_SIGLIP_PAD_N = 4608  # padded SigLIP intermediate (4304->144 tiles) for tile-clean fc1/fc2 matmuls
+
+from tt_symbiote.models.pi05.modeling_pi05_bs import (  # noqa: E402  (BS opt layer)
+    matmul_pcfg,
+    sdpa_program_config,
+    sharded_layer_norm,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -310,12 +317,19 @@ class TTNNPi05SigLIPAttention(TTNNModule):
         if len(hidden_states.shape) == 3:
             hidden_states = ttnn.reshape(hidden_states, (b, 1, seq_len, hidden_states.shape[-1]))
 
+        # qkv matmul: tuned block-shard program config (main path; matmul_pcfg also
+        # fuses the bias-add into the matmul). qkv/o were the largest SigLIP matmul-
+        # time gap vs upstream. matmul_pcfg returns None (-> default linear) only if
+        # the reference builders are absent.
+        _g = self.device.compute_with_storage_grid_size()
+        _qkv_pc = matmul_pcfg(seq_len // 32, self.tt_wqkv.shape[-2] // 32, self.tt_wqkv.shape[-1] // 32, _g.x, _g.y)
         qkv = ttnn.linear(
             hidden_states,
             self.tt_wqkv,
             bias=self.tt_bqkv,
             dtype=ttnn.bfloat16,
             memory_config=_L1,
+            **({"program_config": _qkv_pc} if _qkv_pc is not None else {}),
         )
         # MHA: num_kv_heads == num_heads.
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
@@ -327,6 +341,21 @@ class TTNNPi05SigLIPAttention(TTNNModule):
         )
         ttnn.deallocate(qkv)
 
+        # SigLIP SDPA (PI05_SIGLIP_SDPA_CFG, default ON): pin output to L1 (default
+        # is DRAM -> nlp_concat_heads then reads DRAM) + tuned SDPAProgramConfig.
+        # Unlike the expert (kv=576, where the program config regressed), SigLIP is
+        # Sq=Skv=256 -> the bands give k_chunk=256 = SINGLE K chunk, upstream's
+        # tracy-validated SigLIP win (-39%/op). Closes SDPA 0.96->~0.34 + ConcatHeads.
+        # SigLIP SDPA (main path): pin output to L1 (default DRAM would make the
+        # downstream nlp_concat_heads read DRAM) + the swept SDPAProgramConfig on grid
+        # (8,8). SigLIP is Sq=Skv=256 -> k_chunk=256 single chunk; (8,8) is the
+        # measured optimum (0.435/op vs 0.497 on the full 110-core grid; (8,4)/(8,2)
+        # regress to ~1.3 -- the 16-head/8-tile-q SDPA wants a bigger grid than the
+        # expert). _g already computed above for the qkv pcfg.
+        _sdpa_kwargs = {"memory_config": _L1}
+        _spc = sdpa_program_config(q.shape[-2], k.shape[-2], min(_g.x, 8), min(_g.y, 8))
+        if _spc is not None:
+            _sdpa_kwargs["program_config"] = _spc
         attn_out = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
@@ -334,18 +363,21 @@ class TTNNPi05SigLIPAttention(TTNNModule):
             is_causal=False,
             scale=self.scale,
             compute_kernel_config=get_sdpa_compute_kernel_config(),
+            **_sdpa_kwargs,
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
         attn_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=_L1)
+        _o_pc = matmul_pcfg(seq_len // 32, self.tt_o.shape[-2] // 32, self.tt_o.shape[-1] // 32, _g.x, _g.y)
         out = ttnn.linear(
             attn_out,
             self.tt_o,
             bias=self.tt_bo,
             dtype=ttnn.bfloat16,
             memory_config=_L1,
+            **({"program_config": _o_pc} if _o_pc is not None else {}),
         )
         ttnn.deallocate(attn_out)
         out = ttnn.reshape(out, (b, seq_len, self.hidden_size))
@@ -377,9 +409,24 @@ class TTNNPi05SigLIPMLP(TTNNModule):
         return new
 
     def preprocess_weights_impl(self):
-        self.tt_fc1 = _linear_weight_to_tt(self._fc1_w, dtype=ttnn.bfloat8_b)
-        self.tt_fc2 = _linear_weight_to_tt(self._fc2_w, dtype=ttnn.bfloat8_b)
-        self.tt_fc1_b = _bias_to_tt(self._fc1_b) if self._fc1_b is not None else None
+        import torch as _torch
+
+        # PI05_SIGLIP_PAD (default ON): pad the SigLIP intermediate 4304->4608 (144
+        # tiles) so the fc1/fc2 matmuls get a clean tile-divisible N/K and can use the
+        # tuned block-shard program config + FUSED gelu (matches upstream). The pad
+        # columns are zero: fc1 pad-out -> gelu(0)=0 -> fc2 pad-K rows multiply 0 ->
+        # exact same result (upstream-documented). Torch weights are [out, in].
+        fc1_w, fc1_b, fc2_w = self._fc1_w, self._fc1_b, self._fc2_w
+        self._padded = fc1_w.shape[0] < _SIGLIP_PAD_N  # main path: always pad 4304->4608
+        if self._padded:
+            pad_out = _SIGLIP_PAD_N - fc1_w.shape[0]  # fc1 weight [4304, 1152] -> pad out dim
+            fc1_w = _torch.nn.functional.pad(fc1_w, (0, 0, 0, pad_out))
+            if fc1_b is not None:
+                fc1_b = _torch.nn.functional.pad(fc1_b, (0, pad_out))
+            fc2_w = _torch.nn.functional.pad(fc2_w, (0, _SIGLIP_PAD_N - fc2_w.shape[1]))  # [1152,4304] -> pad in dim
+        self.tt_fc1 = _linear_weight_to_tt(fc1_w, dtype=ttnn.bfloat8_b)
+        self.tt_fc2 = _linear_weight_to_tt(fc2_w, dtype=ttnn.bfloat8_b)
+        self.tt_fc1_b = _bias_to_tt(fc1_b) if fc1_b is not None else None
         self.tt_fc2_b = _bias_to_tt(self._fc2_b) if self._fc2_b is not None else None
 
     def move_weights_to_device_impl(self):
@@ -394,9 +441,26 @@ class TTNNPi05SigLIPMLP(TTNNModule):
 
     @run_on_devices(DeviceArch.P150)
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        h = ttnn.linear(x, self.tt_fc1, bias=self.tt_fc1_b, dtype=ttnn.bfloat16, memory_config=_L1)
-        h = ttnn.gelu(h, fast_and_approximate_mode=True, memory_config=_L1)  # tanh-approx (matches reference; faster)
-        out = ttnn.linear(h, self.tt_fc2, bias=self.tt_fc2_b, dtype=ttnn.bfloat16, memory_config=_L1, core_grid=self._full_cg)
+        # With PI05_SIGLIP_PAD, fc1/fc2 intermediate is padded to 4608 (144 tiles) so
+        # matmul_pcfg returns a valid config and fc1 FUSES gelu into the matmul kernel
+        # (activation=(GELU,True)); the separate ttnn.gelu (Unary ~0.14ms/27) is then
+        # skipped. Falls back to the unpadded default(fc1)+separate-gelu path otherwise.
+        s = x.shape[-2]
+        _g = self.device.compute_with_storage_grid_size()
+        _fc1_pc = matmul_pcfg(
+            s // 32, self.tt_fc1.shape[-2] // 32, -(-self.tt_fc1.shape[-1] // 32), _g.x, _g.y,
+            activation=(ttnn.UnaryOpType.GELU, True),
+        )
+        if _fc1_pc is not None:
+            h = ttnn.linear(x, self.tt_fc1, bias=self.tt_fc1_b, dtype=ttnn.bfloat16, memory_config=_L1, program_config=_fc1_pc)
+        else:
+            h = ttnn.linear(x, self.tt_fc1, bias=self.tt_fc1_b, dtype=ttnn.bfloat16, memory_config=_L1)
+            h = ttnn.gelu(h, fast_and_approximate_mode=True, memory_config=_L1)  # tanh-approx (matches reference)
+        _fc2_pc = matmul_pcfg(s // 32, -(-self.tt_fc2.shape[-2] // 32), self.tt_fc2.shape[-1] // 32, _g.x, _g.y)
+        if _fc2_pc is not None:
+            out = ttnn.linear(h, self.tt_fc2, bias=self.tt_fc2_b, dtype=ttnn.bfloat16, memory_config=_L1, program_config=_fc2_pc)
+        else:
+            out = ttnn.linear(h, self.tt_fc2, bias=self.tt_fc2_b, dtype=ttnn.bfloat16, memory_config=_L1, core_grid=self._full_cg)
         ttnn.deallocate(h)
         return out
 
@@ -445,25 +509,16 @@ class TTNNPi05SigLIPBlock(TTNNModule):
 
     @run_on_devices(DeviceArch.P150)
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
-        normed = ttnn.layer_norm(
-            hidden_states,
-            weight=self.tt_ln1_w,
-            bias=self.tt_ln1_b,
-            epsilon=self._eps,
-            memory_config=_L1,
-        )
+        _m, _h = hidden_states.shape[-2], hidden_states.shape[-1]
+        # Sharded LayerNorm (tracy: SigLIP LN was 52us/blk interleaved, the only
+        # un-sharded norm). Falls back to interleaved when BS is off.
+        normed = sharded_layer_norm(hidden_states, self.tt_ln1_w, self.tt_ln1_b, self._eps, _m, _h)
         attn_out = self.attention(normed)
         ttnn.deallocate(normed)
         hidden_states = ttnn.add(hidden_states, attn_out, memory_config=_L1)
         ttnn.deallocate(attn_out)
 
-        normed = ttnn.layer_norm(
-            hidden_states,
-            weight=self.tt_ln2_w,
-            bias=self.tt_ln2_b,
-            epsilon=self._eps,
-            memory_config=_L1,
-        )
+        normed = sharded_layer_norm(hidden_states, self.tt_ln2_w, self.tt_ln2_b, self._eps, _m, _h)
         mlp_out = self.mlp(normed)
         ttnn.deallocate(normed)
         hidden_states = ttnn.add(hidden_states, mlp_out, memory_config=_L1)
