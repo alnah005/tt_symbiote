@@ -4,16 +4,19 @@
 backend it drives is not pip-resolvable**. Specifically, `ttnn` (the
 Tenstorrent Neural Network runtime) JIT-compiles firmware kernels for
 your Tensix cores at first `open_mesh_device(...)` call, and that JIT
-uses a *system-installed* RISC-V cross-compiler called `sfpi`. Each
-PyPI `ttnn` wheel pins exactly one supported sfpi version inside
-`ttnn/tt_metal/sfpi-version`; if the host's installed sfpi disagrees,
-device open fails at runtime with `unrecognized command-line option`.
+uses a *system-installed* RISC-V cross-compiler called `sfpi`. `ttnn`
+is built from the tt-metal source tree at `$TT_METAL_HOME` (no PyPI
+wheel, no global commit pin); its required sfpi version is recorded in
+`$TT_METAL_HOME/tt_metal/sfpi-version`. If the host's installed sfpi
+disagrees, device open fails at runtime with
+`unrecognized command-line option`.
 
-This document is the authoritative reference for that prerequisite —
-what to install, how to verify it, and which `ttnn` wheel matches
-which sfpi version. The README's `Installation` section links here;
-contributors using [`scripts/bootstrap_venv.sh`](../scripts/bootstrap_venv.sh)
-get the same checks enforced automatically.
+This document is the deeper sfpi/host-prerequisites reference — what
+sfpi is, how to install it, and how to verify it matches your
+`$TT_METAL_HOME` build. The root [`README.md`](../README.md#installation)
+owns the user-facing install flow and links here; contributors using
+[`scripts/bootstrap_venv.sh`](../scripts/bootstrap_venv.sh) get the
+same checks enforced automatically.
 
 ## What sfpi is and why pip can't install it
 
@@ -42,10 +45,10 @@ The official path is the **tt-installer** flow documented at
 - `/opt/tenstorrent/sfpi/lib/` (target libstdc++)
 
 Direct sfpi releases live at <https://github.com/tenstorrent/sfpi/releases>
-if you need to install a specific version standalone (e.g., when
-bumping the `(ttnn, sfpi)` pair below before the apt repo catches up).
+if you need to install a specific version standalone (e.g., when your
+host sfpi predates the version your `$TT_METAL_HOME` build requires).
 
-## How to verify sfpi is present and matches `ttnn`
+## How to verify sfpi is present and matches your tt-metal build
 
 ```bash
 /opt/tenstorrent/sfpi/compiler/bin/riscv-tt-elf-g++ --version
@@ -54,74 +57,53 @@ bumping the `(ttnn, sfpi)` pair below before the apt repo catches up).
 Look for a line like:
 
 ```text
-riscv-tt-elf-g++ (sfpi:7.35.3[426]) 12.2.0
+riscv-tt-elf-g++ (sfpi:7.52.0[426]) 12.2.0
 ```
 
-The string after `sfpi:` (here `7.35.3`) is the canonical sfpi
-version. It must match the version pinned by your installed `ttnn`
-wheel (next section).
+The string after `sfpi:` (here `7.52.0`) is the canonical sfpi
+version. It must match the version your `$TT_METAL_HOME` build
+requires.
 
-To read the pin from an installed `ttnn`:
+To read the required version from your tt-metal source build:
 
 ```bash
-python -c "from importlib.resources import files; print(files('ttnn.tt_metal').joinpath('sfpi-version').read_text())"
-# expected output: sfpi_version='7.35.3'  (with whatever quotes ttnn uses)
+cat $TT_METAL_HOME/tt_metal/sfpi-version
+# e.g. sfpi_version='7.52.0'
 ```
 
-To read the pin from a wheel before installing it:
+## Which sfpi version applies
 
-```bash
-pip download --no-deps ttnn==0.68.0 -d /tmp/ttnn-probe
-unzip -p /tmp/ttnn-probe/ttnn-*.whl ttnn/tt_metal/sfpi-version
-```
+sfpi is **auto-derived** from `$TT_METAL_HOME/tt_metal/sfpi-version`
+(format `sfpi_version='X.Y.Z'`). ttnn is a source build, not a PyPI
+package, and there is no global tt-metal commit pin: each model records
+its own `tt_metal_commit`, and the source build at `$TT_METAL_HOME`
+determines the required sfpi.
 
-## (ttnn, sfpi) compatibility table
-
-The canonical source of truth is [`scripts/ttnn-pin.txt`](../scripts/ttnn-pin.txt),
-which the bootstrap script reads at venv-build time.
-`tt_symbiote`'s hard dependency on `ttnn` (declared in
-[`pyproject.toml`](../pyproject.toml)) is pinned to match this table.
-
-| `ttnn` (PyPI) | required `sfpi` | Verified end-to-end | Notes                                  |
-|---------------|-----------------|---------------------|----------------------------------------|
-| `0.68.0`      | `7.35.3`        | May 2026 (T3K, N150) | The current happy path; see Phase 8 Wave A + B. |
-
-When bumping the pair:
-
-1. Find the sfpi version installed on the target hosts:
-   `/opt/tenstorrent/sfpi/compiler/bin/riscv-tt-elf-g++ --version`.
-2. Find the matching `ttnn` PyPI release by inspecting its wheel
-   (`pip download --no-deps ttnn==<v> -d /tmp/probe; unzip -p
-   /tmp/probe/ttnn-*.whl ttnn/tt_metal/sfpi-version`).
-3. Update `scripts/ttnn-pin.txt` and `pyproject.toml`'s
-   `dependencies` ttnn pin **in lockstep**. The release-process doc
-   covers this.
+[`scripts/ttnn-pin.txt`](../scripts/ttnn-pin.txt) holds the **optional
+SFPI override** only (`SFPI_REQUIRED`, empty by default = auto-derive);
+it pins no ttnn commit. Set `SFPI_REQUIRED` only to assert or override
+the auto-derived value.
 
 ## Troubleshooting
 
 ### `unrecognized command-line option ...` from `open_mesh_device(...)`
 
-This is the canonical signature of the (ttnn, sfpi) mismatch.
-Steps:
+This is the canonical signature of the sfpi mismatch. Steps:
 
 1. Print the installed sfpi version (`riscv-tt-elf-g++ --version`).
-2. Print the ttnn-pinned sfpi version (`unzip -p` recipe above, or
-   `python -c "from importlib.resources import files; ..."`).
-3. If they disagree, *either* upgrade/downgrade the system sfpi to
-   match the ttnn pin, *or* `pip install` a different ttnn version
-   whose pin matches your sfpi.
+2. Print the version your build requires
+   (`cat $TT_METAL_HOME/tt_metal/sfpi-version`).
+3. If they disagree, install the system sfpi version that matches your
+   `$TT_METAL_HOME` build (apt package or a standalone sfpi release).
 
 ### `ModuleNotFoundError: No module named 'ttnn'` from `import tt_symbiote`
 
-Since `tt_symbiote` 0.1.1 `ttnn==0.68.0` is a HARD dependency, so
-`pip install tt_symbiote` always pulls it from PyPI. If you see this
-error from a 0.1.1+ install, your `ttnn` was uninstalled or never
-resolved — re-run `pip install -U tt_symbiote` to recover.
-
-(For context: `tt_symbiote` 0.1.0 mistakenly declared `ttnn` as an
-optional extra while several core modules still imported it
-eagerly — that artifact has been removed from PyPI; 0.1.1 is the
-first published version with the corrected dependency declaration.)
+`ttnn` is not a PyPI dependency — it comes from a tt-metal source build
+at `$TT_METAL_HOME`. `import tt_symbiote` auto-wires that source build
+onto `sys.path`. This error means `$TT_METAL_HOME` is unset, or its
+checkout has no built `ttnn`. Set `$TT_METAL_HOME` to a built tt-metal
+checkout (or run [`scripts/bootstrap_venv.sh`](../scripts/bootstrap_venv.sh),
+which writes a persistent `.pth`).
 
 ### `ImportError: ... requires the Torchvision library but it was not found`
 
@@ -144,32 +126,27 @@ Fix: reinstall with the `[vision]` extra.
 pip install "tt_symbiote[vision]"
 ```
 
-Available since `tt_symbiote` 0.1.2. The extra simply pulls
-`torchvision`; everything else stays identical. Text-only causal LMs
-do NOT need this extra.
+The extra simply pulls `torchvision`; everything else stays identical.
+Text-only causal LMs do NOT need this extra.
 
 ### `ModuleNotFoundError: No module named 'tracy'`
 
 `tracy` is Tenstorrent's profiler. It is not on PyPI and only ships
 via a tt-metal source build.
 
-Since `tt_symbiote` 0.1.0 the `from tracy import signpost` import is
-guarded by a `try/except` in `tt_symbiote.core.run_config` and falls
-back to a no-op shim when tracy is missing. `import tt_symbiote`
-therefore does *not* require tracy to be installed. The shim is only
-activated when the env var `TT_SYMBIOTE_SIGNPOST_MODE` is set, so
-unless you're explicitly profiling there is nothing to do.
-
-If you previously saw this error from a tt_symbiote < 0.1.0 install,
-upgrade with `pip install -U tt_symbiote`.
+The `from tracy import signpost` import is guarded by a `try/except` in
+`tt_symbiote.core.run_config` and falls back to a no-op shim when tracy
+is missing. `import tt_symbiote` therefore does *not* require tracy to
+be installed. The shim is only activated when the env var
+`TT_SYMBIOTE_SIGNPOST_MODE` is set, so unless you're explicitly
+profiling there is nothing to do.
 
 ## Where to go from here
 
 - [`README.md`](../README.md#installation) — the user-facing install snippet.
 - [`scripts/bootstrap_venv.sh`](../scripts/bootstrap_venv.sh) — the
   validated end-to-end install flow for contributors.
-- [`scripts/ttnn-pin.txt`](../scripts/ttnn-pin.txt) — the canonical
-  `(ttnn, sfpi)` pair.
+- [`scripts/ttnn-pin.txt`](../scripts/ttnn-pin.txt) — the optional SFPI
+  override (pins no ttnn commit).
 - [`docs/development/release_process.md`](development/release_process.md) — how a new
-  `tt_symbiote` release rolls out, including how the hard `ttnn` pin
-  gets bumped.
+  `tt_symbiote` release rolls out.
