@@ -52,7 +52,9 @@ def _current_tt_metal_commit():
     try:
         out = subprocess.run(
             ["git", "-C", home, "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         return out.stdout.strip() if out.returncode == 0 else None
     except Exception:
@@ -88,11 +90,37 @@ def tt_metal_commit_check(request):
         return
     current = _current_tt_metal_commit()
     if current is None:
-        _warn_once("tt_metal_commit_check: $TT_METAL_HOME unset or git rev-parse "
-                   "failed; running anyway.")
+        _warn_once("tt_metal_commit_check: $TT_METAL_HOME unset or git rev-parse " "failed; running anyway.")
         yield
         return
     if recorded != current:
-        _warn_once(f"tt_metal_commit mismatch for {cfg_path.parent.name}: recorded "
-                   f"{recorded} vs current {current}; running anyway.")
+        _warn_once(
+            f"tt_metal_commit mismatch for {cfg_path.parent.name}: recorded "
+            f"{recorded} vs current {current}; running anyway."
+        )
     yield
+
+
+@pytest.fixture(autouse=True)
+def release_ttnn_traces():
+    """Release framework-captured TTNN traces after EVERY test, across ALL model trees.
+
+    Traces captured under ``TT_SYMBIOTE_RUN_MODE=TRACED`` live in the process-global
+    ``TracedRun`` cache and hold a device trace-region allocation + an active trace id.
+    Left un-released between tests they (a) accumulate and can corrupt a later large
+    capture on the same device, and (b) make ``ttnn.close_device`` raise
+    ``TT_FATAL ... !trace_id_.has_value()``. Releasing per-test gives every test a clean
+    trace state -- the prerequisite for "any test that passes under NORMAL also passes
+    under TRACED". No-op when nothing was captured.
+
+    Imports are LAZY and wrapped: ``tt_symbiote.core.run_config`` pulls in ``ttnn``, so a
+    top-level import would break the software-only ``tests/auto`` tree. ``release_all`` on
+    an empty cache is a harmless no-op, and any teardown error is swallowed so it can never
+    convert a passing test into an error."""
+    yield
+    try:
+        from tt_symbiote.core.run_config import TracedRun
+
+        TracedRun.release_all()
+    except Exception:
+        pass

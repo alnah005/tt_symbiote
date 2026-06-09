@@ -39,7 +39,7 @@ from typing import Optional, Tuple
 
 import ttnn
 
-from tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices
+from tt_symbiote.core.module import DeviceArch, StatelessTTNNModule, run_on_devices
 from tt_symbiote.models.pi05.modeling_pi05_common import create_sinusoidal_pos_embedding
 from tt_symbiote.models.pi05.modeling_pi05_gemma import _linear_weight_to_tt
 
@@ -59,12 +59,10 @@ def _bias_to_tt(b: Optional["ttnn.Tensor"]) -> Optional[ttnn.Tensor]:
     """Reshape a torch ``[out]`` bias to ttnn ``[1, out]`` bf16 TILE host tensor."""
     if b is None:
         return None
-    return ttnn.from_torch(
-        b.reshape(1, -1).contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-    )
+    return ttnn.from_torch(b.reshape(1, -1).contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
 
-class TTNNPi05SuffixEmbedding(TTNNModule):
+class TTNNPi05SuffixEmbedding(StatelessTTNNModule):
     """pi0.5 suffix embedding (action + timestep) for the action expert.
 
     Reference: ``reference/torch_suffix.py::Pi0_5SuffixEmbedding`` and
@@ -175,16 +173,12 @@ class TTNNPi05SuffixEmbedding(TTNNModule):
         )
 
     @run_on_devices(DeviceArch.P150)
-    def embed_suffix(
-        self, noisy_actions: ttnn.Tensor, timestep: ttnn.Tensor
-    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+    def embed_suffix(self, noisy_actions: ttnn.Tensor, timestep: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """Convenience: returns (suffix_embs, adarms_cond) for pi0.5 (no state token)."""
         suffix_embs = self.embed_actions(noisy_actions)
         adarms_cond = self.embed_adarms_cond(timestep)
         return suffix_embs, adarms_cond
 
     @run_on_devices(DeviceArch.P150)
-    def forward(
-        self, noisy_actions: ttnn.Tensor, timestep: ttnn.Tensor
-    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+    def forward(self, noisy_actions: ttnn.Tensor, timestep: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         return self.embed_suffix(noisy_actions, timestep)

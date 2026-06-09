@@ -45,6 +45,11 @@ def _tracy_signpost(request):
     yield
 
 
+# Per-test trace release is handled centrally by the ROOT conftest's autouse
+# ``release_ttnn_traces`` fixture (applies to all model trees). The dev fixture below also
+# releases before close_device as a device-close safeguard.
+
+
 @pytest.fixture(scope="module")
 def dev():
     """Open a single Blackhole (P150) device directly.
@@ -59,4 +64,12 @@ def dev():
     try:
         yield device
     finally:
+        # Release any framework-captured traces before closing: ttnn.close_device
+        # TT_FATALs ("!trace_id_.has_value()") if a captured trace is still live.
+        try:
+            from tt_symbiote.core.run_config import TracedRun
+
+            TracedRun.release_all()
+        except Exception:
+            pass
         ttnn.close_device(device)

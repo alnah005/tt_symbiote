@@ -35,12 +35,13 @@ already-validated ``gemma4`` port and are low-risk.
 from __future__ import annotations
 
 import math
+import os
 from typing import Optional, Tuple
 
 import torch
 import ttnn
 
-from tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices
+from tt_symbiote.core.module import DeviceArch, StatefulTTNNModule, StatelessTTNNModule, run_on_devices
 from tt_symbiote.core.run_config import trace_enabled
 
 from .configuration_pi05 import GemmaConfig
@@ -61,19 +62,13 @@ _DRAM = ttnn.DRAM_MEMORY_CONFIG
 
 # Block-sharded Tier-1 optimization layer (tracy-validated program configs; falls
 # back to the core_grid/interleaved path when no clean grid divides the shape).
-from tt_symbiote.models.pi05.modeling_pi05_bs import (  # noqa: E402
-    matmul_pcfg,
-    sdpa_program_config,
-    sharded_rms_norm,
-)
+from tt_symbiote.models.pi05.modeling_pi05_bs import matmul_pcfg, sdpa_program_config, sharded_rms_norm  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
 # Weight upload helpers (host-side; allowed to use torch).
 # ---------------------------------------------------------------------------
-def _linear_weight_to_tt(
-    w: torch.Tensor, dtype: ttnn.DataType = ttnn.bfloat8_b
-) -> ttnn.Tensor:
+def _linear_weight_to_tt(w: torch.Tensor, dtype: ttnn.DataType = ttnn.bfloat8_b) -> ttnn.Tensor:
     """Transpose a torch ``[out, in]`` linear weight to ttnn ``[in, out]`` host tensor."""
     return ttnn.from_torch(w.t().contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT)
 
@@ -95,7 +90,7 @@ def _rms_norm(x: ttnn.Tensor, weight: ttnn.Tensor, eps: float) -> ttnn.Tensor:
 # GeGLU MLP
 # ---------------------------------------------------------------------------
 @trace_enabled
-class TTNNPi05GemmaMLP(TTNNModule):
+class TTNNPi05GemmaMLP(StatelessTTNNModule):
     """Gemma GeGLU MLP: ``down_proj(gelu_tanh(gate_proj(x)) * up_proj(x))``.
 
     Reference: ``reference/torch_gemma.py::GemmaMLP.forward`` and
@@ -134,6 +129,19 @@ class TTNNPi05GemmaMLP(TTNNModule):
     @run_on_devices(DeviceArch.P150)
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         seq = x.shape[-2]
+        # deep-plan_4 widen rung 3 (env-gated, default OFF -> output dtype defaults to
+        # input dtype, byte-identical to before). PI05_VLM_MLP_OUT_BF16=1 forces the
+        # gate/up/down matmul OUTPUTS to bf16 + a HiFi4+fp32-dest matmul accumulation ck.
+        # Weights tt_gate/up/down STAY bf8_b (preprocess_weights_impl, the invariant).
+        _mlp_out_dtype = ttnn.bfloat16 if os.environ.get("PI05_VLM_MLP_OUT_BF16") == "1" else None
+        _mlp_ck = None
+        if _mlp_out_dtype is not None:
+            _mlp_ck = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
         # EXPERT path (small-M, seq<=96): tuned 2D block-shard program configs on
         # the 8x8 grid with FUSED gelu, mirroring upstream GemmaMLPTTNN. Replaces
         # our prior core_grid=None gate/up (+ separate ttnn.gelu) and 1-row/x-core
@@ -153,22 +161,47 @@ class TTNNPi05GemmaMLP(TTNNModule):
             # (11,2)=27.9us@22c, (11,1)=26.0us@11c, (8,2)=33.4us@16c vs (8,8)=22.0us@32c).
             down_pc = matmul_pcfg(mt, k_dn, n_dn, 8, 8)
             if gate_pc is not None and up_pc is not None and down_pc is not None:
-                gate = ttnn.linear(x, self.tt_gate, memory_config=_L1, program_config=gate_pc)
-                up = ttnn.linear(x, self.tt_up, memory_config=_L1, program_config=up_pc)
+                gate = ttnn.linear(
+                    x,
+                    self.tt_gate,
+                    dtype=_mlp_out_dtype,
+                    memory_config=_L1,
+                    program_config=gate_pc,
+                    compute_kernel_config=_mlp_ck,
+                )
+                up = ttnn.linear(
+                    x,
+                    self.tt_up,
+                    dtype=_mlp_out_dtype,
+                    memory_config=_L1,
+                    program_config=up_pc,
+                    compute_kernel_config=_mlp_ck,
+                )
                 hidden = ttnn.multiply(gate, up, memory_config=_L1)
                 ttnn.deallocate(gate)
                 ttnn.deallocate(up)
-                out = ttnn.linear(hidden, self.tt_down, memory_config=_L1, program_config=down_pc)
+                out = ttnn.linear(
+                    hidden,
+                    self.tt_down,
+                    dtype=_mlp_out_dtype,
+                    memory_config=_L1,
+                    program_config=down_pc,
+                    compute_kernel_config=_mlp_ck,
+                )
                 ttnn.deallocate(hidden)
                 return out
         # gate/up: large-M VLM (288x2048x16384) wins on the FULL 2D grid (tracy
         # device: 303us default -> 135us full); small-M expert keeps default.
         gu_cg = self._full_cg if seq > 96 else None
-        gate = ttnn.linear(x, self.tt_gate, memory_config=_L1, core_grid=gu_cg)
+        gate = ttnn.linear(
+            x, self.tt_gate, dtype=_mlp_out_dtype, memory_config=_L1, core_grid=gu_cg, compute_kernel_config=_mlp_ck
+        )
         # fast_and_approximate_mode: matches the reference's tanh-approx gelu and is
         # ~2.9x faster on the 16384-wide VLM intermediate (96->33us; op-sweep, PCC>=0.999).
         gate = ttnn.gelu(gate, fast_and_approximate_mode=True, memory_config=_L1)
-        up = ttnn.linear(x, self.tt_up, memory_config=_L1, core_grid=gu_cg)
+        up = ttnn.linear(
+            x, self.tt_up, dtype=_mlp_out_dtype, memory_config=_L1, core_grid=gu_cg, compute_kernel_config=_mlp_ck
+        )
         hidden = ttnn.multiply(gate, up, memory_config=_L1)
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
@@ -177,7 +210,14 @@ class TTNNPi05GemmaMLP(TTNNModule):
         # (~2%): the VLM down is compute-bound at LoFi, NOT activation-bandwidth-
         # bound, so it does not justify the KV-propagation PCC risk. Not adopted.)
         down_cg = self._row_cg if seq <= 96 else self._full_cg
-        out = ttnn.linear(hidden, self.tt_down, memory_config=_L1, core_grid=down_cg)
+        out = ttnn.linear(
+            hidden,
+            self.tt_down,
+            dtype=_mlp_out_dtype,
+            memory_config=_L1,
+            core_grid=down_cg,
+            compute_kernel_config=_mlp_ck,
+        )
         ttnn.deallocate(hidden)
         return out
 
@@ -186,7 +226,7 @@ class TTNNPi05GemmaMLP(TTNNModule):
 # Multi-Query Attention (8 Q heads, 1 KV head, head_dim 256)
 # ---------------------------------------------------------------------------
 @trace_enabled
-class TTNNPi05GemmaAttention(TTNNModule):
+class TTNNPi05GemmaAttention(StatefulTTNNModule):
     """Gemma MQA with fused QKV, meta-format RoPE, SDPA and KV cache.
 
     Reference: ``reference/torch_gemma.py::GemmaAttention.forward`` and
@@ -283,9 +323,7 @@ class TTNNPi05GemmaAttention(TTNNModule):
         import torch as _torch
 
         if prefix_len % 32 != 0:
-            raise ValueError(
-                f"static KV requires a tile-aligned prefix_len; got {prefix_len} (not a multiple of 32)"
-            )
+            raise ValueError(f"static KV requires a tile-aligned prefix_len; got {prefix_len} (not a multiple of 32)")
         total = prefix_len + suffix_len
         # Reuse an existing same-shape buffer (persistent across inferences so a
         # captured trace keeps pointing at a valid buffer). Only (re)allocate when
@@ -296,8 +334,16 @@ class TTNNPi05GemmaAttention(TTNNModule):
             ttnn.deallocate(self._static_k)
             ttnn.deallocate(self._static_v)
         zeros = _torch.zeros(1, self.num_kv_heads, total, self.head_dim)
-        self._static_k = ttnn.from_torch(zeros, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=_DRAM)
-        self._static_v = ttnn.from_torch(zeros, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=_DRAM)
+        # deep-plan_4 site (d): expert static cross-attn KV buffer. Flips to bf16 with
+        # PI05_VLM_KV_BF16=1 (together with site c) so every fill_cache (prefix-copy
+        # :311-312, expert suffix :418-419) sees matching bf16 dtypes. Weights stay bf8_b.
+        _static_kv_dtype = ttnn.bfloat16 if os.environ.get("PI05_VLM_KV_BF16") == "1" else ttnn.bfloat8_b
+        self._static_k = ttnn.from_torch(
+            zeros, dtype=_static_kv_dtype, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=_DRAM
+        )
+        self._static_v = ttnn.from_torch(
+            zeros, dtype=_static_kv_dtype, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=_DRAM
+        )
         self._static_prefix_len = prefix_len
 
     def fill_static_prefix(self, past_k: ttnn.Tensor, past_v: ttnn.Tensor) -> None:
@@ -343,8 +389,20 @@ class TTNNPi05GemmaAttention(TTNNModule):
             ttnn.deallocate(self._vlm_prefix_k)
             ttnn.deallocate(self._vlm_prefix_v)
         zeros = _torch.zeros(1, self.num_kv_heads, prefix_len, self.head_dim)
-        self._vlm_prefix_k = ttnn.from_torch(zeros, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=_DRAM)
-        self._vlm_prefix_v = ttnn.from_torch(zeros, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=_DRAM)
+        # deep-plan_4 site (c): VLM-prefill self-attn prefix KV store. Flips to bf16 with
+        # PI05_VLM_KV_BF16=1 (full change, together with site d) OR
+        # PI05_VLM_QKV_OUT_BF16_PREFILLONLY=1 (the §4 cheap ladder-only probe -- _static_*
+        # stays bf8_b there, the ladder never exercises the expert path). The VLM fill at
+        # :432-433 then sees matching bf16 src (site a) -> dst dtypes. Weights stay bf8_b.
+        _vlm_kv_dtype = ttnn.bfloat8_b
+        if os.environ.get("PI05_VLM_KV_BF16") == "1" or os.environ.get("PI05_VLM_QKV_OUT_BF16_PREFILLONLY") == "1":
+            _vlm_kv_dtype = ttnn.bfloat16
+        self._vlm_prefix_k = ttnn.from_torch(
+            zeros, dtype=_vlm_kv_dtype, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=_DRAM
+        )
+        self._vlm_prefix_v = ttnn.from_torch(
+            zeros, dtype=_vlm_kv_dtype, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=_DRAM
+        )
 
     def clear_vlm_prefix_store(self) -> None:
         if self._vlm_prefix_k is not None:
@@ -352,6 +410,21 @@ class TTNNPi05GemmaAttention(TTNNModule):
             ttnn.deallocate(self._vlm_prefix_v)
         self._vlm_prefix_k = None
         self._vlm_prefix_v = None
+
+    def reset_trace_state(self) -> None:
+        # STATEFUL: forward writes self._static_k/_v (expert) and self._vlm_prefix_k/_v (VLM
+        # prefill) via ttnn.fill_cache. Both writes use a FIXED update_idx -- update_idx=0 for
+        # the VLM store and update_idx=self._static_prefix_len for the expert suffix slot -- i.e.
+        # an in-place OVERWRITE at a constant offset, NOT an advancing append (contrast
+        # ttnn.update_cache, whose write position advances and so double-applies under the
+        # double-run). Running forward twice during trace setup (warm-up + capture) overwrites the
+        # SAME slot with the second run's value, leaving the buffer in exactly the state a single
+        # capture run would -> the double-run is idempotent and there is NOTHING to revert. The
+        # recorded fill_cache replays the current step's K/V into the same slot every replay.
+        # Hence a justified no-op (NOT the bare TTNNModule sentinel -- this is a real, reasoned
+        # reset). Were these ever changed to an advancing append, this MUST roll the write
+        # position back to its pre-forward baseline instead.
+        return None
 
     @run_on_devices(DeviceArch.P150)
     def forward(
@@ -378,11 +451,64 @@ class TTNNPi05GemmaAttention(TTNNModule):
         _g = self.device.compute_with_storage_grid_size()
         # 2D-block matmul program config (build_matmul_pcfg: 1.24x VLM over the
         # core_grid path); fall back to the core_grid path when no clean grid divides.
-        _qkv_pc = matmul_pcfg(s // 32, self.tt_wqkv.shape[-2] // 32, self.tt_wqkv.shape[-1] // 32, _g.x, _g.y, in0_block_w=8)
+        _qkv_pc = matmul_pcfg(
+            s // 32, self.tt_wqkv.shape[-2] // 32, self.tt_wqkv.shape[-1] // 32, _g.x, _g.y, in0_block_w=8
+        )
+        # deep-plan_3 probe lever (env-gated, default OFF): pass an explicit HiFi4
+        # compute_kernel_config to the VLM QKV matmul. The PRE/POST-SDPA-V split proved
+        # the bf8_b QKV matmul output (V_pre, the SDPA INPUT) is the eroder, not the SDPA
+        # accumulation; bumping the matmul accumulation fidelity targets that site directly.
+        _qkv_ck = None
+        if s > 96 and os.environ.get("PI05_VLM_QKV_HIFI4") == "1":
+            _qkv_ck = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+        # deep-plan_4 lever (env-gated, default OFF -> production/trace forward byte-identical):
+        # de-quantize the QKV matmul OUTPUT to bf16 (weight self.tt_wqkv STAYS bf8_b). The
+        # bf8_b matmul writeback is the per-layer V_pre eroder (the SDPA INPUT capped at ~0.92);
+        # a bf16 output keeps V un-quantized FROM the matmul THROUGH the cache TO SDPA.
+        #   PI05_VLM_QKV_OUT_BF16            -> bf16 on BOTH s>96 (VLM, site a) AND s<=96 (expert,
+        #                                       site b). REQUIRED for the full E2E change: the expert
+        #                                       suffix fill (:418-419) writes this output into the
+        #                                       bf16 _static_* and fill_cache TT_FATALs on a dtype
+        #                                       mismatch -> the s<=96 path MUST also emit bf16.
+        #   PI05_VLM_QKV_OUT_BF16_PREFILLONLY-> bf16 on s>96 ONLY (the §4 cheap ladder probe; the
+        #                                       expert path is never fed a bf16 buffer so no FATAL).
+        # Optional matmul-path HiFi4+fp32-dest accumulation (SEPARATE from the SDPA fp32-dest ban,
+        # allowed if bit-deterministic) gated by the same knob.
+        _qkv_out_dtype = ttnn.bfloat8_b
+        if os.environ.get("PI05_VLM_QKV_OUT_BF16") == "1":
+            _qkv_out_dtype = ttnn.bfloat16
+        elif s > 96 and os.environ.get("PI05_VLM_QKV_OUT_BF16_PREFILLONLY") == "1":
+            _qkv_out_dtype = ttnn.bfloat16
+        if _qkv_ck is None and _qkv_out_dtype == ttnn.bfloat16 and os.environ.get("PI05_VLM_QKV_OUT_HIFI4") == "1":
+            _qkv_ck = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
         if _qkv_pc is not None:
-            qkv = ttnn.linear(hidden_states, self.tt_wqkv, dtype=ttnn.bfloat8_b, memory_config=_L1, program_config=_qkv_pc)
+            qkv = ttnn.linear(
+                hidden_states,
+                self.tt_wqkv,
+                dtype=_qkv_out_dtype,
+                memory_config=_L1,
+                program_config=_qkv_pc,
+                compute_kernel_config=_qkv_ck,
+            )
         else:
-            qkv = ttnn.linear(hidden_states, self.tt_wqkv, dtype=ttnn.bfloat8_b, memory_config=_L1, core_grid=qkv_cg)
+            qkv = ttnn.linear(
+                hidden_states,
+                self.tt_wqkv,
+                dtype=_qkv_out_dtype,
+                memory_config=_L1,
+                core_grid=qkv_cg,
+                compute_kernel_config=_qkv_ck,
+            )
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv,
             num_heads=self.num_heads,
@@ -444,10 +570,40 @@ class TTNNPi05GemmaAttention(TTNNModule):
         # (8,4)=0.699 (8,2)=0.687). VLM (s>96) keeps the default SDPA.
         _sdpa_kwargs = {}
         if s <= 96:
+            # EXPERT (small-q): pin L1 output + the swept (8,2)-grid program config
+            # (UNCHANGED -> in-trace expert path byte-identical -> captured==2 preserved).
             _sdpa_kwargs["memory_config"] = _L1  # L1 output -> concat_heads reads L1 not DRAM
             _spc = sdpa_program_config(q.shape[-2], k.shape[-2], min(_g.x, 8), min(_g.y, 2))
             if _spc is not None:
                 _sdpa_kwargs["program_config"] = _spc
+        elif os.environ.get("PI05_VLM_SDPA_PCFG", "0") == "1":
+            # VLM PREFILL (s>96): OPT-IN restore of the reference long-prefix SDPA
+            # program config (q_chunk=64, k_chunk=128 at 896 via sdpa_prefill_chunk_sizes;
+            # exp_approx_mode=False) on the FULL device grid (reference ttnn_gemma.py:
+            # 578-599 applies it UNCONDITIONALLY). deep-plan_3 MEASURED this (cfg CA):
+            # the 18-layer PRE/POST-SDPA-V ladder proved the per-layer V eroder is the
+            # bf8_b QKV matmul chain BEFORE attention (V_pre, the SDPA INPUT, is the low
+            # quantity; the SDPA accumulation V_pre->V_post actually RAISES PCC), so the
+            # program config moved V negligibly (meanVpre 0.9265->0.9268) and was
+            # NET-NEGATIVE at E2E (own-KV E2E 0.6463 HiFi4-only -> 0.5833 HiFi4+pcfg).
+            # => default OFF (kept config is HiFi4 SDPA fidelity only). PI05_VLM_SDPA_PCFG=1
+            # re-enables it for A/B.
+            _vlm_kc = os.environ.get("LADDER_VLM_KCHUNK")
+            _vlm_qc = os.environ.get("LADDER_VLM_QCHUNK")
+            _kw = {}
+            if _vlm_kc is not None:
+                _kw["k_chunk"] = int(_vlm_kc)
+            if _vlm_qc is not None:
+                _kw["q_chunk"] = int(_vlm_qc)
+            _vlm_spc = sdpa_program_config(q.shape[-2], k.shape[-2], _g.x, _g.y, **_kw)
+            if _vlm_spc is not None:
+                _sdpa_kwargs["program_config"] = _vlm_spc
+        # deep-plan_3 Phase-3 deterministic resort (env-gated, default OFF): cast the
+        # SDPA V input to bf16 for the VLM prefill ONLY. The QKV matmul + cache stay
+        # bf8_b (reference parity); only the SDPA online-softmax accumulation reads a
+        # higher-mantissa V. Pure ttnn op; VLM-branch-only; pre-trace. PROBE lever.
+        if s > 96 and os.environ.get("PI05_VLM_SDPA_V_BF16") == "1":
+            v = ttnn.typecast(v, ttnn.bfloat16)
         attn_out = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
@@ -458,15 +614,47 @@ class TTNNPi05GemmaAttention(TTNNModule):
             compute_kernel_config=get_sdpa_compute_kernel_config(),
             **_sdpa_kwargs,
         )
+        # deep-plan_3 PRE/POST-SDPA-V split (env-gated, OFF by default -> production
+        # forward byte-identical / trace-safe). When KV_LADDER_PRE_SDPA=1 the probe
+        # reads this read-only snapshot of the post-online-softmax attention output
+        # AFTER forward returns (never fed back into compute, never committed-active).
+        if self._vlm_prefix_v is not None and os.environ.get("KV_LADDER_PRE_SDPA") == "1":
+            self._ladder_post_sdpa_v = ttnn.to_torch(attn_out).float().clone()
         ttnn.deallocate(q)
 
         attn_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=_L1)
         # o_proj matmul: 2D-block pcfg (same lever as qkv), else core_grid fallback.
+        # Output is ALREADY bf16; weight tt_o STAYS bf8_b. deep-plan_4 widen rung 2
+        # (env-gated, default OFF): PI05_VLM_OPROJ_HIFI4=1 bumps the o_proj matmul
+        # ACCUMULATION fidelity (HiFi4 + fp32-dest -- MATMUL path, SEPARATE from the
+        # SDPA fp32-dest ban, allowed if bit-deterministic). Both s>96 and s<=96.
+        _o_ck = None
+        if os.environ.get("PI05_VLM_OPROJ_HIFI4") == "1":
+            _o_ck = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
         _o_pc = matmul_pcfg(s // 32, self.tt_o.shape[-2] // 32, self.tt_o.shape[-1] // 32, _g.x, _g.y, in0_block_w=8)
         if _o_pc is not None:
-            out = ttnn.linear(attn_out, self.tt_o, dtype=ttnn.bfloat16, memory_config=_L1, program_config=_o_pc)
+            out = ttnn.linear(
+                attn_out,
+                self.tt_o,
+                dtype=ttnn.bfloat16,
+                memory_config=_L1,
+                program_config=_o_pc,
+                compute_kernel_config=_o_ck,
+            )
         else:
-            out = ttnn.linear(attn_out, self.tt_o, dtype=ttnn.bfloat16, memory_config=_L1, core_grid=qkv_cg)
+            out = ttnn.linear(
+                attn_out,
+                self.tt_o,
+                dtype=ttnn.bfloat16,
+                memory_config=_L1,
+                core_grid=qkv_cg,
+                compute_kernel_config=_o_ck,
+            )
         ttnn.deallocate(attn_out)
         if len(out.shape) == 4:
             out = ttnn.reshape(out, (b, s, out.shape[-1]))
@@ -477,10 +665,15 @@ class TTNNPi05GemmaAttention(TTNNModule):
 # Plain Gemma decoder block (VLM backbone)
 # ---------------------------------------------------------------------------
 @trace_enabled
-class TTNNPi05GemmaBlock(TTNNModule):
+class TTNNPi05GemmaBlock(StatefulTTNNModule):
     """Pre-norm Gemma decoder block: norm -> attn -> +res -> norm -> mlp -> +res.
 
     Reference: ``reference/torch_gemma.py::GemmaBlock.forward``.
+
+    STATEFUL because it contains the stateful ``TTNNPi05GemmaAttention`` (KV fill_cache) and is a
+    trace unit during VLM prefill -- a Stateless trace unit may not own Stateful descendants. The
+    block holds no own trace state; the framework resets the descendant attention via the trace
+    tree-reset, so this is an own-state no-op.
     """
 
     @classmethod
@@ -495,6 +688,11 @@ class TTNNPi05GemmaBlock(TTNNModule):
         new.attention = TTNNPi05GemmaAttention.from_torch(block.attention, config)
         new.mlp = TTNNPi05GemmaMLP.from_torch(block.mlp, config, weight_dtype=mlp_weight_dtype)
         return new
+
+    def reset_trace_state(self) -> None:
+        # No OWN trace state; the framework's trace tree-reset resets the stateful descendant
+        # (self.attention). Stateful only because it owns that stateful descendant.
+        return None
 
     def preprocess_weights_impl(self):
         self.tt_input_ln = _norm_weight_to_tt(self._input_ln_w)
@@ -520,9 +718,7 @@ class TTNNPi05GemmaBlock(TTNNModule):
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         _m, _h = hidden_states.shape[-2], hidden_states.shape[-1]
         normed = sharded_rms_norm(hidden_states, self.tt_input_ln, self._eps, _m, _h)
-        attn_out, new_cache = self.attention(
-            normed, cos, sin, attention_mask, past_key_value, use_cache
-        )
+        attn_out, new_cache = self.attention(normed, cos, sin, attention_mask, past_key_value, use_cache)
         ttnn.deallocate(normed)
         hidden_states = ttnn.add(hidden_states, attn_out, memory_config=_L1)
         ttnn.deallocate(attn_out)
@@ -539,7 +735,7 @@ class TTNNPi05GemmaBlock(TTNNModule):
 # AdaRMS Gemma block (action expert)
 # ---------------------------------------------------------------------------
 @trace_enabled
-class TTNNPi05AdaRMSGemmaBlock(TTNNModule):
+class TTNNPi05AdaRMSGemmaBlock(StatefulTTNNModule):
     """Action-expert block with adaptive RMSNorm + gated residuals.
 
     adaRMS: ``normed = plain_rms(x); out = normed * (1 + scale) + shift`` where
@@ -567,6 +763,11 @@ class TTNNPi05AdaRMSGemmaBlock(TTNNModule):
         new.attention = TTNNPi05GemmaAttention.from_torch(block.attention, config)
         new.mlp = TTNNPi05GemmaMLP.from_torch(block.mlp, config)
         return new
+
+    def reset_trace_state(self) -> None:
+        # No OWN trace state; the framework's trace tree-reset resets the stateful descendant
+        # (self.attention). Stateful only because it owns that stateful descendant.
+        return None
 
     def preprocess_weights_impl(self):
         self.tt_pre_attn_mod_w = _linear_weight_to_tt(self._pre_attn_mod_w, dtype=ttnn.bfloat16)
@@ -673,9 +874,7 @@ class TTNNPi05AdaRMSGemmaBlock(TTNNModule):
             sa1, sha, ga, sf1, shf, gf = precomputed_mod
 
         normed = self._apply_ada(hidden_states, sa1, sha, self._eps)
-        attn_out, new_cache = self.attention(
-            normed, cos, sin, attention_mask, past_key_value, use_cache
-        )
+        attn_out, new_cache = self.attention(normed, cos, sin, attention_mask, past_key_value, use_cache)
         ttnn.deallocate(normed)
         gated_attn = ttnn.multiply(ga, attn_out, memory_config=_L1)
         ttnn.deallocate(attn_out)

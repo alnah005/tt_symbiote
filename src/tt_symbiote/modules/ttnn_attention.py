@@ -16,7 +16,7 @@ except ImportError:
 
 import ttnn
 
-from tt_symbiote.core.module import TTNNModule, DeviceArch, run_on_devices
+from tt_symbiote.core.module import DeviceArch, StatefulTTNNModule, StatelessTTNNModule, run_on_devices
 from tt_symbiote.core.tensor import TorchTTNNTensor
 from tt_symbiote.modules.ttnn_linear import (
     TTNNLinear,
@@ -350,7 +350,7 @@ class TorchSDPAAttention(torch.nn.Module):
         return attn_output
 
 
-class TTNNSDPAAttention(TTNNModule):
+class TTNNSDPAAttention(StatelessTTNNModule):
     def __init__(self):
         super().__init__()
         self._fallback_torch_layer = TorchSDPAAttention()
@@ -527,7 +527,7 @@ class SelfAttention(torch.nn.Module):
         return (context_layer,)
 
 
-class TTNNFusedQKVSelfAttention(TTNNModule):
+class TTNNFusedQKVSelfAttention(StatelessTTNNModule):
     @classmethod
     def from_torch(cls, fused_qkv: "PytorchFusedQKVSelfAttention"):
         """Create TTNNViTSelfAttention from PyTorch ViTSelfAttention."""
@@ -592,7 +592,7 @@ class TTNNFusedQKVSelfAttention(TTNNModule):
         return queries, keys, values
 
 
-class TTNNSelfAttention(TTNNModule):
+class TTNNSelfAttention(StatelessTTNNModule):
     """TTNN-accelerated ViT Self-Attention layer."""
 
     def __init__(self, attention_config: SelfAttentionConfig) -> None:
@@ -701,7 +701,7 @@ class TTNNViTSelfAttention(TTNNSelfAttention):
         return new_self_attention
 
 
-class TTNNWhisperAttention(TTNNModule):
+class TTNNWhisperAttention(StatelessTTNNModule):
     """Minimal TTNN Whisper Attention with KV cache."""
 
     def __init__(
@@ -926,7 +926,7 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     return q_embed, k_embed
 
 
-class LlamaAttention(TTNNModule):
+class LlamaAttention(StatelessTTNNModule):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
     def __init__(
@@ -1070,7 +1070,7 @@ class LlamaAttention(TTNNModule):
         return self.o_proj(attn_out), None
 
 
-class TTNNGlm4MoeLiteAttention(TTNNModule):
+class TTNNGlm4MoeLiteAttention(StatefulTTNNModule):
     """TTNN-accelerated Multi-Latent Attention for Glm4MoeLite.
 
     Supports both standard DynamicCache and TTNNPagedAttentionKVCache
@@ -1515,6 +1515,18 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
 
         return attn_output, None
 
+    def reset_trace_state(self) -> None:
+        # STATEFUL: forward appends to the paged KV cache via past_key_values.paged_update_on_device
+        # (decode advances cur_pos). During the trace capture double-run (warm-up + capture forward)
+        # the append runs twice, double-advancing the write position. This hook must roll cur_pos /
+        # the cache counter back to its pre-forward baseline so the captured trace appends ONCE.
+        # NOT YET IMPLEMENTED -- raises so traced execution fails loudly until the revert lands.
+        raise NotImplementedError(
+            "TTNNGlm4MoeLiteAttention.reset_trace_state is not implemented: it must revert the "
+            "paged KV-cache write position (cur_pos / counter on past_key_values) to its pre-forward "
+            "baseline so the trace capture double-run performs exactly one paged_update_cache append."
+        )
+
     @run_on_devices(DeviceArch.T3K)
     def forward(
         self,
@@ -1652,7 +1664,7 @@ def gated_attention_forward_ttnn(
     return attn_output
 
 
-class TTNNQwen3NextGatedAttention(TTNNModule):
+class TTNNQwen3NextGatedAttention(StatelessTTNNModule):
     def __init__(self):
         super().__init__()
 
@@ -1823,7 +1835,7 @@ def _reverse_permute_1d(tensor: torch.Tensor, rotary_dim: int, head_dim: int = 0
     return result.reshape(dim)
 
 
-class TTNNBailingMoEAttention(TTNNModule):
+class TTNNBailingMoEAttention(StatefulTTNNModule):
     """TTNN Attention for BailingMoeV2 (Ling-mini-2.0 model).
 
     Uses TTNNPagedAttentionKVCache for paged attention with on-device KV storage.
@@ -2401,6 +2413,18 @@ class TTNNBailingMoEAttention(TTNNModule):
         attn_output = ttnn.reshape(attn_output, (batch_size, seq_length, -1))
 
         return attn_output, None, past_key_values
+
+    def reset_trace_state(self) -> None:
+        # STATEFUL: forward appends to the paged KV cache via past_key_values.paged_update_on_device
+        # (decode advances cur_pos). During the trace capture double-run (warm-up + capture forward)
+        # the append runs twice, double-advancing the write position. This hook must roll cur_pos /
+        # the cache counter back to its pre-forward baseline so the captured trace appends ONCE.
+        # NOT YET IMPLEMENTED -- raises so traced execution fails loudly until the revert lands.
+        raise NotImplementedError(
+            "TTNNBailingMoEAttention.reset_trace_state is not implemented: it must revert the "
+            "paged KV-cache write position (cur_pos / counter on past_key_values) to its pre-forward "
+            "baseline so the trace capture double-run performs exactly one paged_update_cache append."
+        )
 
     @run_on_devices(DeviceArch.T3K)
     def forward(

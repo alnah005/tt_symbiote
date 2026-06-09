@@ -56,7 +56,7 @@ from typing import List, Optional
 import torch
 import ttnn
 
-from tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices
+from tt_symbiote.core.module import DeviceArch, StatelessTTNNModule, run_on_devices
 from tt_symbiote.core.run_config import trace_enabled
 
 from .configuration_pi05 import SigLIPConfig
@@ -93,9 +93,7 @@ def _nearest_32(x: int) -> int:
     return ((x + 31) // 32) * 32
 
 
-def _linear_weight_to_tt(
-    w: torch.Tensor, dtype: ttnn.DataType = ttnn.bfloat16
-) -> ttnn.Tensor:
+def _linear_weight_to_tt(w: torch.Tensor, dtype: ttnn.DataType = ttnn.bfloat16) -> ttnn.Tensor:
     """Transpose a torch ``[out, in]`` linear weight to ttnn ``[in, out]`` host tensor."""
     return ttnn.from_torch(w.t().contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT)
 
@@ -119,7 +117,7 @@ def _to_dev(t: Optional[ttnn.Tensor], device) -> Optional[ttnn.Tensor]:
 # ---------------------------------------------------------------------------
 # Patch Embedding (conv2d-as-linear via device unfold)
 # ---------------------------------------------------------------------------
-class TTNNPi05SigLIPPatchEmbedding(TTNNModule):
+class TTNNPi05SigLIPPatchEmbedding(StatelessTTNNModule):
     """Patch embedding: device-side 6D-permute unfold + ``ttnn.linear``.
 
     Reconstructs the conv2d (kernel = stride = patch_size, non-overlapping
@@ -210,7 +208,7 @@ class TTNNPi05SigLIPPatchEmbedding(TTNNModule):
 # Multi-Head Self-Attention (16 heads, head_dim 72 padded to 96)
 # ---------------------------------------------------------------------------
 @trace_enabled
-class TTNNPi05SigLIPAttention(TTNNModule):
+class TTNNPi05SigLIPAttention(StatelessTTNNModule):
     """Standard MHA: fused QKV -> head split -> SDPA -> head concat -> O-proj.
 
     head_dim 72 is not tile-aligned (32). Following the reference, Q/K/V/O
@@ -388,7 +386,7 @@ class TTNNPi05SigLIPAttention(TTNNModule):
 # MLP: fc2(gelu_tanh(fc1(x)))
 # ---------------------------------------------------------------------------
 @trace_enabled
-class TTNNPi05SigLIPMLP(TTNNModule):
+class TTNNPi05SigLIPMLP(StatelessTTNNModule):
     """SigLIP MLP: ``fc2(gelu_tanh(fc1(x)))``.
 
     Reference: ``tt/ttnn_siglip.py::SigLIPMLPTTNN`` (L731-966), torch golden
@@ -448,19 +446,29 @@ class TTNNPi05SigLIPMLP(TTNNModule):
         s = x.shape[-2]
         _g = self.device.compute_with_storage_grid_size()
         _fc1_pc = matmul_pcfg(
-            s // 32, self.tt_fc1.shape[-2] // 32, -(-self.tt_fc1.shape[-1] // 32), _g.x, _g.y,
+            s // 32,
+            self.tt_fc1.shape[-2] // 32,
+            -(-self.tt_fc1.shape[-1] // 32),
+            _g.x,
+            _g.y,
             activation=(ttnn.UnaryOpType.GELU, True),
         )
         if _fc1_pc is not None:
-            h = ttnn.linear(x, self.tt_fc1, bias=self.tt_fc1_b, dtype=ttnn.bfloat16, memory_config=_L1, program_config=_fc1_pc)
+            h = ttnn.linear(
+                x, self.tt_fc1, bias=self.tt_fc1_b, dtype=ttnn.bfloat16, memory_config=_L1, program_config=_fc1_pc
+            )
         else:
             h = ttnn.linear(x, self.tt_fc1, bias=self.tt_fc1_b, dtype=ttnn.bfloat16, memory_config=_L1)
             h = ttnn.gelu(h, fast_and_approximate_mode=True, memory_config=_L1)  # tanh-approx (matches reference)
         _fc2_pc = matmul_pcfg(s // 32, -(-self.tt_fc2.shape[-2] // 32), self.tt_fc2.shape[-1] // 32, _g.x, _g.y)
         if _fc2_pc is not None:
-            out = ttnn.linear(h, self.tt_fc2, bias=self.tt_fc2_b, dtype=ttnn.bfloat16, memory_config=_L1, program_config=_fc2_pc)
+            out = ttnn.linear(
+                h, self.tt_fc2, bias=self.tt_fc2_b, dtype=ttnn.bfloat16, memory_config=_L1, program_config=_fc2_pc
+            )
         else:
-            out = ttnn.linear(h, self.tt_fc2, bias=self.tt_fc2_b, dtype=ttnn.bfloat16, memory_config=_L1, core_grid=self._full_cg)
+            out = ttnn.linear(
+                h, self.tt_fc2, bias=self.tt_fc2_b, dtype=ttnn.bfloat16, memory_config=_L1, core_grid=self._full_cg
+            )
         ttnn.deallocate(h)
         return out
 
@@ -469,7 +477,7 @@ class TTNNPi05SigLIPMLP(TTNNModule):
 # Pre-LN encoder block
 # ---------------------------------------------------------------------------
 @trace_enabled
-class TTNNPi05SigLIPBlock(TTNNModule):
+class TTNNPi05SigLIPBlock(StatelessTTNNModule):
     """Pre-LN encoder block: LN1 -> attn -> +res -> LN2 -> mlp -> +res.
 
     LayerNorm (NOT RMSNorm). Reference: ``tt/ttnn_siglip.py::SigLIPBlockTTNN``
@@ -530,7 +538,7 @@ class TTNNPi05SigLIPBlock(TTNNModule):
 # Full vision tower
 # ---------------------------------------------------------------------------
 @trace_enabled
-class TTNNPi05SigLIPVisionTower(TTNNModule):
+class TTNNPi05SigLIPVisionTower(StatelessTTNNModule):
     """SigLIP vision tower: patch-embed + pos-embed + 27 blocks + post-LN.
 
     ``@trace_enabled`` at the TOWER level: the 27 blocks each run once per
@@ -628,12 +636,18 @@ class TTNNPi05SigLIPVisionTower(TTNNModule):
 # ---------------------------------------------------------------------------
 # Multi-modal projector (1152 -> 2048)
 # ---------------------------------------------------------------------------
-@trace_enabled
-class TTNNPi05MultiModalProjector(TTNNModule):
+class TTNNPi05MultiModalProjector(StatelessTTNNModule):
     """Single linear projecting vision features to the VLM hidden size.
 
     Reference: ``tt/ttnn_siglip.py::MultiModalProjectorTTNN`` (L1460-1524), torch
     golden ``reference/torch_siglip.py::MultiModalProjector`` (L418-449).
+
+    NOT ``@trace_enabled``: it runs immediately after the ``@trace_enabled`` vision tower
+    inside ``embed_image``, and a SECOND back-to-back capture whose input is the tower's
+    trace-region output is rejected by the mesh command queue
+    (``TT_FATAL !trace_id_.has_value()``) -- which broke multi-camera ``sample_actions``
+    under TRACED. It is a single ``ttnn.linear`` (negligible dispatch), so running it eager
+    under TRACED is transparent: same result as NORMAL, no second capture.
     """
 
     @classmethod

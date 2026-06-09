@@ -889,9 +889,17 @@ def trace_enabled(cls: Type) -> Type:
     """
     Decorator to mark a TTNNModule subclass as trace-enabled.
 
+    The ``reset_trace_state`` contract is enforced by the class hierarchy, not here: a module
+    cannot extend ``TTNNModule`` directly (the direct-subclass ban), so it is always a
+    :class:`StatelessTTNNModule` (no-op reset, declared stateless) or a
+    :class:`StatefulTTNNModule` (which requires its own ``reset_trace_state`` at class-creation
+    time). A @trace_enabled module's ``forward`` is invoked TWICE during trace setup (warm-up
+    then capture-record), so ``reset_trace_state`` is the hook a stateful module uses to
+    (re)initialize internal state -- see ``TTNNModule.reset_trace_state``.
+
     Usage:
         @trace_enabled
-        class MyModule(TTNNModule):
+        class MyModule(StatelessTTNNModule):   # or StatefulTTNNModule (+ reset_trace_state)
             ...
     """
     _TRACE_ENABLED_CLASSES.add(cls)
@@ -923,6 +931,15 @@ class TracedRun(LightweightRun):
          sequence into a DRAM buffer. The system is already in steady state.
       3. **Replay** (third encounter onward): ``execute_trace`` replays the
          clean trace with near-zero host dispatch overhead.
+
+    ORDERING INVARIANT — replays always follow cold compiles. The warm-up of a
+    never-seen ``cache_key`` is a *cold compile* (allocates device buffers). Because a
+    cold compile that runs while captured traces exist can corrupt them, any such cold
+    compile first discards every captured trace (``invalidate_captures_for_cold_compile``);
+    the discarded keys re-capture on their next encounter, after this compile. The cache
+    is class-level, so this holds across all ``@trace_enabled`` modules. Steady-state
+    fixed-shape loops (e.g. a denoise/decode loop with one key) see no churn; sequential
+    multi-key models simply re-capture once per new cold compile and then converge.
     """
 
     _device: Any = None
@@ -961,10 +978,18 @@ class TracedRun(LightweightRun):
 
     @classmethod
     def release_all(cls) -> None:
-        """Release all cached traces."""
+        """Release all cached traces AND clear the warm-up bookkeeping.
+
+        ``_warmup_keys`` MUST be cleared alongside the cache: a cache_key is
+        ``(module_name, arg_signature)`` and ``module_name`` is ``f"{cls}_{id(self)}"`` --
+        Python reuses ``id()`` after GC, so a later module can collide with a stale warm-up
+        key whose trace was already released. That collision sends it straight to the CAPTURE
+        branch (warm-up skipped), capturing cold -> corrupt replay (observed across back-to-back
+        traced tests: e2e PCC ~-0.06). Clearing both keeps the bookkeeping consistent."""
         for entry in cls._trace_cache.values():
             ttnn.release_trace(entry.device, entry.trace_id)
         cls._trace_cache.clear()
+        cls._warmup_keys.clear()
 
     @classmethod
     def release(cls, module_name: str) -> int:
@@ -974,6 +999,89 @@ class TracedRun(LightweightRun):
             entry = cls._trace_cache.pop(key)
             ttnn.release_trace(entry.device, entry.trace_id)
         return len(to_remove)
+
+    @classmethod
+    def invalidate_captures_for_cold_compile(cls) -> int:
+        """Release EVERY captured trace WITHOUT touching the warm-up bookkeeping.
+
+        INVARIANT ENFORCED: a trace replay must always come AFTER every cold compile.
+        A "cold compile" is a WARM-UP encounter (the first eager ``forward`` for a
+        never-seen ``cache_key``); it allocates device buffers, and doing so while a
+        captured trace exists can corrupt that trace (tt-metal warns: "Allocating
+        device buffers is unsafe due to the existence of an active trace ... may be
+        corrupted once a trace is executed").
+
+        So when a NEW cold compile is about to run while captured traces exist, every
+        captured trace is discarded here. Each discarded key is left in ``_warmup_keys``
+        (its device-level program cache is still primed by its original warm-up), so its
+        NEXT encounter re-enters the CAPTURE branch directly -- it RE-CAPTURES after this
+        cold compile, with no redundant re-warm and no thrash. Net effect: every live
+        captured trace was recorded after the most recent cold compile, so all replays
+        follow all cold compiles. ``_trace_cache`` is class-level/global, so this holds
+        ACROSS modules (one module's cold compile invalidates another's stale captures).
+
+        Returns the number of traces released. Distinct from ``release_all`` (teardown:
+        also clears ``_warmup_keys`` to dodge the cross-test ``id()``-reuse collision).
+        """
+        n = len(cls._trace_cache)
+        for entry in cls._trace_cache.values():
+            ttnn.release_trace(entry.device, entry.trace_id)
+        cls._trace_cache.clear()
+        return n
+
+    @staticmethod
+    def _assert_no_stateful_descendants(module) -> None:
+        """A STATELESS trace unit may NOT contain STATEFUL descendants.
+
+        A ``@trace_enabled`` :class:`StatelessTTNNModule` declares its ``forward`` mutates no
+        persistent state under the capture double-run. But the framework invokes
+        ``reset_trace_state`` ONLY on the trace unit -- nested modules run with
+        ``_TRACE_RUNNING`` set and never get reset. So a Stateful descendant's ``forward`` would
+        mutate persistent state TWICE (warm-up + capture) with NO reset, baking a corrupt /
+        double-applied mutation into the captured trace. Reject this at trace time.
+
+        Resolution: make the trace unit a :class:`StatefulTTNNModule` whose ``reset_trace_state``
+        also resets its stateful descendants, or keep the stateful descendant out of the traced
+        subtree (trace it as its own unit / make it eager).
+        """
+        from tt_symbiote.core.module import StatefulTTNNModule, StatelessTTNNModule
+
+        if not isinstance(module, StatelessTTNNModule):
+            return
+        offenders = [
+            f"{name} [{type(child).__name__}]"
+            for name, child in module.named_modules()
+            if child is not module and isinstance(child, StatefulTTNNModule)
+        ]
+        if offenders:
+            raise TypeError(
+                f"Stateless trace unit {type(module).__name__} ({module.module_name}) is being "
+                f"traced but has Stateful descendant(s) {offenders}. A StatelessTTNNModule trace "
+                f"unit declares no persistent state, yet the framework resets only the trace unit "
+                f"-- a Stateful descendant's forward would mutate state twice (warm-up + capture) "
+                f"unreset, corrupting the trace. Make the trace unit a StatefulTTNNModule (whose "
+                f"reset_trace_state also resets these descendants), or keep the stateful descendant "
+                f"out of the traced subtree."
+            )
+
+    @staticmethod
+    def _reset_trace_state_tree(module) -> None:
+        """Reset the trace unit's own state, then every Stateful descendant's own state.
+
+        The framework resets only the TRACE UNIT, but a Stateful trace unit may legitimately
+        contain Stateful descendants (the soundness check permits that; only STATELESS trace units
+        with Stateful descendants are rejected). Each module's ``reset_trace_state`` handles ONLY
+        its own state; this single top-down walk guarantees every stateful module in the captured
+        subtree is reset before each of the two trace-setup forwards, with no double-reset
+        (``named_modules`` yields each module once). This is what makes the stateless-with-stateful-
+        descendant ban meaningful: once the unit is Stateful, its descendants actually get reset.
+        """
+        from tt_symbiote.core.module import StatefulTTNNModule
+
+        module.reset_trace_state()
+        for _name, child in module.named_modules():
+            if child is not module and isinstance(child, StatefulTTNNModule):
+                child.reset_trace_state()
 
     @staticmethod
     def _make_cache_key(module_name: str, args) -> Tuple:
@@ -1139,6 +1247,59 @@ class TracedRun(LightweightRun):
         return entry
 
     @staticmethod
+    def _replay(self, func_args, func_kwargs, entry, *, capture_encounter):
+        """Refresh trace input/kwarg buffers, run the recorded trace, return its output.
+
+        Used by BOTH the steady-state replay branch AND the capture encounter's first
+        replay, so "consumed == replay" holds universally. No standalone execute_trace
+        lives in the capture branch anymore.
+
+        ``blocking=True`` on the capture encounter (matches the removed hack's deliberate
+        choice): ``_capture_trace`` already synchronized after ``end_trace_capture``, but
+        this is the FIRST execution of the freshly-recorded trace and its output is
+        consumed immediately by the caller (denoise: ttnn.multiply/add; dots_ocr test:
+        ttnn.to_torch). A blocking execute guarantees ``trace_output`` is fully written
+        before the consumer reads it, removing any CQ-ordering assumption. Steady-state
+        replays keep ``blocking=False`` (unchanged perf path).
+        """
+        pre_trace_begin = time.time()
+        TracedRun._copy_inputs_to_trace_buffer(func_args, entry.trace_inputs)
+        TracedRun._copy_kwargs_to_trace_buffer(func_kwargs, entry.trace_kwargs)
+        pre_trace_end = time.time()
+        DispatchManager.record_timing(
+            "TTNN",
+            self.module_name,
+            self.__class__.__name__ + "_pre_trace_copy",
+            {},
+            pre_trace_end - pre_trace_begin,
+        )
+        pre_trace_begin = time.time()
+        if type(self).pre_trace_execute is not TracedRun._base_pre_trace_execute:
+            self.pre_trace_execute(func_args, func_kwargs)
+        pre_trace_end = time.time()
+        DispatchManager.record_timing(
+            "TTNN",
+            self.module_name,
+            self.__class__.__name__ + "_pre_trace_execute",
+            {},
+            pre_trace_end - pre_trace_begin,
+        )
+        ttnn.execute_trace(entry.device, entry.trace_id, cq_id=TracedRun._cq_id, blocking=capture_encounter)
+        result = entry.trace_output
+        post_trace_begin = time.time()
+        if type(self).post_trace_execute is not TracedRun._base_post_trace_execute:
+            self.post_trace_execute(func_args, func_kwargs, result)
+        post_trace_end = time.time()
+        DispatchManager.record_timing(
+            "TTNN",
+            self.module_name,
+            self.__class__.__name__ + "_post_trace_execute",
+            {},
+            post_trace_end - post_trace_begin,
+        )
+        return result
+
+    @staticmethod
     def module_run(self, *args, **kwds):
         assert self.device is not None, (
             f"{self.module_name}: device is not set. "
@@ -1196,69 +1357,79 @@ class TracedRun(LightweightRun):
             return post_process_ttnn_module_output(self, result)
 
         # Traced execution path — per-(module, cache_key) lifecycle:
-        #   1st encounter: warm-up forward (no trace capture)
-        #   2nd encounter: _capture_trace (clean capture)
-        #   3rd+ encounter: execute_trace (replay)
+        #   1st encounter: warm-up   -> forward runs eagerly (FORWARD INVOCATION 1 of 2)
+        #   2nd encounter: capture   -> forward runs again, RECORDED (FORWARD INVOCATION 2 of 2),
+        #                               then the recorded trace is executed once (consumed == replay)
+        #   3rd+ encounter: replay   -> execute_trace only (forward NOT re-invoked)
+        # NOTE TO MODULE OWNERS: a @trace_enabled module's forward() is invoked TWICE before any
+        # pure replay (warm-up then capture-record), and the capture forward's side effects are
+        # what the recorded trace replays thereafter. If your forward mutates INTERNAL/PERSISTENT
+        # state (KV fill_cache, lazy buffer alloc, counters), override TTNNModule.reset_trace_state()
+        # to (re)initialize that state to a clean baseline + PRE-ALLOCATE persistent buffers, so
+        # both setup forwards are safe and nothing is lazily allocated DURING capture. The hook is
+        # invoked below before each of the two setup forwards; see reset_trace_state.__doc__.
+        # The CONSUMED result is ALWAYS a replay -- the capture encounter falls through to the
+        # SAME _replay helper as every later encounter, so the un-executed (uninitialized)
+        # entry.trace_output is NEVER returned. No standalone execute_trace lives in the
+        # capture branch; tracing flows solely via @trace_enabled + this lifecycle.
         cache_key = TracedRun._make_cache_key(self.module_name, func_args)
 
-        if cache_key in TracedRun._trace_cache:
-            # === RUN 3+: REPLAY ===
-            entry = TracedRun._trace_cache[cache_key]
-            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} [TRACED]")
-            pre_trace_begin = time.time()
-            TracedRun._copy_inputs_to_trace_buffer(func_args, entry.trace_inputs)
-            TracedRun._copy_kwargs_to_trace_buffer(func_kwargs, entry.trace_kwargs)
-            pre_trace_end = time.time()
-            DispatchManager.record_timing(
-                "TTNN",
-                self.module_name,
-                self.__class__.__name__ + "_pre_trace_copy",
-                {},
-                pre_trace_end - pre_trace_begin,
-            )
-            pre_trace_begin = time.time()
-            if type(self).pre_trace_execute is not TracedRun._base_pre_trace_execute:
-                self.pre_trace_execute(func_args, func_kwargs)
-            pre_trace_end = time.time()
-            DispatchManager.record_timing(
-                "TTNN",
-                self.module_name,
-                self.__class__.__name__ + "_pre_trace_execute",
-                {},
-                pre_trace_end - pre_trace_begin,
-            )
-            ttnn.execute_trace(entry.device, entry.trace_id, cq_id=TracedRun._cq_id, blocking=False)
-            result = entry.trace_output
-            post_trace_begin = time.time()
-            if type(self).post_trace_execute is not TracedRun._base_post_trace_execute:
-                self.post_trace_execute(func_args, func_kwargs, result)
-            post_trace_end = time.time()
-            DispatchManager.record_timing(
-                "TTNN",
-                self.module_name,
-                self.__class__.__name__ + "_post_trace_execute",
-                {},
-                post_trace_end - post_trace_begin,
-            )
-        elif cache_key in TracedRun._warmup_keys:
-            # === RUN 2: CAPTURE (system already warmed up for this key) ===
+        if cache_key not in TracedRun._trace_cache and cache_key not in TracedRun._warmup_keys:
+            # === RUN 1: WARM-UP (COLD COMPILE; normal forward, no trace) — FORWARD INVOCATION 1 of 2 ===
+            # SOUNDNESS: a STATELESS trace unit may not hide STATEFUL descendants -- their
+            # forward would mutate state twice (warm-up + capture) unreset. Fail fast, before any
+            # release/forward, the first time this module is traced.
+            TracedRun._assert_no_stateful_descendants(self)
+            # INVARIANT: replays must always follow cold compiles. This cold compile will
+            # allocate device buffers; if any traces are already captured, that allocation
+            # can corrupt them. Discard every captured trace now so they re-capture AFTER
+            # this compile (warm-up bookkeeping is kept -> they re-capture, not re-warm).
+            if TracedRun._trace_cache:
+                released = TracedRun.invalidate_captures_for_cold_compile()
+                print(
+                    f"{self.__class__.__name__}: {self.module_name} on device {self.device} "
+                    f"[Cold compile for new key -> released {released} captured trace(s); "
+                    f"they re-capture after this compile]"
+                )
+            TracedRun._warmup_keys.add(cache_key)
             _TRACE_RUNNING = True
-            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} " f"[Capturing Trace]")
+            print(
+                f"{self.__class__.__name__}: {self.module_name} on device {self.device} "
+                f"[Warm-up — forward run 1/2 (forward runs AGAIN at capture)]"
+            )
+            TracedRun._reset_trace_state_tree(self)  # baseline the trace unit + stateful descendants
+            result = self.forward(*func_args, **func_kwargs)
+            _TRACE_RUNNING = False
+            # fall through to shared tail
+
+        elif cache_key not in TracedRun._trace_cache:
+            # === RUN 2: CAPTURE (record only; entry inserted into _trace_cache) — FORWARD INVOCATION 2 of 2 ===
+            _TRACE_RUNNING = True
+            print(
+                f"{self.__class__.__name__}: {self.module_name} on device {self.device} "
+                f"[Capturing Trace — forward run 2/2; recorded ops replay hereafter]"
+            )
+            TracedRun._reset_trace_state_tree(self)  # baseline the trace unit + stateful descendants
             begin2 = time.time()
             entry = TracedRun._capture_trace(self, func_args, func_kwargs, cache_key)
             end2 = time.time()
             DispatchManager.record_timing(
                 "TTNN", self.module_name, self.__class__.__name__ + "_capture_trace", {}, end2 - begin2
             )
-            result = entry.trace_output
             _TRACE_RUNNING = False
+            # The recorded trace_output is UNINITIALIZED. Do NOT consume it. Produce the
+            # consumed result via the SAME replay path used by every later encounter, so
+            # "consumed == replay" holds universally and the un-executed trace_output is
+            # never returned. blocking=True here (this is the trace's first execution and
+            # its output is consumed immediately by the caller).
+            result = TracedRun._replay(self, func_args, func_kwargs, entry, capture_encounter=True)
+
         else:
-            # === RUN 1: WARM-UP (normal forward, no trace) ===
-            TracedRun._warmup_keys.add(cache_key)
-            _TRACE_RUNNING = True
-            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} " f"[Warm-up (no trace)]")
-            result = self.forward(*func_args, **func_kwargs)
-            _TRACE_RUNNING = False
+            # === RUN 3+: REPLAY ===
+            entry = TracedRun._trace_cache[cache_key]
+            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} [TRACED]")
+            result = TracedRun._replay(self, func_args, func_kwargs, entry, capture_encounter=False)
+
         end = time.time()
         DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
         DispatchManager.set_current_module_name(None)

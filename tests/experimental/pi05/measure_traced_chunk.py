@@ -33,7 +33,7 @@ import time
 import torch
 
 import ttnn
-from tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices
+from tt_symbiote.core.module import DeviceArch, StatelessTTNNModule, TTNNModule, run_on_devices
 from tt_symbiote.core.run_config import trace_enabled
 
 RUN_MODE = os.environ.get("TT_SYMBIOTE_RUN_MODE", "NORMAL")
@@ -56,27 +56,25 @@ def _wrap(cls, device, **attrs):
 
 
 @trace_enabled
-class _TowerAdapter(TTNNModule):
+class _TowerAdapter(StatelessTTNNModule):
     @run_on_devices(DeviceArch.P150)
     def forward(self, image):
         return self._bk.embed_image(image)  # SigLIP tower + mm_projector
 
 
 @trace_enabled
-class _VLMAdapter(TTNNModule):
+class _VLMAdapter(StatelessTTNNModule):
     @run_on_devices(DeviceArch.P150)
     def forward(self, prefix):
         return self._bk.forward_vlm(prefix, attention_mask=None, use_cache=True)[0]
 
 
 @trace_enabled
-class _DenoiseAdapter(TTNNModule):
+class _DenoiseAdapter(StatelessTTNNModule):
     @run_on_devices(DeviceArch.P150)
     def forward(self, x_t):
         # mods/mask/prefix_len are constant for a single repeated step -> closed over.
-        return self._m._denoise_forward(
-            x_t, None, self._pl, self._mask, self._bmods, self._fmod
-        )
+        return self._m._denoise_forward(x_t, None, self._pl, self._mask, self._bmods, self._fmod)
 
 
 def _time_stage(dev, fn, label, warmup=2, iters=10):
@@ -154,8 +152,13 @@ def main():
 
         # --- stage: one denoise velocity step ---
         denoise = _wrap(
-            _DenoiseAdapter, dev, _m=tt, _pl=prefix_len, _mask=suffix_mask,
-            _bmods=block_mods, _fmod=final_mod,
+            _DenoiseAdapter,
+            dev,
+            _m=tt,
+            _pl=prefix_len,
+            _mask=suffix_mask,
+            _bmods=block_mods,
+            _fmod=final_mod,
         )
         t_step = _time_stage(dev, lambda: denoise(x_t), "denoise_step", iters=10)
 

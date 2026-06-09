@@ -8,11 +8,11 @@ import torch
 import ttnn
 from torch import nn
 
-from tt_symbiote.core.module import TTNNModule, DeviceArch, run_on_devices
+from tt_symbiote.core.module import DeviceArch, StatelessTTNNModule, run_on_devices
 from tt_symbiote.core.run_config import trace_enabled
 
 
-class TTNNLayerNorm(TTNNModule):
+class TTNNLayerNorm(StatelessTTNNModule):
     """TTNN-accelerated LayerNorm."""
 
     @classmethod
@@ -68,7 +68,7 @@ class DeepseekV2RMSNorm(nn.Module):
         return self.weight * hidden_states.to(input_dtype)
 
 
-class TTNNRMSNorm(TTNNModule):
+class TTNNRMSNorm(StatelessTTNNModule):
     @classmethod
     def from_torch(cls, rms_norm: DeepseekV2RMSNorm):
         """Create from PyTorch RMSNorm."""
@@ -100,7 +100,7 @@ class TTNNRMSNorm(TTNNModule):
 
 
 @trace_enabled
-class TTNNLocalRMSNorm(TTNNModule):
+class TTNNLocalRMSNorm(StatelessTTNNModule):
     """
     Local (per-device) RMSNorm for per-head norms (Q-norm, K-norm, V-norm) in Gemma4 attention.
 
@@ -169,7 +169,7 @@ class TTNNLocalRMSNorm(TTNNModule):
 
 
 @trace_enabled
-class TTNNDistributedRMSNorm(TTNNModule):
+class TTNNDistributedRMSNorm(StatelessTTNNModule):
     """
     Distributed RMSNorm implementation that performs the reduction across devices in the forward pass.
 

@@ -7,10 +7,15 @@
 import torch
 import ttnn
 
-from tt_symbiote.core.module import TTNNModule, DeviceArch, SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, run_on_devices
+from tt_symbiote.core.module import (
+    SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS,
+    DeviceArch,
+    StatelessTTNNModule,
+    run_on_devices,
+)
 
 
-class TTNNSilu(TTNNModule):
+class TTNNSilu(StatelessTTNNModule):
     """TTNN-accelerated SiLU activation function."""
 
     def __init__(self):
@@ -26,7 +31,7 @@ class TTNNSilu(TTNNModule):
         return tt_output
 
 
-class TTNNReLU(TTNNModule):
+class TTNNReLU(StatelessTTNNModule):
     """TTNN-accelerated ReLU activation function."""
 
     def __init__(self):
@@ -42,7 +47,7 @@ class TTNNReLU(TTNNModule):
         return tt_output
 
 
-class TTNNGelu(TTNNModule):
+class TTNNGelu(StatelessTTNNModule):
     """TTNN-accelerated GELU activation function."""
 
     def __init__(self):

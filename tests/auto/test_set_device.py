@@ -23,7 +23,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices
+from tt_symbiote.core.module import DeviceArch, StatelessTTNNModule, TTNNModule, run_on_devices
 from tt_symbiote.utils.device_management import set_device
 
 
@@ -37,7 +37,7 @@ class _StubMeshDevice:
         return self._n
 
 
-class _CountingTTNNModule(TTNNModule):
+class _CountingTTNNModule(StatelessTTNNModule):
     """TTNNModule that records preprocess/move calls and exposes a forward."""
 
     def __init__(self):
@@ -57,7 +57,7 @@ class _CountingTTNNModule(TTNNModule):
         return args[0] if args else None
 
 
-class _T3KOnlyTTNNModule(TTNNModule):
+class _T3KOnlyTTNNModule(StatelessTTNNModule):
     """TTNN module that declares T3K-only support via @run_on_devices."""
 
     def __init__(self):

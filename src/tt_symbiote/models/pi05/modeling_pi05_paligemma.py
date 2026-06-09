@@ -30,7 +30,7 @@ from typing import List, Optional, Tuple
 import torch
 import ttnn
 
-from tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices
+from tt_symbiote.core.module import DeviceArch, StatelessTTNNModule, run_on_devices
 
 from .configuration_pi05 import PaliGemmaConfig
 from .modeling_pi05_common import precompute_freqs_cis_meta
@@ -51,7 +51,7 @@ _L1 = ttnn.L1_MEMORY_CONFIG
 _DRAM = ttnn.DRAM_MEMORY_CONFIG
 
 
-class TTNNPi05PaliGemmaBackbone(TTNNModule):
+class TTNNPi05PaliGemmaBackbone(StatelessTTNNModule):
     """PaliGemma dual-expert backbone (VLM + adaRMS action expert)."""
 
     @classmethod
@@ -90,9 +90,7 @@ class TTNNPi05PaliGemmaBackbone(TTNNModule):
     # ------------------------------------------------------------------ weights
     def preprocess_weights_impl(self):
         # Embedding table stays ROW_MAJOR for ttnn.embedding lookup.
-        self.tt_embed_tokens = ttnn.from_torch(
-            self._embed_tokens_w, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
-        )
+        self.tt_embed_tokens = ttnn.from_torch(self._embed_tokens_w, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         self.tt_vlm_norm = _norm_weight_to_tt(self._vlm_norm_w)
         # Final expert norm is adaRMS (no +1 fold; modulation handles it at runtime).
         self.tt_expert_norm_mod_w = _linear_weight_to_tt(self._expert_norm_mod_w, dtype=ttnn.bfloat16)
@@ -190,9 +188,7 @@ class TTNNPi05PaliGemmaBackbone(TTNNModule):
         collect = use_cache and not store_active
         new_cache = [] if collect else None
         for block in self.vlm_blocks:
-            hidden_states, new_kv = block(
-                hidden_states, cos, sin, attention_mask, None, collect
-            )
+            hidden_states, new_kv = block(hidden_states, cos, sin, attention_mask, None, collect)
             if collect:
                 new_cache.append(new_kv)
         hidden_states = _rms_norm(hidden_states, self.tt_vlm_norm, self._eps_vlm)
@@ -333,6 +329,4 @@ class TTNNPi05PaliGemmaBackbone(TTNNModule):
             hidden_states, _ = block(
                 hidden_states, cos, sin, adarms_cond, attention_mask, past_kv, False, precomputed_mod=block_mod
             )
-        return self._ada_rms_norm_no_gate(
-            hidden_states, cond=adarms_cond, precomputed=precomputed_final_mod
-        )
+        return self._ada_rms_norm_no_gate(hidden_states, cond=adarms_cond, precomputed=precomputed_final_mod)

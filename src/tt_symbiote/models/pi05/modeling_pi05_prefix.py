@@ -39,7 +39,7 @@ from typing import List, Tuple
 
 import ttnn
 
-from tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices
+from tt_symbiote.core.module import DeviceArch, StatelessTTNNModule, run_on_devices
 
 from .configuration_pi05 import PrefixConfig
 
@@ -53,7 +53,7 @@ _L1 = ttnn.L1_MEMORY_CONFIG
 _DRAM = ttnn.DRAM_MEMORY_CONFIG
 
 
-class TTNNPi05PrefixEmbedding(TTNNModule):
+class TTNNPi05PrefixEmbedding(StatelessTTNNModule):
     """pi0.5 prefix embedding (images + language) for the VLM backbone.
 
     Reference: ``reference/torch_prefix.py::PrefixEmbedding`` and
@@ -151,12 +151,9 @@ class TTNNPi05PrefixEmbedding(TTNNModule):
 
         # --- Concatenate embeddings (TTNN concat needs uniform layout) ---------
         embs = [
-            e if e.layout == ttnn.TILE_LAYOUT else ttnn.to_layout(e, ttnn.TILE_LAYOUT, memory_config=_L1)
-            for e in embs
+            e if e.layout == ttnn.TILE_LAYOUT else ttnn.to_layout(e, ttnn.TILE_LAYOUT, memory_config=_L1) for e in embs
         ]
-        prefix_embs = (
-            ttnn.concat(embs, dim=1, memory_config=_L1) if len(embs) > 1 else embs[0]
-        )
+        prefix_embs = ttnn.concat(embs, dim=1, memory_config=_L1) if len(embs) > 1 else embs[0]
 
         prefix_pad_masks = self._concat_pad_masks(pad_masks)
 

@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import ttnn
 
-from tt_symbiote.core.module import TTNNModule, DeviceArch, run_on_devices
+from tt_symbiote.core.module import DeviceArch, StatelessTTNNModule, run_on_devices
 
 
 def rotate_half(x):
@@ -62,7 +62,7 @@ class TorchRotaryPositionEmbedding(nn.Module):
         return q_embed, k_embed
 
 
-class TTNNRotaryPositionEmbedding(TTNNModule):
+class TTNNRotaryPositionEmbedding(StatelessTTNNModule):
     """TTNN-accelerated Rotary Position Embedding."""
 
     @run_on_devices(DeviceArch.T3K)
@@ -168,7 +168,7 @@ class TTNNRotaryPositionEmbedding(TTNNModule):
         return q_rotated, k_rotated
 
 
-class TTNNDistributedRotaryPositionEmbedding(TTNNModule):
+class TTNNDistributedRotaryPositionEmbedding(StatelessTTNNModule):
     """TTNN-accelerated Rotary Position Embedding for distributed/mesh devices.
 
     Uses ttnn.experimental.rotary_embedding_llama which is optimized for

@@ -60,7 +60,34 @@ def set_module_name_recursively(module, prefix=""):
 
 
 class TTNNModule:
-    """Base class for TTNN-accelerated modules with automatic fallback to PyTorch."""
+    """Base class for TTNN-accelerated modules with automatic fallback to PyTorch.
+
+    NOT directly subclassable. Module classes MUST extend one of the two sanctioned bases
+    that declare their trace-state contract:
+
+    * :class:`StatelessTTNNModule` -- ``forward`` mutates NO internal/persistent state under
+      the trace capture double-run (no in-place cache/KV writes, no lazy buffer allocation,
+      no per-call accumulation). Inherits a no-op ``reset_trace_state``.
+    * :class:`StatefulTTNNModule` -- ``forward`` DOES mutate persistent state; the subclass
+      MUST implement ``reset_trace_state`` (enforced at class-creation time).
+
+    Extending ``TTNNModule`` directly raises ``TypeError`` (see ``__init_subclass__``).
+    """
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        # Forbid extending TTNNModule DIRECTLY -- every module class must declare its
+        # trace-state contract via StatelessTTNNModule / StatefulTTNNModule. The two
+        # sanctioned bases set ``_allow_direct_ttnnmodule_subclass`` in their own body to
+        # opt out of this check; their further (transitive) subclasses do not list
+        # TTNNModule directly in __bases__ and so pass freely.
+        if TTNNModule in cls.__bases__ and not cls.__dict__.get("_allow_direct_ttnnmodule_subclass", False):
+            raise TypeError(
+                f"{cls.__module__}.{cls.__qualname__} extends TTNNModule directly, which is "
+                f"disallowed. Extend StatelessTTNNModule (forward mutates no persistent state "
+                f"under the trace double-run) or StatefulTTNNModule (forward mutates state; "
+                f"implement reset_trace_state) instead."
+            )
 
     def __init__(self):
         self._device = None  # Device can be set later
@@ -221,6 +248,34 @@ class TTNNModule:
         """Forward pass - must be implemented by subclasses."""
         raise NotImplementedError("Forward method must be implemented by subclasses.")
 
+    def reset_trace_state(self):
+        """Hook called by TracedRun BEFORE EACH ``forward`` invocation of the trace-setup
+        phase, so a stateful module starts that forward from a known baseline.
+
+        CONTRACT — a ``@trace_enabled`` module's ``forward`` is invoked TWICE before any
+        pure replay (see ``TracedRun.module_run``):
+          1. WARM-UP encounter  -> ``forward`` runs eagerly (compiles kernels; result used).
+          2. CAPTURE encounter  -> ``forward`` runs again, this time RECORDED into the trace
+             (``begin/end_trace_capture``); the trace is then executed once to produce the
+             consumed result.
+        So any side effect your ``forward`` performs on INTERNAL/PERSISTENT state happens
+        twice during setup (warm-up then capture), and the capture forward's effects are
+        what the recorded trace replays thereafter. This is a footgun for stateful forwards:
+          - In-place writes into a persistent cache (e.g. KV ``fill_cache``) run on both the
+            warm-up and capture inputs.
+          - LAZY allocation (``if self._buf is None: self._buf = ttnn.allocate(...)``) that
+            lands on the CAPTURE pass allocates a buffer DURING an active trace -> tt-metal
+            warns "Allocating device buffers is unsafe ... may be corrupted once a trace is
+            executed", and replays then read corrupt memory.
+
+        Override this to make ``forward`` SAFE under the double-run: (re)initialize any
+        per-call internal state to a clean baseline, and PRE-ALLOCATE all persistent buffers
+        here (or in ``move_weights_to_device_impl``) so nothing is lazily created during the
+        capture pass. It runs once before the warm-up forward and once before the capture
+        forward; it does NOT run on steady-state replays (those re-execute the recorded ops).
+        Base implementation is a no-op, so existing modules are unaffected.
+        """
+
     def pre_trace_execute(self, func_args, func_kwargs):
         """Hook called before ttnn.execute_trace during trace replay.
 
@@ -269,8 +324,56 @@ class TTNNModule:
                         yield f"{name}[{i}]", v
 
 
+class StatelessTTNNModule(TTNNModule):
+    """Base for modules whose ``forward`` mutates NO internal/persistent state under the trace
+    capture double-run.
+
+    Supplies a no-op ``reset_trace_state`` -- there is nothing to reset. Use this ONLY when
+    ``forward`` is genuinely stateless under the double-run: no in-place cache/KV writes, no lazy
+    buffer allocation, no per-call accumulation. A STATEFUL module MUST instead extend
+    :class:`StatefulTTNNModule` and implement its own ``reset_trace_state`` (see
+    ``TTNNModule.reset_trace_state`` for the double-run contract).
+    """
+
+    # Sanctioned direct subclass of TTNNModule (opts out of the direct-subclass ban).
+    _allow_direct_ttnnmodule_subclass = True
+
+    def reset_trace_state(self):
+        return None
+
+
+class StatefulTTNNModule(TTNNModule):
+    """Base for modules whose ``forward`` mutates internal/persistent state under the trace
+    capture double-run -- in-place cache/KV writes, lazy buffer allocation, per-call accumulation.
+
+    Subclasses MUST implement ``reset_trace_state`` to (re)initialize that state to a clean
+    baseline and pre-allocate all persistent buffers (see ``TTNNModule.reset_trace_state``).
+    This is enforced at class-creation time: a subclass (or an intermediate base between it and
+    ``StatefulTTNNModule``) must define its OWN ``reset_trace_state`` -- inheriting the base
+    ``TTNNModule`` no-op does NOT satisfy the contract and raises ``TypeError``.
+    """
+
+    # Sanctioned direct subclass of TTNNModule (opts out of the direct-subclass ban).
+    _allow_direct_ttnnmodule_subclass = True
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)  # runs TTNNModule's direct-subclass ban first
+        # Require an OWN reset_trace_state defined ABOVE StatefulTTNNModule in the MRO. Walking
+        # only the classes that precede StatefulTTNNModule means the base TTNNModule no-op does
+        # NOT count -- a stateful module must provide a real reset, not silently inherit the hook.
+        for klass in cls.__mro__:
+            if klass is StatefulTTNNModule:
+                raise TypeError(
+                    f"{cls.__module__}.{cls.__qualname__} extends StatefulTTNNModule but does not "
+                    f"implement reset_trace_state(). A stateful module must (re)initialize its "
+                    f"per-call internal state and pre-allocate persistent buffers there."
+                )
+            if "reset_trace_state" in vars(klass):
+                break
+
+
 @trace_enabled
-class TTNNLayerStack(TTNNModule):
+class TTNNLayerStack(StatelessTTNNModule):
     """A trace-enabled stack of TTNNModule layers.
 
     Captures the entire sequence of layer operations as a single trace.

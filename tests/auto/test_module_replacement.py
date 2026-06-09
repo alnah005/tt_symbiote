@@ -10,11 +10,11 @@ import pytest
 import torch
 import torch.nn as nn
 
-from tt_symbiote.core.module import TTNNModule
+from tt_symbiote.core.module import StatelessTTNNModule, TTNNModule
 from tt_symbiote.utils.module_replacement import register_module_replacement_dict, register_modules
 
 
-class _TTNNLinear(TTNNModule):
+class _TTNNLinear(StatelessTTNNModule):
     """Tiny TTNNModule that wraps an nn.Linear and remembers it for verification."""
 
     def __init__(self):

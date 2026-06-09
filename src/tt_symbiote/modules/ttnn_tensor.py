@@ -7,7 +7,12 @@
 import torch
 import ttnn
 
-from tt_symbiote.core.module import TTNNModule, DeviceArch, SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, run_on_devices
+from tt_symbiote.core.module import (
+    SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS,
+    DeviceArch,
+    StatelessTTNNModule,
+    run_on_devices,
+)
 from tt_symbiote.core.utils import ensure_tile_layout
 
 
@@ -22,7 +27,7 @@ class TorchPermute(torch.nn.Module):
         return input_tensor.permute(perm)
 
 
-class TTNNPermute(TTNNModule):
+class TTNNPermute(StatelessTTNNModule):
     """TTNN-accelerated Permute activation function."""
 
     def __init__(self):
@@ -47,7 +52,7 @@ class TorchReshape(torch.nn.Module):
         return input_tensor.reshape(shape)
 
 
-class TTNNReshape(TTNNModule):
+class TTNNReshape(StatelessTTNNModule):
     """TTNN-accelerated Reshape activation function."""
 
     def __init__(self):
@@ -72,7 +77,7 @@ class PyTorchAdd(torch.nn.Module):
         return input_tensor1 + input_tensor2
 
 
-class TTNNAdd(TTNNModule):
+class TTNNAdd(StatelessTTNNModule):
     """TTNN-accelerated Add operation."""
 
     def __init__(self):

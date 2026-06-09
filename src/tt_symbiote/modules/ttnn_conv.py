@@ -8,7 +8,12 @@ import torch
 import ttnn
 from torch import nn
 
-from tt_symbiote.core.module import TTNNModule, SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, run_on_devices
+from tt_symbiote.core.module import (
+    SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS,
+    StatelessTTNNModule,
+    TTNNModule,
+    run_on_devices,
+)
 from tt_symbiote.core.run_config import trace_enabled
 from tt_symbiote.modules.tt_cnn.builder import Conv2dConfiguration, MaxPool2dConfiguration, TtConv2d, TtMaxPool2d
 from tt_symbiote.modules.ttnn_activation import TTNNReLU
@@ -135,7 +140,7 @@ class NHWCConvBNActivationPytorch(nn.Module):
 
 
 @trace_enabled
-class TTNNConv2dNHWC(TTNNModule):
+class TTNNConv2dNHWC(StatelessTTNNModule):
     """TTNN-accelerated Conv layer."""
 
     CACHED_TTCNN = {}
@@ -406,7 +411,7 @@ class TTNNConv2dBNActivationNHWC(TTNNConv2dBNNHWC):
         return layer(input_tensor)
 
 
-class TTNNBottleneck(TTNNModule):
+class TTNNBottleneck(StatelessTTNNModule):
     """TTNN-accelerated ResNet Bottleneck block."""
 
     def __init__(
@@ -485,7 +490,7 @@ class TorchPatchEmbeddings(nn.Module):
         return x
 
 
-class TTNNPatchEmbedding(TTNNModule):
+class TTNNPatchEmbedding(StatelessTTNNModule):
     """TTNN-accelerated Patch Embedding layer for ViT."""
 
     def __init__(
@@ -593,7 +598,7 @@ class TorchVitEmbeddings(nn.Module):
         return embeddings
 
 
-class TTNNViTEmbeddings(TTNNModule):
+class TTNNViTEmbeddings(StatelessTTNNModule):
     """TTNN-accelerated ViT Embeddings layer."""
 
     @classmethod
@@ -634,7 +639,7 @@ class TTNNViTEmbeddings(TTNNModule):
         return embedding_output
 
 
-class TTNNMaxPool2dNHWC(TTNNModule):
+class TTNNMaxPool2dNHWC(StatelessTTNNModule):
     """TTNN-accelerated MaxPool2d layer."""
 
     def __init__(
@@ -707,7 +712,7 @@ class TTNNMaxPool2dNHWC(TTNNModule):
         return layer(input_tensor)
 
 
-class TTNNUpsampleNHWC(TTNNModule):
+class TTNNUpsampleNHWC(StatelessTTNNModule):
     """TTNN-accelerated Upsample layer."""
 
     def __init__(

@@ -82,7 +82,9 @@ def _mlp_w(cfg):
 
 
 @pytest.mark.timeout(180)
-@pytest.mark.parametrize("config_fn,name", [(GemmaConfig.gemma_2b, "vlm"), (GemmaConfig.gemma_300m, "expert")], ids=["vlm", "expert"])
+@pytest.mark.parametrize(
+    "config_fn,name", [(GemmaConfig.gemma_2b, "vlm"), (GemmaConfig.gemma_300m, "expert")], ids=["vlm", "expert"]
+)
 def test_traced_gemma_mlp(dev, config_fn, name):
     require_reference()
     from models.experimental.pi0_5.reference.torch_gemma import GemmaMLP
@@ -128,7 +130,12 @@ def test_traced_gemma_block(dev):
 
     torch.manual_seed(SEED)
     cfg = GemmaConfig.gemma_2b()
-    w = {"input_layernorm.weight": torch.randn(cfg.width) * 0.02, "post_attention_layernorm.weight": torch.randn(cfg.width) * 0.02, **_attn_w(cfg), **_mlp_w(cfg)}
+    w = {
+        "input_layernorm.weight": torch.randn(cfg.width) * 0.02,
+        "post_attention_layernorm.weight": torch.randn(cfg.width) * 0.02,
+        **_attn_w(cfg),
+        **_mlp_w(cfg),
+    }
     ref = GemmaBlock(cfg, w, 0)
     x = torch.randn(1, 64, cfg.width) * 0.5
     cos_t, sin_t = precompute_freqs_cis(cfg.head_dim, 2048, cfg.rope_base)
@@ -153,7 +160,8 @@ def test_traced_adarms_block(dev):
         "input_layernorm.dense.bias": torch.randn(3 * cfg.width) * 0.02,
         "post_attention_layernorm.dense.weight": torch.randn(3 * cfg.width, cfg.width) * 0.02,
         "post_attention_layernorm.dense.bias": torch.randn(3 * cfg.width) * 0.02,
-        **_attn_w(cfg), **_mlp_w(cfg),
+        **_attn_w(cfg),
+        **_mlp_w(cfg),
     }
     ref = AdaRMSGemmaBlock(cfg, w, 0)
     x = torch.randn(1, 64, cfg.width) * 0.5
@@ -171,14 +179,22 @@ def test_traced_adarms_block(dev):
 def _siglip_w(cfg):
     h, inter = cfg.hidden_size, cfg.intermediate_size
     return {
-        "layer_norm1.weight": torch.randn(h) * 0.02 + 1, "layer_norm1.bias": torch.randn(h) * 0.02,
-        "layer_norm2.weight": torch.randn(h) * 0.02 + 1, "layer_norm2.bias": torch.randn(h) * 0.02,
-        "self_attn.q_proj.weight": torch.randn(h, h) * 0.02, "self_attn.q_proj.bias": torch.randn(h) * 0.02,
-        "self_attn.k_proj.weight": torch.randn(h, h) * 0.02, "self_attn.k_proj.bias": torch.randn(h) * 0.02,
-        "self_attn.v_proj.weight": torch.randn(h, h) * 0.02, "self_attn.v_proj.bias": torch.randn(h) * 0.02,
-        "self_attn.out_proj.weight": torch.randn(h, h) * 0.02, "self_attn.out_proj.bias": torch.randn(h) * 0.02,
-        "mlp.fc1.weight": torch.randn(inter, h) * 0.02, "mlp.fc1.bias": torch.randn(inter) * 0.02,
-        "mlp.fc2.weight": torch.randn(h, inter) * 0.02, "mlp.fc2.bias": torch.randn(h) * 0.02,
+        "layer_norm1.weight": torch.randn(h) * 0.02 + 1,
+        "layer_norm1.bias": torch.randn(h) * 0.02,
+        "layer_norm2.weight": torch.randn(h) * 0.02 + 1,
+        "layer_norm2.bias": torch.randn(h) * 0.02,
+        "self_attn.q_proj.weight": torch.randn(h, h) * 0.02,
+        "self_attn.q_proj.bias": torch.randn(h) * 0.02,
+        "self_attn.k_proj.weight": torch.randn(h, h) * 0.02,
+        "self_attn.k_proj.bias": torch.randn(h) * 0.02,
+        "self_attn.v_proj.weight": torch.randn(h, h) * 0.02,
+        "self_attn.v_proj.bias": torch.randn(h) * 0.02,
+        "self_attn.out_proj.weight": torch.randn(h, h) * 0.02,
+        "self_attn.out_proj.bias": torch.randn(h) * 0.02,
+        "mlp.fc1.weight": torch.randn(inter, h) * 0.02,
+        "mlp.fc1.bias": torch.randn(inter) * 0.02,
+        "mlp.fc2.weight": torch.randn(h, inter) * 0.02,
+        "mlp.fc2.bias": torch.randn(h) * 0.02,
     }
 
 
@@ -228,7 +244,10 @@ def _siglip_tower_w(cfg):
     # checkpoint ("vision_model.*") key form -- the reference's `get(a) or get(b)`
     # idiom raises on a multi-element tensor when the first (legacy) key hits.
     w = {
-        "vision_model.embeddings.patch_embedding.weight": torch.randn(h, cfg.num_channels, cfg.patch_size, cfg.patch_size) * 0.02,
+        "vision_model.embeddings.patch_embedding.weight": torch.randn(
+            h, cfg.num_channels, cfg.patch_size, cfg.patch_size
+        )
+        * 0.02,
         "vision_model.embeddings.patch_embedding.bias": torch.randn(h) * 0.02,
         "vision_model.embeddings.position_embedding.weight": torch.randn(cfg.num_patches, h) * 0.02,
         "vision_model.post_layernorm.weight": torch.randn(h) * 0.02 + 1.0,
@@ -268,12 +287,12 @@ def test_traced_siglip_vision_tower(dev):
 # as ONE graph via a single-forward @trace_enabled adapter (the backbone itself
 # is multi-method, so it can't be @trace_enabled directly). Real weights.
 # --------------------------------------------------------------------------- #
-from tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices  # noqa: E402
+from tt_symbiote.core.module import DeviceArch, StatelessTTNNModule, TTNNModule, run_on_devices  # noqa: E402
 from tt_symbiote.core.run_config import trace_enabled  # noqa: E402
 
 
 @trace_enabled
-class _VLMPrefillTraceAdapter(TTNNModule):
+class _VLMPrefillTraceAdapter(StatelessTTNNModule):
     """Single-`forward` trace unit wrapping backbone.forward_vlm(use_cache=False)."""
 
     @classmethod
@@ -320,7 +339,7 @@ def test_traced_backbone_forward_vlm(dev):
 
 
 @trace_enabled
-class _VLMPrefillStoreTraceAdapter(TTNNModule):
+class _VLMPrefillStoreTraceAdapter(StatelessTTNNModule):
     """Single-`forward` trace unit wrapping backbone.forward_vlm WITH the VLM
     prefix store active (use_cache=True). This is the cache-building prefill path
     that previously could NOT be captured (each layer returned freshly-allocated
@@ -381,17 +400,17 @@ def test_traced_backbone_forward_vlm_static_kv(dev):
 
 
 # --------------------------------------------------------------------------- #
-# Tier 4: full sample_actions denoise loop under framework TRACED. The per-step
-# velocity (embed_actions -> forward_expert[static-KV] -> project_output) is one
-# @trace_enabled adapter, driven 10x: step1 warmup, step2 captures the WHOLE step
-# as one trace (rms_norm compiles in warmup -> no per-block load_binaries), steps
-# 3-10 replay with per-step (x_t, mods) copied to trace buffers. E2E vs torch.
+# Tier 4: production sample_actions TRACED end-to-end. Under TT_SYMBIOTE_RUN_MODE=TRACED
+# the denoise velocity eval (a single @trace_enabled TTNNPi05DenoiseStep) is captured as
+# exactly ONE trace by the framework and replayed for every Euler step (per-step x_t + mods
+# are refreshed as trace inputs). No manual begin/end_trace_capture. E2E vs torch golden.
 # --------------------------------------------------------------------------- #
 
 
 def _reference_sample_actions(ref_model, images_t, img_masks_t, lang_tokens_t, lang_masks_t, noise):
     """Torch reference E2E with injected noise (shared with the TTNN run)."""
     from models.experimental.pi0_5.reference.torch_pi0_5_model import _build_prefix_mask_and_pos
+
     prefix_embs, ppm, pam = ref_model.embed_prefix(images_t, img_masks_t, lang_tokens_t, lang_masks_t)
     pos, mask4d = _build_prefix_mask_and_pos(ppm, pam, prefix_embs.dtype)
     _, vlm_cache = ref_model.backbone.forward_vlm(prefix_embs, attention_mask=mask4d, position_ids=pos, use_cache=True)
@@ -404,52 +423,25 @@ def _reference_sample_actions(ref_model, images_t, img_masks_t, lang_tokens_t, l
     return x
 
 
-@trace_enabled
-class _DenoiseStepAdapter(TTNNModule):
-    @classmethod
-    def wrap(cls, model, prefix_len, suffix_mask, device):
-        m = cls()
-        m._bypass_tensor_wrapping = True
-        m._m = model
-        m._pl = prefix_len
-        m._mask = suffix_mask
-        m._nblocks = len(model.backbone.expert_blocks)
-        m._device = device
-        m._preprocessed_weight = True
-        m._weights_on_device = True
-        return m
-
-    @run_on_devices(DeviceArch.P150)
-    def forward(self, x_t, *flat_mods):
-        # Per-step mods are passed FLAT (top-level tensor args) so the framework's
-        # trace input-copy (_copy_inputs_to_trace_buffer, which only copies
-        # top-level ttnn.Tensors, not nested lists) updates every one on replay.
-        # Reconstruct the [18 x (scale1,shift,gate) x2] + final (scale1,shift).
-        nb = self._nblocks
-        block_mods = [tuple(flat_mods[i * 6:(i + 1) * 6]) for i in range(nb)]
-        final_mod = (flat_mods[nb * 6], flat_mods[nb * 6 + 1])
-        se = self._m.suffix_embedding.embed_actions(x_t)
-        eo = self._m.backbone.forward_expert(
-            se, past_key_values=None, attention_mask=self._mask, position_offset=self._pl,
-            precomputed_block_mods=block_mods, precomputed_final_mod=final_mod,
-        )
-        return self._m.suffix_embedding.project_output(eo)
-
-
-def _flatten_step_mods(block_mods, final_mod):
-    flat = []
-    for six in block_mods:
-        flat.extend(six)
-    flat.extend(final_mod)
-    return flat
-
-
 @pytest.mark.timeout(360)
 def test_traced_sample_actions_e2e(dev):
-    """Tier 4: full 10-step denoise under framework TRACED (per-step adapter
-    warmup->capture->replay); actions finite/correct-shape + E2E PCC vs torch."""
+    """Tier 4: PRODUCTION ``sample_actions`` under TT_SYMBIOTE_RUN_MODE=TRACED.
+
+    The denoise velocity eval is a single ``@trace_enabled`` unit (TTNNPi05DenoiseStep)
+    dispatched via ``__call__``; the per-step ``x_t`` + adaRMS modulations are top-level
+    tensor inputs the framework refreshes on each replay. So the framework captures EXACTLY
+    ONE trace and replays it for every denoise step -- NO manual ``begin/end_trace_capture``
+    anywhere. Asserts: exactly one trace captured, actions finite/correct-shape/non-degenerate,
+    E2E action PCC vs the torch golden.
+
+    (Single-trace reuse is correct here because of the run_config lifecycle that makes every
+    consumed result a replay: the capture encounter falls through to the unified replay path
+    (``TracedRun._replay``) -- ``begin/end_trace_capture`` only RECORDS ops, so the
+    capture-encounter ``trace_output`` is uninitialized and is never returned; the consumed
+    result is always a REPLAY. Without that the 2nd encounter returned uninitialized output
+    and the e2e dropped to ~0.81.)
+    """
     require_reference()
-    import math
 
     from ..pi05_helpers import require_checkpoint
 
@@ -471,40 +463,26 @@ def test_traced_sample_actions_e2e(dev):
     noise = torch.randn(1, cfg.action_horizon, cfg.action_dim)
     actions_ref = _reference_sample_actions(ref_model, images_t, img_masks_t, lang_tokens_t, lang_masks_t, noise)
 
-    # Prefill + static-KV init (eager, outside trace).
     images = [ttnn.from_torch(images_t[0], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)]
-    lang_tokens = ttnn.from_torch(lang_tokens_t.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev)
-    img_embeds = tt.backbone.embed_image(images[0])
-    lang_embeds = ttnn.multiply(tt.backbone.embed_language_tokens(lang_tokens), math.sqrt(cfg.vlm_config.width))
-    prefix = ttnn.concat([img_embeds, lang_embeds], dim=1)
-    prefix_len = prefix.shape[1]
-    ah, ad = cfg.action_horizon, cfg.action_dim
-    ahp = tt._tile_pad(ah)
-    # Prefill via the trace-safe VLM prefix store, then fill the expert cross-attn
-    # KV buffers from those stores (no intermediate persistent cache list).
-    tt.backbone.init_vlm_static_kv(prefix_len)
-    tt.backbone.forward_vlm(prefix, attention_mask=None, use_cache=True)
-    tt.backbone.init_expert_static_kv_from_vlm(prefix_len, ahp)
-    suffix_mask = tt._suffix_phantom_mask(prefix_len, ah, ahp)
-    step_mods = [tt.backbone.precompute_step_mods(tt.suffix_embedding.embed_adarms_cond(tt._ts(1.0 - i / cfg.num_denoising_steps))) for i in range(cfg.num_denoising_steps)]
+    img_masks = [ttnn.from_torch(torch.ones(1, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)]
+    lang_tokens = ttnn.from_torch(
+        lang_tokens_t.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev
+    )
+    lang_masks = ttnn.from_torch(torch.ones(1, lang_len), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
 
-    # Framework-traced denoise loop.
-    adapter = _DenoiseStepAdapter.wrap(tt, prefix_len, suffix_mask, dev)
-    x_t = tt._noise_to_device(noise, ahp)
-    n = cfg.num_denoising_steps
+    # Production inference under TRACED: prefill runs eager (its submodules are not
+    # @trace_enabled), the denoise loop captures + replays exactly ONE trace.
     before = TracedRun.cache_size()
-    for i in range(n):
-        bmods, fmod = step_mods[i]
-        v = adapter(x_t, *_flatten_step_mods(bmods, fmod))  # warmup(0)/capture(1)/replay(2+)
-        v_dt = ttnn.multiply(v, -1.0 / n, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x_t = ttnn.add(x_t, v_dt, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.synchronize_device(dev)
+    actions = tt.sample_actions(images, img_masks, lang_tokens, lang_masks, noise=noise)
     captured = TracedRun.cache_size() - before
-    out = ttnn.to_torch(ttnn.slice(x_t, [0, 0, 0], [x_t.shape[0], ah, ad]))
+    out = ttnn.to_torch(actions)
 
-    print(f"\n[tier4-traced] captured={captured} actions_shape={tuple(out.shape)} finite={bool(torch.isfinite(out).all())}")
-    assert captured >= 1, "no denoise-step trace captured"
-    assert out.shape == (1, ah, ad) and torch.isfinite(out).all() and out.float().std() > 1e-4
+    print(
+        f"\n[tier4-traced] traces_captured={captured} actions_shape={tuple(out.shape)} finite={bool(torch.isfinite(out).all())}"
+    )
+    assert captured == 1, f"expected exactly ONE denoise trace under TRACED, got {captured}"
+    assert out.shape == (1, cfg.action_horizon, cfg.action_dim), out.shape
+    assert torch.isfinite(out).all() and out.float().std() > 1e-4
     pcc = compute_pcc(out, actions_ref)
-    print(f"[tier4-traced] E2E action PCC (framework-TRACED vs torch) = {pcc:.4f}")
+    print(f"[tier4-traced] E2E action PCC (TRACED sample_actions vs torch) = {pcc:.4f}")
     assert pcc >= 0.90, f"E2E PCC {pcc:.4f} < 0.90"

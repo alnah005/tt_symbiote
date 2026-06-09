@@ -14,7 +14,7 @@ from torch.nn import functional as F
 from transformers.configuration_utils import PretrainedConfig
 from ttnn.model_preprocessing import preprocess_linear_weight
 
-from tt_symbiote.core.module import TTNNModule, DeviceArch, run_on_devices
+from tt_symbiote.core.module import DeviceArch, StatelessTTNNModule, run_on_devices
 from tt_symbiote.core.run_config import disable_trace
 from tt_symbiote.core.tensor import TorchTTNNTensor
 from tt_symbiote.modules.ttnn_linear import (
@@ -476,7 +476,7 @@ class Glm4MoeMoE(torch.nn.Module):
         return hidden_states
 
 
-class TTNNGlm4MoeExpertLayers(TTNNModule):
+class TTNNGlm4MoeExpertLayers(StatelessTTNNModule):
     """TTNN module that handles expert layer execution."""
 
     def __init__(self, num_experts: int, hidden_dim: int, intermediate_dim: int, num_experts_off_chip: int = 20):
@@ -603,7 +603,7 @@ class Glm4MoeNaiveMoeHybrid(nn.Module):
         return final_hidden_states
 
 
-class TTNNGlm4MoeNaiveMoe(TTNNModule):
+class TTNNGlm4MoeNaiveMoe(StatelessTTNNModule):
     def preprocess_weights_impl(self):
         self.tt_gate_up_proj = preprocess_linear_weight(
             self.torch_layer.gate_up_proj, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
@@ -653,7 +653,7 @@ class TTNNGlm4MoeTopkRouter(TTNNLinearIColShardedWRowSharded):
         return tt_output
 
 
-class TTNNGlm4MoeMLP(TTNNModule):
+class TTNNGlm4MoeMLP(StatelessTTNNModule):
     @classmethod
     def from_torch(cls, torch_layer: Glm4MoeMLP):
         """Create a TTNNGlm4MoeMLP from a PyTorch Glm4MoeMLP layer."""
@@ -679,7 +679,7 @@ class TTNNBailingMoeV2MLP(TTNNGlm4MoeMLP):
     pass
 
 
-class TTNNGlm4MoeRouteTokenToExperts(TTNNModule):
+class TTNNGlm4MoeRouteTokenToExperts(StatelessTTNNModule):
     def preprocess_weights_impl(self):
         self.e_score_correction_bias = ttnn.from_torch(
             self.torch_layer.e_score_correction_bias.unsqueeze(0).unsqueeze(0).unsqueeze(0).to(torch.bfloat16)
@@ -813,7 +813,7 @@ class TTNNGlm4MoeRouteTokenToExperts(TTNNModule):
         return topk_expert_idx, topk_weights
 
 
-class TTNNGlm4MoeMoE(TTNNModule):
+class TTNNGlm4MoeMoE(StatelessTTNNModule):
     @classmethod
     def from_torch(cls, torch_module: Glm4MoeMoE) -> "TTNNGlm4MoeMoE":
         ttnn_module = cls()
@@ -851,7 +851,7 @@ class TTNNGlm4MoeMoE(TTNNModule):
         return hidden_states
 
 
-class TTNNMoERouterDecode(TTNNModule):
+class TTNNMoERouterDecode(StatelessTTNNModule):
     """TTNN-accelerated MoE router (decode mode)."""
 
     @classmethod
@@ -1024,7 +1024,7 @@ class TTNNMoERouterDecode(TTNNModule):
         return topk_expert_idx, topk_weights
 
 
-class TTNNExperts(TTNNModule):
+class TTNNExperts(StatelessTTNNModule):
     """
     Baseline experts module for DeepSeek V3.
 
@@ -1343,7 +1343,7 @@ class TTNNExperts(TTNNModule):
         return final_output
 
 
-class TTNNMoE(TTNNModule):
+class TTNNMoE(StatelessTTNNModule):
     """
     Baseline MoE module for DeepSeek V3.
 

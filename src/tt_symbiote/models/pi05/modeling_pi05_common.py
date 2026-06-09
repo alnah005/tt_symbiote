@@ -32,19 +32,52 @@ __all__ = [
 ]
 
 
+import os as _os
+
+
 def get_sdpa_math_fidelity() -> "ttnn.MathFidelity":
-    """SDPA math fidelity. HiFi2 -- measured-best on Blackhole with fp32 dest (main
-    path; no env switch)."""
-    return ttnn.MathFidelity.HiFi2
+    """SDPA math fidelity. deep-plan_3 KEPT value: HiFi4.
+
+    deep-plan_3's 18-layer PRE/POST-SDPA-V ladder proved the per-layer V eroder is
+    the compounding bf8_b QKV matmul chain (V_pre, the SDPA INPUT, is the low
+    quantity; the SDPA online-softmax accumulation V_pre->V_post actually RAISES
+    PCC). The reference VLM SDPA program config (CA) and a HiFi4 QKV matmul both
+    moved V negligibly; the fp32_dest=True Cref witness ALSO capped V at ~0.92
+    (NOT >=0.99) -- so V>=0.99 is unattainable by any SDPA-path config. The ONE
+    deterministic, V-raising, E2E-propagating lever found was bumping the SDPA math
+    fidelity HiFi2->HiFi4 at the now-frozen fp32_dest_acc_en=False: it raises
+    per-layer V_pre (meanVpre 0.9265->0.9315) and lifts 3-cam own-KV E2E
+    0.4965->0.6463 (golden-KV-vs-own-KV meter), and is BIT-DETERMINISTIC (same-proc
+    x2 + fresh-proc x3 max-abs-diff == 0 -- the iter-2 HiFi4 4.69 nonzero was
+    measured WITH fp32_dest=True; at fp32_dest=False the multiplier fidelity is no
+    longer redundant and reduces deterministically). LADDER_SDPA_HIFI=2 reverts to
+    HiFi2 for A/B (deep-plan_3 C0/CB ladder only)."""
+    if _os.environ.get("LADDER_SDPA_HIFI") == "2":
+        return ttnn.MathFidelity.HiFi2
+    return ttnn.MathFidelity.HiFi4
 
 
 def get_sdpa_compute_kernel_config() -> "ttnn.WormholeComputeKernelConfig":
-    """SDPA compute-kernel config (main path, hardcoded to the measured-best values)."""
+    """SDPA compute-kernel config (main path, hardcoded to the measured-best values).
+
+    deep-plan_3 sweep knobs (env-gated, default = the frozen deterministic values):
+      LADDER_SDPA_HIFI=4    -> HiFi4 (CB1/CB2/CB3 legs; re-prove determinism per leg)
+      LADDER_SDPA_FP32=1    -> fp32_dest_acc_en=True (Cref witness BAND ONLY -- BANNED
+                               from being kept; non-deterministic on BH)
+      LADDER_SDPA_PACKER=0  -> packer_l1_acc=False (CB3 leg)
+    """
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=get_sdpa_math_fidelity(),
         math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
+        # deep-plan_2 root cause: fp32 dest-register accumulation in the flash-attention
+        # online-softmax reduction over the 896-key 3-cam VLM prefix has a NON-DETERMINISTIC
+        # partial-sum reduction order on Blackhole (measured: bit-identical inputs -> SDPA
+        # output max-abs-diff 5.56 run-to-run, compounding through 18 VLM layers into the
+        # prefix KV and depressing 3-cam E2E to ~0.51 with ~0.06 jitter). bf16 dest
+        # accumulation reduces over a fixed order -> bit-deterministic (verified diff==0).
+        # The 1-cam (288-key) path was already deterministic; this only matters at scale.
+        fp32_dest_acc_en=(_os.environ.get("LADDER_SDPA_FP32") == "1"),
+        packer_l1_acc=(_os.environ.get("LADDER_SDPA_PACKER", "1") != "0"),
     )
 
 
