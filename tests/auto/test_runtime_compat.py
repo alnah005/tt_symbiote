@@ -113,6 +113,16 @@ def test_model_extras_reference_known_capabilities():
             assert group in _runtime_pins.CAPABILITY_EXTRAS, f"{hf_class}: unknown extra {group!r}"
 
 
+def test_serving_tier_is_valid_when_present():
+    for hf_class, pin in _runtime_pins.RUNTIME_PINS.items():
+        if "serving_tier" in pin:
+            assert pin["serving_tier"] in _runtime_pins.SERVING_TIERS, (
+                f"{hf_class}: unknown serving_tier {pin['serving_tier']!r}"
+            )
+    # The default must itself be a valid tier.
+    assert _runtime_pins.serving_tier_for("__missing__") in _runtime_pins.SERVING_TIERS
+
+
 def test_all_extra_is_union_of_capabilities():
     expected: set = set()
     for pkgs in _runtime_pins.CAPABILITY_EXTRAS.values():

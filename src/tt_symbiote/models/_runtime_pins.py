@@ -63,6 +63,25 @@ TTNN_VERSION_COMMITS: dict[str, str] = {
 }
 
 # --------------------------------------------------------------------------- #
+# SERVING side (per-model metadata; consumed by tt-inference-server's vLLM
+# Generator adapter — NOT used by the HF surface, so it changes no behavior)
+# --------------------------------------------------------------------------- #
+#
+# How deeply a recipe can be driven by the vLLM Generator contract. This is pure
+# metadata: it lets the generic serving adapter dispatch prefill/decode without
+# per-model code. See docs/development/tt_inference_server_integration.md §9.
+#
+#   S0_GREEDY_ENGINE   model emits tokens (on-device argmax); served greedy,
+#                      model-managed KV, max_num_seqs=1. (e.g. dots.ocr pipeline)
+#   S1_LOGITS_UNPAGED  model.forward returns logits but KV is not vLLM-paged;
+#                      served one request at a time, vLLM samples.
+#   S2_PAGED           model.forward returns logits over a vLLM-page-table-aware
+#                      paged KV cache; full continuous batching + sampling.
+SERVING_TIERS: frozenset[str] = frozenset(
+    {"S0_GREEDY_ENGINE", "S1_LOGITS_UNPAGED", "S2_PAGED"}
+)
+
+# --------------------------------------------------------------------------- #
 # PIN side (per model; scales to 100+ — one entry per supported recipe)
 # --------------------------------------------------------------------------- #
 #
@@ -71,6 +90,8 @@ TTNN_VERSION_COMMITS: dict[str, str] = {
 #                            (its OWN value -- models do NOT share one commit).
 #   "extras": list[str]      capability groups (keys of CAPABILITY_EXTRAS) the
 #                            model's processor/runtime needs. May be empty.
+#   "serving_tier": str      (optional) one of SERVING_TIERS; how the model is
+#                            driven under vLLM. Defaults to S1_LOGITS_UNPAGED.
 #
 # Adding a model is a single dict entry here (+ its recipe). See
 # docs/development/ttnn_pinning.md.
@@ -78,13 +99,25 @@ RUNTIME_PINS: dict[str, dict] = {
     "DotsOCRForCausalLM": {
         "tt_metal_commit": "c09f09c35a1a59a428f0e1b5cdaa8fe59fb1b195",
         "extras": ["vision", "qwen-vl"],
+        "serving_tier": "S0_GREEDY_ENGINE",
     },
     # Example of the per-model independence (each pins its OWN commit):
     # "BailingMoeV2ForCausalLM": {
     #     "tt_metal_commit": "f2e12917564cfdfd50f81debcc12970a557412c8",
     #     "extras": [],
+    #     "serving_tier": "S2_PAGED",
     # },
 }
+
+# Default tier for entries that omit "serving_tier" (conservative: logits model,
+# served one request at a time, no assumptions about paged KV).
+_DEFAULT_SERVING_TIER = "S1_LOGITS_UNPAGED"
+
+
+def serving_tier_for(hf_class: str) -> str:
+    """Serving tier for an HF architecture (metadata; see SERVING_TIERS)."""
+    pin = RUNTIME_PINS.get(hf_class, {})
+    return pin.get("serving_tier", _DEFAULT_SERVING_TIER)
 
 
 def all_extra_packages() -> list[str]:
