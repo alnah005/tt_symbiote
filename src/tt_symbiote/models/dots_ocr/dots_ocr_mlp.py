@@ -57,7 +57,7 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
         weight = torch.cat(weight_chunks, dim=0)
         self.tt_weight_host = preprocess_linear_weight(
             weight,
-            dtype=getattr(self, "_weight_dtype", ttnn.bfloat4_b),
+            dtype=getattr(self, "_weight_dtype", ttnn.bfloat8_b),
             layout=ttnn.TILE_LAYOUT,
             weights_mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
         )
@@ -164,7 +164,7 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
         return int(self.in_features) == 8960 and int(self.out_features) == 1536
 
     def move_weights_to_device_impl(self):
-        weight_dtype = getattr(self, "_weight_dtype", ttnn.bfloat4_b)
+        weight_dtype = getattr(self, "_weight_dtype", ttnn.bfloat8_b)
         use_dram_sharded = self._down_proj_use_dram_sharded()
         # Stash raw torch weight/bias BEFORE preprocess overwrites them, so we
         # can construct the second DRAM_WIDTH_SHARDED copy via ``as_tensor``

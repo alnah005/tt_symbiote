@@ -1023,7 +1023,7 @@ class TTNNLinearLLamaIColShardedWAllReducedFusedGateUp(TTNNLinearLLamaIColSharde
         # overhead on cold start). Fusing in torch space removes the
         # on-device op outright.
         fused_weight_torch = torch.cat([self._gate_weight_torch, self._up_weight_torch], dim=0)
-        weight_dtype = getattr(self, "_weight_dtype", ttnn.bfloat4_b)
+        weight_dtype = getattr(self, "_weight_dtype", ttnn.bfloat8_b)
         fused_w_host = preprocess_linear_weight(
             fused_weight_torch,
             dtype=weight_dtype,
@@ -1422,7 +1422,7 @@ class TTNNDotsOCRDRAMShardedLMHead(StatelessTTNNModule):
                 device=device,
                 mesh_mapper=weight_mapper,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat4_b,
+                dtype=ttnn.bfloat8_b,
                 memory_config=mem_cfg,
             )
             self.tt_weight_chunks.append(tt_chunk)

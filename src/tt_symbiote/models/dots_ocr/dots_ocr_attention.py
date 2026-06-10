@@ -112,7 +112,7 @@ class _TTNNDotsOCROProjPrefillLinear(TTNNLinearLLamaIReplicatedWColSharded):
         self._prefill_weight = ttnn.as_tensor(
             weight_t,
             device=self.device,
-            dtype=getattr(self, "_weight_dtype", ttnn.bfloat4_b),
+            dtype=getattr(self, "_weight_dtype", ttnn.bfloat8_b),
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
