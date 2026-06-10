@@ -247,9 +247,10 @@ class TTNNDotsOCRDecoderLayer(StatefulTTNNModule):
         )
         new_layer.self_attn = _select_attention_class().from_torch(torch_layer.self_attn)
         new_layer.mlp = TTNNDotsOCRMLP.from_torch(torch_layer.mlp)
-        # MLP weights bfloat16 on every layer (decoder precision default; full-28L decode PCC
-        # 0.9936). The matching HiFi4 math / attention precision live in _linear.py + dots_ocr_mlp.py.
-        new_layer.mlp.set_weight_dtype(ttnn.bfloat16)
+        # MLP weights bfloat8_b on every layer (decoder precision default; op-sweep: BFP8+HiFi2
+        # holds full-28L decode PCC 0.9929 at ~half DRAM / -40% matmul vs bf16+HiFi4). The matching
+        # HiFi2 math / attention precision live in _linear.py + dots_ocr_mlp.py.
+        new_layer.mlp.set_weight_dtype(ttnn.bfloat8_b)
         return new_layer
 
     def call(self, *args, **kwds):

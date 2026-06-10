@@ -20,14 +20,14 @@ from tt_symbiote.core.module import (
 from tt_symbiote.core.run_config import trace_disabled, trace_enabled
 
 
-# Decoder precision (fixed default): bfloat16 weights + HiFi4 math on the MLP (gate_up/down)
-# AND attention (QKV / o_proj / SDPA). Validated full-28-layer decode PCC 0.9936 at no
-# measurable decode-throughput cost; the previous mixed BFP4/BFP8 + LoFi/HiFi2 scheme capped
-# the deep-stack PCC at ~0.92. The decoder MLP/o_proj weight dtype is set to bfloat16 in
-# TTNNDotsOCRDecoderLayer.from_torch / the o_proj default below.
+# Decoder precision (fixed default): bfloat8_b weights + HiFi2 math on the MLP (gate_up/down)
+# AND attention (QKV / o_proj / SDPA). Op-sweep finding: HiFi2 is the accuracy lever (LoFi caps
+# the deep stack at ~0.97; HiFi2 reaches 0.99) and the weight dtype barely matters above HiFi2,
+# so BFP8+HiFi2 holds full-28-layer decode PCC 0.9929 -- vs bf16+HiFi4 (0.9936) at ~half the
+# decode-weight DRAM and ~-40% matmul device time. (The prior BFP4 + LoFi scheme capped at ~0.92.)
 def _decoder_compute_kernel_config(math_approx_mode=False):
     return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=math_approx_mode,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
@@ -1115,8 +1115,8 @@ class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
         return self
 
     def move_weights_to_device_impl(self):
-        # o_proj weight: bfloat16 (decoder precision default; was BFP4).
-        weight_dtype = getattr(self, "_weight_dtype", ttnn.bfloat16)
+        # o_proj weight: bfloat8_b (decoder precision default; op-sweep: BFP8+HiFi2 holds 0.99).
+        weight_dtype = getattr(self, "_weight_dtype", ttnn.bfloat8_b)
         if isinstance(self.tt_weight_host, torch.Tensor):
             weight = self.tt_weight_host.T.contiguous()
             mesh_shape = list(self.device.shape) if hasattr(self.device, "shape") else [1, 1]
