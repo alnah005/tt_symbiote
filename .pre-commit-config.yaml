@@ -52,3 +52,10 @@ repos:
         types: [python]
         always_run: true
         files: ^(src/tt_symbiote/|tests/(models|experimental|shared)/)
+
+      - id: ttnn-extras-sync
+        name: pyproject ttnn-extras in sync with _runtime_pins.py
+        entry: python scripts/sync_ttnn_extras.py --check
+        language: system
+        pass_filenames: false
+        always_run: true

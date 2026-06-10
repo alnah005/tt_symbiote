@@ -17,7 +17,10 @@ Layout:
               _create_paged_kv_cache), kv_cache (thin re-export shim)
 """
 
-TT_METAL_COMMIT = "c09f09c35a1a59a428f0e1b5cdaa8fe59fb1b195"
+# Single source of truth: tt_symbiote.models._runtime_pins.RUNTIME_PINS.
+from tt_symbiote.models._runtime_pins import RUNTIME_PINS
+
+TT_METAL_COMMIT = RUNTIME_PINS["DotsOCRForCausalLM"]["tt_metal_commit"]
 
 from tt_symbiote.models.dots_ocr.dots_ocr_decoder_layer import (
     TTNNDotsOCRDecoderLayer,

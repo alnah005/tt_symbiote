@@ -4,8 +4,8 @@
 
 """Base ``Auto*`` factory shared by every ``tt_symbiote.AutoModel*`` class.
 
-Per ``docs/development/PROJECT_PROPOSAL.md`` §4.2 each ``Auto*`` class is a thin wrapper over
-the corresponding ``transformers.Auto*`` class that, after HF loading,
+Each ``Auto*`` class is a thin wrapper over the corresponding
+``transformers.Auto*`` class that, after HF loading,
 applies the registered tt_symbiote recipe (if any) and returns the
 TTNN-augmented model. When no recipe is registered for the loaded model
 class we warn and return the unmodified HF model so that the user-facing
@@ -19,6 +19,7 @@ from typing import Any, Optional, Type
 
 from tt_symbiote.models.auto.auto_mappings import TT_MODEL_REGISTRY
 from tt_symbiote.utils.module_replacement import register_modules
+from tt_symbiote.utils.runtime_compat import check_ttnn_compat
 
 __all__ = ["_BaseAutoModelClass", "_BaseAutoBackboneClass"]
 
@@ -94,6 +95,10 @@ class _BaseAutoModelClass:
             m._tt_register_forward_hook = register_forward_hook
 
         hf_class_name = type(model).__name__
+        # Warn (or, under TT_SYMBIOTE_STRICT_TTNN=1, raise) if the installed ttnn's
+        # tt-metal commit != the one this recipe was verified against. No-op for
+        # models absent from RUNTIME_PINS.
+        check_ttnn_compat(hf_class_name)
         recipe = TT_MODEL_REGISTRY.get(hf_class_name)
         if recipe is None:
             warnings.warn(

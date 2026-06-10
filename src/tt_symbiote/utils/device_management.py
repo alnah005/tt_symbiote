@@ -5,8 +5,7 @@
 """Device management utilities for TTNN modules.
 
 The single public entry point is :func:`set_device`. It is the mandatory
-final step of the ``tt_symbiote`` loading flow (per ``docs/development/PROJECT_PROPOSAL.md``
-§4.4) and does six things in order:
+final step of the ``tt_symbiote`` loading flow and does six things in order:
 
 1. Walks the model graph.
 2. For every ``TTNNModule``, reads ``forward.__tt_allowed_archs__``. If the
@@ -20,7 +19,7 @@ final step of the ``tt_symbiote`` loading flow (per ``docs/development/PROJECT_P
    previously wrote by hand).
 5. If a recipe is registered for ``type(obj).__name__`` and exposes
    ``make_kv_cache``, builds the model-specific KV cache and attaches it as
-   ``obj._tt_kv_cache`` (resolves ``docs/development/PROJECT_PROPOSAL.md`` Q9 — see Phase 5).
+   ``obj._tt_kv_cache``.
    The kwargs passed to ``make_kv_cache`` come from
    ``obj._tt_kv_cache_kwargs`` (set by ``AutoModel*.from_pretrained``'s
    ``kv_cache_kwargs=``). There is no bind-site override: cache shape
@@ -158,8 +157,8 @@ def _swap_module(parent: Any, key: Any, fallback: Any) -> None:
 def set_device(obj, device) -> None:
     """Bind every ``TTNNModule`` in ``obj`` to ``device``.
 
-    Per ``docs/development/PROJECT_PROPOSAL.md`` §4.4 this is **mandatory** before any model
-    invocation. See the module docstring for the full contract.
+    This is **mandatory** before any model invocation. See the module
+    docstring for the full contract.
 
     Strict two-argument signature. All runtime / diagnostic
     configuration is a model-construction decision and belongs on
@@ -178,7 +177,7 @@ def set_device(obj, device) -> None:
       - ``obj._tt_kv_cache_kwargs`` (default ``{}``): forwarded
         verbatim to the recipe's ``make_kv_cache`` hook.
 
-    Phase 8.5: the swapped-class registry consumed by
+    The swapped-class registry consumed by
     :func:`tt_symbiote.utils.compatibility.report` is cleared at entry
     and repopulated at exit so it always mirrors the *current* model
     tree (running two demos in the same process never aliases). Runtime
@@ -194,6 +193,17 @@ def set_device(obj, device) -> None:
     register_forward_hook = bool(getattr(obj, "_tt_register_forward_hook", False))
     dump_visualization = bool(getattr(obj, "_tt_dump_visualization", False))
     device_init = DeviceInit  # never overridden anywhere in-tree
+
+    # ttnn/model compatibility gate, secondary hook: covers hand-constructed models
+    # that bypass AutoModel*.from_pretrained. De-duplicated against the
+    # from_pretrained call so a normal load path warns at most once. No-op for
+    # models absent from RUNTIME_PINS.
+    try:
+        from tt_symbiote.utils.runtime_compat import check_ttnn_compat
+
+        check_ttnn_compat(type(obj).__name__)
+    except Exception:
+        pass
 
     try:
         from tt_symbiote.utils.compatibility import reset_swapped_registry
@@ -373,9 +383,8 @@ def set_device(obj, device) -> None:
             initialized_modules.append(obj)
     _set_device_recursive(obj)
 
-    # Phase 4 OQ-3: subsume the explicit preprocess_weights /
-    # move_weights_to_device loop that test/example code previously wrote
-    # by hand after every set_device call.
+    # Subsume the explicit preprocess_weights / move_weights_to_device loop
+    # that callers would otherwise write by hand after every set_device call.
     for module in initialized_modules:
         try:
             module.preprocess_weights()
@@ -386,8 +395,8 @@ def set_device(obj, device) -> None:
                 stacklevel=2,
             )
 
-    # Phase 5 (Q9): if a recipe is registered for this model, give it a
-    # chance to allocate model-specific state that requires a live device,
+    # If a recipe is registered for this model, give it a chance to
+    # allocate model-specific state that requires a live device,
     # most notably the paged-attention KV cache. Mirrors the
     # ``tt_transformers`` "model owns its KV cache" pattern but delayed to
     # set_device time (since HF builds the model on CPU first). The cache
@@ -424,7 +433,7 @@ def set_device(obj, device) -> None:
     except Exception:
         pass
 
-    # Phase 8.5: single post-walk to populate the swapped-class registry that
+    # Single post-walk to populate the swapped-class registry that
     # ``compatibility.report`` reads. Every TTNNModule still present in the
     # tree after the bind/arch pass had ``_swap_module`` decline to replace it
     # — i.e. it is *actually* about to execute on device. We record the HF
