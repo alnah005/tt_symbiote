@@ -67,6 +67,10 @@ model_graph.png
 # examples/e2e/README.md for the contract.
 tests/images/
 
+# Generated OCR output + synthetic sample docs from the dots.ocr e2e demo
+# (examples/e2e/dots_ocr/run_dots_ocr.py writes results here).
+examples/e2e/dots_ocr/out/
+
 # pi0.5 local scratch (profiling/experiment drivers + generated reports + design md)
 tests/models/pi05/exp_*.py
 tests/models/pi05/profile_bs_ab_pi05.py

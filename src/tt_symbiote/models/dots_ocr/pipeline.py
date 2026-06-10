@@ -888,6 +888,18 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
             )
         seq_len = input_ids.shape[-1]
 
+        # Prefill begins a FRESH sequence, so clear the paged KV cache and the
+        # decode-loop buffers here -- not only in generate(). Callers that drive
+        # prefill()/decode_step() directly as separate steps (e.g. the vLLM S0
+        # serving adapter runs prefill and each decode as distinct engine steps,
+        # never through generate()) would otherwise inherit the previous
+        # request's KV contents and cache position. That stale state corrupts
+        # causal masking on the next request and makes the model emit EOS after
+        # only 1-2 tokens. Resetting here is idempotent with generate()'s
+        # pre-prefill reset.
+        self.paged_cache.reset()
+        self._reset_decode_loop_state()
+
         # --- Embedding ---
         # All children have _bypass_tensor_wrapping=True (pipeline is a
         # TTNNModule parent), so we convert input_ids to ttnn ourselves.
@@ -1170,6 +1182,20 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def _reset_decode_loop_state(self) -> None:
+        """Reset the lazily-allocated decode-loop buffers as a unit.
+
+        ``decode_step`` re-initializes these on its next call via the
+        ``self._decode_token_buffer is None`` guard. Nulling the cache position
+        WITHOUT the token buffer leaves the guard satisfied but the position
+        unset -- which breaks callers that drive ``prefill``/``decode_step``
+        directly (e.g. the vLLM S0 serving adapter, whose prefill and decode run
+        as separate engine steps) instead of through ``generate``. Keep them in
+        lockstep so the next ``decode_step`` rebuilds the whole buffer set.
+        """
+        self._decode_cache_position = self._decode_token_buffer = None
+        self._decode_token_buffer_has_next = False
+
     def decode_step(
         self,
         prev_token_id: Union[int, List[int]],
@@ -1375,11 +1401,11 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         max_new_tokens: int,
         stop_on_eos: bool,
     ) -> Union[List[int], List[List[int]]]:
-        # Reset cache for fresh generation
+        # Reset cache + decode-loop state for a fresh generation. prefill() also
+        # resets these (so direct prefill()/decode_step() callers stay correct);
+        # repeating here is idempotent and keeps generate() self-contained.
         self.paged_cache.reset()
-        self._decode_cache_position = None
-        self._decode_token_buffer = None
-        self._decode_token_buffer_has_next = False
+        self._reset_decode_loop_state()
         self._decode_seq_counter = 0
         self._dp_readback_ring = None
         first_out = self.prefill(input_ids, pixel_values, image_grid_thw)
@@ -1603,7 +1629,7 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         # Pass 1: Warmup (TracedRun phase 1 -- no trace capture)
         self.generate(input_ids, pixel_values, image_grid_thw, max_new_tokens=2)
         self.paged_cache.reset()
-        self._decode_cache_position = None
+        self._reset_decode_loop_state()
 
         # Release all traces so run 2 starts clean
         TracedRun.release_all()
@@ -1611,10 +1637,10 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         # Pass 2: Trace capture (TracedRun phase 2)
         self.generate(input_ids, pixel_values, image_grid_thw, max_new_tokens=4)
         self.paged_cache.reset()
-        self._decode_cache_position = None
+        self._reset_decode_loop_state()
 
     def release(self) -> None:
         """Release all traced runs and deallocate pre-allocated buffers."""
         TracedRun.release_all()
-        self._decode_cache_position = None
+        self._reset_decode_loop_state()
         self.graph_prefill.release_scatter_cache()
