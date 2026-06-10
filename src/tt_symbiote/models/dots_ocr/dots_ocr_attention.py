@@ -17,6 +17,7 @@ from tt_symbiote.models.dots_ocr._attention import TTNNPagedAttentionKVCache, TT
 from tt_symbiote.models.dots_ocr._linear import (
     TTNNLinearLLamaIColShardedWAllReduced,
     TTNNLinearLLamaIReplicatedWColSharded,
+    _decoder_compute_kernel_config,
     _tp_mesh_mapper,
     _tp_requires_ccl,
 )
@@ -326,20 +327,11 @@ class TTNNDotsOCRAttention(StatefulTTNNModule):
             # earlier "validation" run that approved LoFi was confounded by the
             # broken DRAM-sharded LM head also in that commit, so the LoFi delta
             # was masked. Keep at HiFi2 until a clean A/B confirms it's safe.)
-            self.sdpa.decode_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-                math_approx_mode=True,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=True,
-            )
+            # Decode SDPA: HiFi4 (decoder precision default; was HiFi2).
+            self.sdpa.decode_compute_kernel_config = _decoder_compute_kernel_config(math_approx_mode=True)
 
-        # Override QKV compute config: HiFi2 for decode
-        self.qkv_proj.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
+        # QKV decode compute config: HiFi4 (decoder precision default; was HiFi2).
+        self.qkv_proj.compute_kernel_config = _decoder_compute_kernel_config()
 
         mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
 

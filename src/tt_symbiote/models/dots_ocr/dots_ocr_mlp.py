@@ -13,6 +13,7 @@ from tt_symbiote.models.dots_ocr._linear import (
     _decode_down_proj_dram_sharded_program_config,
     _decode_down_proj_input_memory_config,
     _decode_gate_up_dram_sharded_program_config,
+    _decoder_compute_kernel_config,
     _dp_matmul_program_config,
     _dram_sharded_mem_config_2d,
     _linear_mesh_num_devices,
@@ -190,12 +191,7 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
             )
         self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
+        self.compute_kernel_config = _decoder_compute_kernel_config()
         # Second weight (DRAM_WIDTH_SHARDED) for the decode DRAM-sharded matmul.
         # Allocated via ``as_tensor`` so no reshard kernel is launched. Prefill
         # uses ``self.tt_weight`` (DRAM_INTERLEAVED). Memory cost: ~7 MB / layer

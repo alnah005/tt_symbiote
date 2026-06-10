@@ -177,15 +177,9 @@ class TTNNPagedAttentionKVCache(Cache):
         if not self._is_on_device:
             raise RuntimeError("KV cache not on device. Call to_device(device).")
         if page_table.dim() != 2:
-            raise ValueError(
-                f"page_table must be 2D [batch, blocks_per_sequence], got shape {tuple(page_table.shape)}"
-            )
+            raise ValueError(f"page_table must be 2D [batch, blocks_per_sequence], got shape {tuple(page_table.shape)}")
 
-        mesh_mapper = (
-            ttnn.ReplicateTensorToMesh(self._device)
-            if self._device.get_num_devices() > 1
-            else None
-        )
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self._device) if self._device.get_num_devices() > 1 else None
         self.page_table = page_table.to(torch.int32).contiguous()
 
         # Release the previous device page-table tensor before replacing it.

@@ -48,15 +48,6 @@ def _take_local_dp_batch(hidden_states, device):
     )
 
 
-def _use_bfp8_decoder_weights(layer_idx) -> bool:
-    if layer_idx is None:
-        return False
-    layer_idx = int(layer_idx)
-    # Layers 0..6 stay BFP4 for decode speed; later layers are more sensitive
-    # for OCR spelling/table tokens.
-    return layer_idx >= 7
-
-
 class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
     def move_weights_to_device_impl(self):
         # Inherit the distributed-RMSNorm weight setup (weight_distributed +
@@ -256,8 +247,9 @@ class TTNNDotsOCRDecoderLayer(StatefulTTNNModule):
         )
         new_layer.self_attn = _select_attention_class().from_torch(torch_layer.self_attn)
         new_layer.mlp = TTNNDotsOCRMLP.from_torch(torch_layer.mlp)
-        if _use_bfp8_decoder_weights(getattr(new_layer.self_attn, "layer_idx", None)):
-            new_layer.mlp.fused_gate_up_proj.set_weight_dtype(ttnn.bfloat8_b)
+        # MLP weights bfloat16 on every layer (decoder precision default; full-28L decode PCC
+        # 0.9936). The matching HiFi4 math / attention precision live in _linear.py + dots_ocr_mlp.py.
+        new_layer.mlp.set_weight_dtype(ttnn.bfloat16)
         return new_layer
 
     def call(self, *args, **kwds):
@@ -400,14 +392,23 @@ class TTNNDotsOCRLayerStack(TTNNLayerStack):
                 cur_pos_tt = self._materialize_shared_cur_pos(cache_position)
                 if cur_pos_tt is not None:
                     kwargs["decode_cur_pos_tt"] = cur_pos_tt
-                    # HEIGHT-sharded cos/sin: the decode attention now uses
-                    # rotary_embedding_hf (sharded decode kernel), which requires
-                    # sharded cos/sin. The interleaved get_cos_sin_for_decode is
-                    # only correct for the legacy ttnn.experimental.rotary_embedding
-                    # path; the hoisted value is shared across all layers.
-                    kwargs["decode_cos_sin"] = rotary_setup.get_cos_sin_for_decode_sharded(
-                        cur_pos_tt, int(hidden_states.shape[0])
-                    )
+                    # cos/sin is prepared ONCE per token here and shared across all
+                    # layers. The required format depends on the decode rotary kernel
+                    # of the (arch-selected) attention subclass:
+                    #   * TTNNDotsOCRAttentionT3K uses the legacy
+                    #     ttnn.experimental.rotary_embedding, which consumes INTERLEAVED
+                    #     cos/sin (this is exactly the subclass's own per-layer fallback,
+                    #     and matches the tt-metal reference decode path). Hoisting the
+                    #     interleaved value avoids two per-token interleaved_to_sharded
+                    #     reshards on the host critical path.
+                    #   * The base attention uses rotary_embedding_hf (sharded decode
+                    #     kernel), which REQUIRES HEIGHT-sharded cos/sin.
+                    if isinstance(attn0, TTNNDotsOCRAttentionT3K):
+                        kwargs["decode_cos_sin"] = rotary_setup.get_cos_sin_for_decode(cur_pos_tt)
+                    else:
+                        kwargs["decode_cos_sin"] = rotary_setup.get_cos_sin_for_decode_sharded(
+                            cur_pos_tt, int(hidden_states.shape[0])
+                        )
 
         for layer in self.layers:
             layer_output = layer.forward(hidden_states, **kwargs)

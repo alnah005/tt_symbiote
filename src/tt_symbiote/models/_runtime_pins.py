@@ -77,9 +77,7 @@ TTNN_VERSION_COMMITS: dict[str, str] = {
 #                      served one request at a time, vLLM samples.
 #   S2_PAGED           model.forward returns logits over a vLLM-page-table-aware
 #                      paged KV cache; full continuous batching + sampling.
-SERVING_TIERS: frozenset[str] = frozenset(
-    {"S0_GREEDY_ENGINE", "S1_LOGITS_UNPAGED", "S2_PAGED"}
-)
+SERVING_TIERS: frozenset[str] = frozenset({"S0_GREEDY_ENGINE", "S1_LOGITS_UNPAGED", "S2_PAGED"})
 
 # --------------------------------------------------------------------------- #
 # PIN side (per model; scales to 100+ — one entry per supported recipe)
