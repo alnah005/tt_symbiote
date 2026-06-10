@@ -19,7 +19,13 @@ from transformers.modeling_attn_mask_utils import (
 )
 from transformers.modeling_outputs import MoeModelOutputWithPast
 
-from tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices
+from tt_symbiote.core.module import (
+    DeviceArch,
+    StatefulTTNNModule,
+    StatelessTTNNModule,
+    TTNNModule,
+    run_on_devices,
+)
 from tt_symbiote.core.run_config import trace_enabled
 from tt_symbiote.models.auto.auto_mappings import register_recipe
 from tt_symbiote.modules.ttnn_attention import PagedAttentionConfig, TTNNBailingMoEAttention, TTNNPagedAttentionKVCache
@@ -39,12 +45,18 @@ class MoeV2ModelOutputWithPast(MoeModelOutputWithPast):
         self.mtp_hidden_states = mtp_hidden_states
 
 
-class TTNNBailingMoeV2Model(TTNNModule):
+class TTNNBailingMoeV2Model(StatelessTTNNModule):
     """
     Transformer decoder consisting of *config.num_hidden_layers* layers. Each layer is a [`BailingMoeV2DecoderLayer`]
 
     Args:
         config: BailingMoeV2Config
+
+    Stateless: this outer wrapper is not a ``@trace_enabled`` trace unit (it
+    overrides ``call`` for orchestration only). Tracing happens per decoder
+    layer; any persistent KV-cache mutation lives in the descendant attention
+    modules, not here, and the KV-cache Python counters it advances belong to
+    the externally-owned ``past_key_values`` object (updated outside the trace).
     """
 
     @classmethod
@@ -337,7 +349,7 @@ eliminating host round-trips that force device synchronization.
 
 
 @trace_enabled
-class TTNNBailingMoEDecoderLayer(TTNNModule):
+class TTNNBailingMoEDecoderLayer(StatefulTTNNModule):
     """Replaces BailingMoeV2DecoderLayer to keep residual adds on-device.
 
     Eliminates 2 host round-trips per layer (one for attention residual,
@@ -351,6 +363,19 @@ class TTNNBailingMoEDecoderLayer(TTNNModule):
         self.attention = None
         self.mlp = None
         self._is_dense_layer = False
+
+    def reset_trace_state(self) -> None:
+        # STATEFUL only because it owns the stateful ``self.attention``
+        # (TTNNBailingMoEAttention, which writes the paged KV cache). This layer's
+        # own forward holds NO persistent trace state: it does only residual adds,
+        # RMSNorm, and MLP/MoE -- no in-place cache write and no lazy buffer
+        # allocation assigned to ``self`` (``residual`` is a local, not a member).
+        # The single KV write lives entirely in the descendant attention, and the
+        # framework's trace tree-reset (TracedRun._reset_trace_state_tree) walks
+        # this subtree and resets that stateful descendant independently. Hence a
+        # justified no-op for THIS layer (not the bare inherited hook -- reasoned).
+        # KV-cache seq-counter advance happens outside the trace in the model loop.
+        return None
 
     @classmethod
     def from_torch(cls, torch_layer):
@@ -471,7 +496,7 @@ class TTNNBailingMoEDecoderLayer(TTNNModule):
 from tt_symbiote.utils.math_utils import next_power_of_2 as _next_power_of_2  # noqa: E402
 
 
-class TTNNBailingMoEDecoderLayerPadded(TTNNModule):
+class TTNNBailingMoEDecoderLayerPadded(StatelessTTNNModule):
     """Decoder layer that pads the input sequence length to the next power of 2.
 
     Padding to a power-of-2 sequence length reduces the number of unique trace
@@ -480,6 +505,15 @@ class TTNNBailingMoEDecoderLayerPadded(TTNNModule):
 
     The pad is applied before the forward pass and the output is sliced back
     to the original sequence length afterward.
+
+    Stateless: this wrapper is intentionally NOT a ``@trace_enabled`` trace unit.
+    It pads inputs, delegates to the trace-enabled inner ``self.layer``
+    (TTNNBailingMoEDecoderLayer, which IS the trace unit and gets its stateful
+    attention descendant reset by the framework), then slices the output. Padding
+    must happen OUTSIDE the trace so the inner trace key sees the power-of-2
+    length -- that trace-reuse property is the reason this wrapper exists. Its own
+    forward mutates no persistent state, so it is stateless even though it owns a
+    stateful descendant (the descendant is traced/reset as its own unit).
     """
 
     @classmethod

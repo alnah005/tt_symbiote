@@ -101,12 +101,13 @@ RUNTIME_PINS: dict[str, dict] = {
         "extras": ["vision", "qwen-vl"],
         "serving_tier": "S0_GREEDY_ENGINE",
     },
-    # Example of the per-model independence (each pins its OWN commit):
-    # "BailingMoeV2ForCausalLM": {
-    #     "tt_metal_commit": "f2e12917564cfdfd50f81debcc12970a557412c8",
-    #     "extras": [],
-    #     "serving_tier": "S2_PAGED",
-    # },
+    # Ling-mini-2.0 — first S2 (paged, continuous-batching) model. Pins its OWN
+    # tt-metal commit independently of dots_ocr above (see test_config.json).
+    "BailingMoeV2ForCausalLM": {
+        "tt_metal_commit": "f2e12917564cfdfd50f81debcc12970a557412c8",
+        "extras": [],
+        "serving_tier": "S2_PAGED",
+    },
 }
 
 # Default tier for entries that omit "serving_tier" (conservative: logits model,
