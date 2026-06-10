@@ -48,32 +48,31 @@ The design rules:
 ## Installation
 
 `tt_symbiote` runs on **Linux, Python 3.10 – 3.12, on a host with a Tenstorrent
-Wormhole device attached**, with the matching `sfpi` toolchain at
-`/opt/tenstorrent/sfpi/`.
+Wormhole device attached** (N150 / N300 / T3K).
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e .            # text-only causal LMs
-pip install -e ".[vision]"  # multimodal / vision (Gemma-4, Qwen3-VL, ResNet)
+pip install tt_symbiote            # text-only causal LMs
+pip install "tt_symbiote[vision]"  # multimodal / vision (Gemma-4, Qwen3-VL, ResNet)
+pip install "tt_symbiote[all]"     # every model's optional deps
 ```
 
 The install pulls the transitive HF stack (`torch`, `transformers==5.9.0`,
-`accelerate`, `tokenizers`, …) from PyPI. The `[vision]` extra adds
-`torchvision`, which HF's multimodal `AutoProcessor` classes require (mirrors
-the upstream `transformers[vision]` extra).
+`accelerate`, `tokenizers`, …) plus the `ttnn` runtime from PyPI. The `[vision]`
+extra adds `torchvision`, which HF's multimodal `AutoProcessor` classes require
+(mirrors the upstream `transformers[vision]` extra).
 
-> **ttnn is NOT a PyPI dependency.** ttnn comes from a tt-metal SOURCE BUILD at
-> `$TT_METAL_HOME` (not a PyPI wheel). With `$TT_METAL_HOME` set,
-> `import tt_symbiote` auto-wires the source-built ttnn onto `sys.path` and
-> errors clearly if `$TT_METAL_HOME` is unset. No global tt-metal commit pin —
-> each model records its own `tt_metal_commit`; `scripts/ttnn-pin.txt` holds an
-> optional sfpi override only.
+> **One ttnn runtime per release.** This release pins `ttnn==0.68.0`. A process
+> can import exactly one `ttnn`, so each model *also* records the specific
+> `tt_metal_commit` it was verified against — metadata enforced at load time by a
+> compatibility gate that warns when the installed `ttnn` was built from a
+> different commit (see
+> [`docs/development/ttnn_pinning.md`](docs/development/ttnn_pinning.md)).
+> Contributors can override the pinned wheel with a tt-metal source build at
+> `$TT_METAL_HOME`; `import tt_symbiote` auto-wires it.
 >
-> The source-built ttnn JIT-compiles firmware kernels at the first
-> `open_mesh_device(...)` call using the `sfpi` RISC-V toolchain. sfpi is
-> auto-derived from `$TT_METAL_HOME/tt_metal/sfpi-version`; a mismatch makes
-> `open_mesh_device()` fail with `unrecognized command-line option` (verify via
-> `riscv-tt-elf-g++ --version`). See
+> ttnn JIT-compiles firmware kernels at the first `open_mesh_device(...)` call
+> using the `sfpi` RISC-V toolchain. See
 > [`docs/install_prerequisites.md`](docs/install_prerequisites.md) for details.
 
 ## Public API

@@ -41,7 +41,7 @@ from __future__ import annotations
 # `dependencies` by scripts/sync_ttnn_extras.py. Empty string => not yet chosen;
 # the package is source-build-only until an empirically-verified version is set
 # (see docs/development/ttnn_pinning.md, "Choosing RELEASE_TTNN").
-RELEASE_TTNN: str = ""  # e.g. "==0.69.0"
+RELEASE_TTNN: str = "==0.68.0"
 
 # Shared, per-capability Python dependency groups (à la transformers extras).
 # Models reference these by name in their RUNTIME_PINS["extras"] list. The
