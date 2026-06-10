@@ -16,6 +16,7 @@ artefact, regenerated each run; the aggregated summary lives in
 ```
 examples/e2e/
 ├── run_ling_mini_2_0.py          ← flat: only 1 variant so far
+├── dots_ocr/  run_dots_ocr.py + README.md      ← batched OCR, DP=4/8 (diff image per stream)
 ├── gemma4/    run_gemma4_{e2b,e4b,31b,26b_a4b}.py + README.md
 ├── qwen3_vl/  run_qwen3_vl_{2b,4b,8b,32b}.py + README.md
 └── resnet/    run_resnet{18,34,50,101,152}.py + README.md
@@ -26,6 +27,7 @@ examples/e2e/
 | Variant | Script | Task | Hardware | Status |
 |---|---|---|---|---|
 | `inclusionAI/Ling-mini-2.0` | [`run_ling_mini_2_0.py`](run_ling_mini_2_0.py) | causal LM | T3K (1×8) | ✅ verified |
+| `rednote-hilab/dots.ocr` | [`dots_ocr/run_dots_ocr.py`](dots_ocr/run_dots_ocr.py) | OCR (VLM), batched DP=4/8 | T3K (8×1) / P150x4 (4×1) | ✅ verified (DP=8 T3K) |
 | `microsoft/resnet-18` | [`resnet/run_resnet18.py`](resnet/run_resnet18.py) | image classification | N150 (1×1) | ⏳ structurally supported |
 | `microsoft/resnet-34` | [`resnet/run_resnet34.py`](resnet/run_resnet34.py) | image classification | N150 (1×1) | ⏳ structurally supported |
 | `microsoft/resnet-50` | [`resnet/run_resnet50.py`](resnet/run_resnet50.py) | image classification | N150 (1×1) | ✅ verified |

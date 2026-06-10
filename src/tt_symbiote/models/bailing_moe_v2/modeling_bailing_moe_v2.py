@@ -19,7 +19,7 @@ from transformers.modeling_attn_mask_utils import (
 )
 from transformers.modeling_outputs import MoeModelOutputWithPast
 
-from tt_symbiote.core.module import TTNNModule, DeviceArch, run_on_devices
+from tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices
 from tt_symbiote.core.run_config import trace_enabled
 from tt_symbiote.models.auto.auto_mappings import register_recipe
 from tt_symbiote.modules.ttnn_attention import PagedAttentionConfig, TTNNBailingMoEAttention, TTNNPagedAttentionKVCache

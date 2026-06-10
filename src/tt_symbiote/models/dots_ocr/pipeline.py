@@ -23,24 +23,24 @@ from typing import List, Optional, Tuple, Union
 import torch
 import ttnn
 
-
-from tt_symbiote.core.module import TTNNModule, SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, run_on_devices
+from tt_symbiote.core.module import (
+    SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS,
+    StatefulTTNNModule,
+    StatelessTTNNModule,
+    TTNNModule,
+    run_on_devices,
+)
 from tt_symbiote.core.run_config import TracedRun, is_trace_enabled, trace_enabled
 from tt_symbiote.models.dots_ocr._attention import (
     PagedAttentionConfig,
     TTNNPagedAttentionKVCache,
     dp_batch_shard_tensor_mapper,
 )
-from tt_symbiote.models.dots_ocr.dots_ocr_decoder_layer import (
-    TTNNDotsOCRDecoderLayer,
-    TTNNDotsOCRLayerStack,
-)
-from tt_symbiote.models.dots_ocr.dots_ocr_vision import TTNNDotsOCRVisionTower
 from tt_symbiote.models.dots_ocr._embedding import TTNNEmbedding
-from tt_symbiote.models.dots_ocr._linear import (
-    TTNNDotsOCRDRAMShardedLMHead,
-)
+from tt_symbiote.models.dots_ocr._linear import TTNNDotsOCRDRAMShardedLMHead
 from tt_symbiote.models.dots_ocr._normalization import TTNNDistributedRMSNorm
+from tt_symbiote.models.dots_ocr.dots_ocr_decoder_layer import TTNNDotsOCRDecoderLayer, TTNNDotsOCRLayerStack
+from tt_symbiote.models.dots_ocr.dots_ocr_vision import TTNNDotsOCRVisionTower
 from tt_symbiote.utils.device_management import timed_call
 
 
@@ -187,12 +187,38 @@ def _normalize_image_grid_thw_torch(grid: torch.Tensor) -> torch.Tensor:
 
 
 @trace_enabled
-class TTNNDotsOCRPrefillGraph(TTNNModule):
+class TTNNDotsOCRPrefillGraph(StatefulTTNNModule):
     def preprocess_weights_impl(self):
         return self
 
     def move_weights_to_device_impl(self):
         return self
+
+    def reset_trace_state(self) -> None:
+        # This prefill graph is the @trace_enabled trace UNIT. STATEFUL for two reasons,
+        # both of which are SAFE under the capture double-run, so this is a justified no-op
+        # (NOT the bare inherited hook):
+        #
+        # 1. Stateful descendants. The traced subtree contains the per-layer attention
+        #    (TTNNDotsOCRAttention) which writes the paged KV cache via
+        #    ``paged_fill_on_device(..., batch_idx=0)`` at a per-call cache_position that is
+        #    FIXED during the double-run (advanced outside the trace via post_trace_execute ->
+        #    update_seq_length). The framework's trace tree-reset
+        #    (TracedRun._reset_trace_state_tree) resets every stateful descendant
+        #    independently, so this graph has nothing of THEIRS to reset.
+        #
+        # 2. Lazy scatter-zero-row buffer. The multimodal forward path calls
+        #    ``_ensure_scatter_zero_row`` -> ``self._scatter_zero_row = ttnn.from_torch(...)``,
+        #    a lazy allocation assigned to ``self``. This is the classic capture-pass footgun --
+        #    EXCEPT it is keyed and idempotent: on the WARM-UP forward (run 1, cold/eager) the
+        #    buffer is None and gets allocated SAFELY; on the CAPTURE forward (run 2) the key
+        #    matches so it is a cache HIT and NOTHING is allocated during capture. The persistent
+        #    buffer is therefore created before capture, never during it. ``reset_trace_state``
+        #    MUST NOT null/deallocate ``self._scatter_zero_row`` (nor the scatter idx/mask, which
+        #    are built in the host generate loop OUTSIDE forward) -- doing so would force a
+        #    re-allocation on the capture pass, reintroducing the footgun. So we deliberately
+        #    PRESERVE these buffers and reset nothing.
+        return None
 
     def __init__(
         self,
@@ -214,6 +240,10 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
         self._image_token_id = int(image_token_id)
         self._hidden_size = int(hidden_size)
         self._scatter_uses_dp_batch_mapper = bool(scatter_uses_dp_batch_mapper)
+        # Additive batched-vision flag. Default False -> single-image path is
+        # byte-for-byte unchanged. Set by the pipeline factory after construction
+        # when batched_vision=True.
+        self._batched_vision = False
         self._scatter_cache_input_ids: Optional[torch.Tensor] = None
         self._scatter_cache_key: Optional[tuple] = None
         self._scatter_cache_idx: Optional[ttnn.Tensor] = None
@@ -299,7 +329,13 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
 
     def _ensure_scatter_zero_row(self, num_devices: int, H: int, H_per_device: int) -> None:
         device = self.device
-        if num_devices > 1:
+        if num_devices > 1 and self._batched_vision:
+            # ADDITIVE batched-vision path: vision output is FULL hidden per
+            # device (merger w2 replicated), so the scatter table -- and its
+            # leading zero row -- must also be full hidden. Replicate the zero
+            # row so each device's full-H vision table prepends a full-H zero.
+            zero_row_mapper = ttnn.ReplicateTensorToMesh(device)
+        elif num_devices > 1:
             zero_row_mapper = ttnn.ShardTensor2dMesh(
                 device,
                 dims=(None, -1),
@@ -308,7 +344,7 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
         else:
             zero_row_mapper = ttnn.ReplicateTensorToMesh(device)
 
-        zero_row_key = (int(H), int(num_devices), self._scatter_uses_dp_batch_mapper)
+        zero_row_key = (int(H), int(num_devices), self._scatter_uses_dp_batch_mapper, bool(self._batched_vision))
         if self._scatter_zero_row is None or self._scatter_zero_row_key != zero_row_key:
             if self._scatter_zero_row is not None:
                 ttnn.deallocate(self._scatter_zero_row)
@@ -420,7 +456,7 @@ class TTNNDotsOCRPrefillGraph(TTNNModule):
 
 
 @trace_enabled
-class TTNNDotsOCRDecodeGraph(TTNNModule):
+class TTNNDotsOCRDecodeGraph(StatefulTTNNModule):
     def preprocess_weights_impl(self):
         return self
 
@@ -433,6 +469,19 @@ class TTNNDotsOCRDecodeGraph(TTNNModule):
         self._d_norm = final_norm
         self._d_lm = lm_head
         self._d_embedding = embedding
+
+    def reset_trace_state(self) -> None:
+        # This decode graph is the @trace_enabled trace UNIT. Its own forward holds NO
+        # persistent trace state: it just chains embedding -> decoder stack -> final norm ->
+        # lm_head -> argmax, allocating nothing on ``self`` inside forward. STATEFUL only
+        # because the traced subtree contains the stateful per-layer attention
+        # (TTNNDotsOCRAttention) that writes the paged KV cache. The framework's trace
+        # tree-reset (TracedRun._reset_trace_state_tree) walks this captured subtree and calls
+        # reset_trace_state() on every stateful descendant independently, so this graph has
+        # nothing of its OWN to reset. The KV write uses a per-call cache_position fixed during
+        # the double-run; the seq-counter advance happens outside the trace in
+        # post_trace_execute. Hence a justified no-op (NOT the bare inherited hook).
+        return None
 
     @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, decode_input, cache_position, past_key_value):
@@ -529,7 +578,7 @@ def _create_paged_kv_cache(model_config, device, batch_size: int = 1):
 # ---------------------------------------------------------------------------
 
 
-class TTNNDotsOCRPipeline(TTNNModule):
+class TTNNDotsOCRPipeline(StatelessTTNNModule):
     """Standalone TTNN inference pipeline for dots.ocr.
 
     Orchestrates embedding, vision tower, decoder stack, final norm, and
@@ -558,9 +607,14 @@ class TTNNDotsOCRPipeline(TTNNModule):
         graph_decode: TTNNDotsOCRDecodeGraph,
         device: "ttnn.MeshDevice",
         config: PipelineConfig,
+        batched_vision: bool = False,
     ):
         super().__init__()
         self._bypass_tensor_wrapping = True
+        # Additive batched-vision flag. Default False -> every existing code
+        # path is byte-for-byte unchanged. When True, prefill OCRs one DIFFERENT
+        # same-grid image per DP stream (device b -> image b).
+        self._batched_vision = bool(batched_vision)
 
         self.embedding = embedding
         self.vision_tower = vision_tower
@@ -595,6 +649,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
         device: "ttnn.MeshDevice",
         batch_size: int = 1,
         hf_model=None,
+        batched_vision: bool = False,
     ) -> "TTNNDotsOCRPipeline":
         """Build pipeline from a HuggingFace model path (or an in-memory model).
 
@@ -624,6 +679,10 @@ class TTNNDotsOCRPipeline(TTNNModule):
         vision_tower = TTNNDotsOCRVisionTower.from_torch(hf_model.vision_tower)
 
         vision_tower._unique_name = "vision_tower"
+        # ADDITIVE: set the batched-vision flag BEFORE set_device/move_weights so
+        # the merger loads w2 REPLICATED (full-hidden output per device). Default
+        # False -> the merger keeps its hardware-validated col-shard path.
+        vision_tower._batched_vision = bool(batched_vision)
         vision_tower.override_children_module_names()
 
         decoder_layers = []
@@ -689,6 +748,9 @@ class TTNNDotsOCRPipeline(TTNNModule):
             scatter_uses_dp_batch_mapper=_bim is not None,
         )
         graph_prefill._unique_name = "dots_ocr_graph_prefill"
+        # ADDITIVE: the prefill graph needs the flag so _ensure_scatter_zero_row
+        # builds a full-hidden (replicated) zero row in batched mode.
+        graph_prefill._batched_vision = bool(batched_vision)
         # Prefill text-only: token ids in ``graph_prefill`` embed inside one trace.
         # Multimodal: patch_embed runs once outside; vision trunk + scatter fuse +
         # decoder + argmax share one ``TracedRun`` (``forward`` takes four extra
@@ -713,6 +775,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
             graph_decode=graph_decode,
             device=device,
             config=config,
+            batched_vision=batched_vision,
         )
         pipeline._unique_name = "dots_ocr_pipeline"
 
@@ -847,8 +910,105 @@ class TTNNDotsOCRPipeline(TTNNModule):
                 mesh_mapper=id_mapper,
             )
 
+        # --- ADDITIVE batched-vision multimodal prefill ---------------------
+        # When batched_vision is on AND pixel_values is present, device b OCRs
+        # image b: patch tokens are batch-sharded (one image per DP stream), the
+        # vision tower runs on ONE image of the common grid g per device, and the
+        # merger emits FULL hidden (w2 replicated). The scatter fuses each
+        # device's full-hidden vision into its own stream with NO hidden-shard
+        # and NO _dp_repack_batch_sharded_hidden. This entire block is gated; the
+        # single-image branch below is untouched.
+        if self._batched_vision and pixel_values is not None:
+            if image_grid_thw is None:
+                raise ValueError("image_grid_thw is required when pixel_values is set")
+            if not dual:
+                raise RuntimeError("batched_vision requires a DP batch-sharded mesh (dual stream)")
+            num_devices = int(self.device.get_num_devices()) if hasattr(self.device, "get_num_devices") else 1
+            B = int(input_ids.shape[0])
+
+            # Caller guarantees every row of image_grid_thw is the SAME grid g.
+            grid_cpu = image_grid_thw.detach().cpu()
+            if grid_cpu.dim() == 1:
+                grid_cpu = grid_cpu.unsqueeze(0)
+            if int(grid_cpu.shape[0]) > 1 and not bool(torch.all(grid_cpu == grid_cpu[0]).item()):
+                raise ValueError("batched_vision requires all image_grid_thw rows to be identical (same-size images)")
+            g_single = grid_cpu[:1]
+
+            with _profile_stage(self.device, "prefill.vision_patch_embed"):
+                # patch_embed all B images at once (the validated device patch
+                # projection), bring the result to host as [total_patches, embed],
+                # reshape to per-image rows [B, seq_per_img, embed], and re-upload
+                # BATCH-sharded (dim 0) so device b gets [1, seq_per_img, embed] =
+                # image b's patches.
+                x_patch_dev = self.vision_tower.patch_embed(pixel_values, image_grid_thw)
+                if isinstance(x_patch_dev, ttnn.Tensor):
+                    # patch_embed output is REPLICATED across the mesh; one device
+                    # copy holds the full [.., total_patches, embed]. Pull a single
+                    # replica to host (do NOT ConcatMeshToTensor, which would stack
+                    # all N identical copies).
+                    if hasattr(self.device, "get_num_devices") and int(self.device.get_num_devices()) > 1:
+                        per_dev = ttnn.get_device_tensors(x_patch_dev)
+                        x_patch_host = ttnn.to_torch(per_dev[0])
+                    else:
+                        x_patch_host = ttnn.to_torch(x_patch_dev)
+                    ttnn.deallocate(x_patch_dev)
+                else:
+                    x_patch_host = x_patch_dev
+                x_patch_host = x_patch_host.to(torch.bfloat16)
+                # Normalize to [total_patches, embed].
+                x_patch_host = x_patch_host.reshape(-1, int(x_patch_host.shape[-1]))
+                total_patches = int(x_patch_host.shape[0])
+                embed = int(x_patch_host.shape[1])
+                if total_patches % B != 0:
+                    raise ValueError(f"batched_vision: total patches {total_patches} not divisible by batch {B}")
+                seq_per_img = total_patches // B
+                x_patch_host = x_patch_host.reshape(B, 1, seq_per_img, embed)
+                x_patch = ttnn.from_torch(
+                    x_patch_host,
+                    device=self.device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=self._batch_input_mapper,
+                )
+                actual_vision_seq_len = seq_per_img
+                vision_bucket = (
+                    self.vision_tower.block_stack.nearest_bucket(actual_vision_seq_len)
+                    if self.vision_tower.block_stack is not None and is_trace_enabled(self.vision_tower.block_stack)
+                    else -1
+                )
+                use_vision_sdpa_mask = os.environ.get("DOTS_OCR_USE_FULL_SDPA_MASK", "").lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                }
+                vision_attention_mask = (
+                    self.vision_tower.build_padded_attention_mask(actual_vision_seq_len, vision_bucket)
+                    if use_vision_sdpa_mask and vision_bucket != -1
+                    else None
+                )
+            # Per-image merged token count (single grid g).
+            n_vis = self.vision_tower.merged_vision_sequence_length(g_single, None)
+            tt_idx, tt_mask = self.graph_prefill.get_or_build_scatter_tensors(input_ids, n_vis, id_mapper, num_devices)
+            # Single-image grid for the graph: each device runs the tower on ONE
+            # image of grid g; RoPE / bucket derive from seq_per_img.
+            mm_grid_thw = _normalize_image_grid_thw_torch(g_single)
+            tt_grid = ttnn.from_torch(
+                g_single.to(torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            )
+            with _profile_stage(self.device, "prefill.text_embedding"):
+                text_embeds = self.embedding(tt_input_ids)
+            # NO _dp_repack_batch_sharded_hidden: full-hidden batch-sharded fused
+            # hidden feeds the decoder stack directly.
+            hidden_states = text_embeds
+
         # --- Multimodal vision: patch_embed outside; vision trunk + scatter + decoder in one trace ---
-        if pixel_values is not None:
+        elif pixel_values is not None:
             if image_grid_thw is None:
                 raise ValueError("image_grid_thw is required when pixel_values is set")
             num_devices = int(self.device.get_num_devices()) if hasattr(self.device, "get_num_devices") else 1

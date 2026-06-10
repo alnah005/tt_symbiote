@@ -42,7 +42,10 @@ def main():
         L = 32
         imgs = [ttnn.from_torch(torch.randn(1, 3, 224, 224), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)]
         lt = ttnn.from_torch(
-            torch.randint(0, 257152, (1, L)).to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev
+            torch.randint(0, 257152, (1, L)).to(torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=dev,
         )
         ie = tt.backbone.embed_image(imgs[0])
         le = ttnn.multiply(tt.backbone.embed_language_tokens(lt), math.sqrt(cfg.vlm_config.width))
@@ -59,8 +62,12 @@ def main():
 
         def step():
             eo = tt.backbone.forward_expert(
-                se, past_key_values=cache, attention_mask=mask, position_offset=pl,
-                precomputed_block_mods=block_mods, precomputed_final_mod=final_mod,
+                se,
+                past_key_values=cache,
+                attention_mask=mask,
+                position_offset=pl,
+                precomputed_block_mods=block_mods,
+                precomputed_final_mod=final_mod,
             )
             return tt.suffix_embedding.project_output(eo)
 

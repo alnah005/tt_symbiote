@@ -1,5 +1,5 @@
 ############################################################################
-# pi0.5 FULL-MODEL tracy profile (P150, signpost-segmented) 
+# pi0.5 FULL-MODEL tracy profile (P150, signpost-segmented)
 # CSV: ops_perf_results_full.csv   device-arch: blackhole
 ############################################################################
 
@@ -19,7 +19,7 @@ PHASE: SigLIP VISION TOWER (+projector)   [start=PREFIX_SIGLIP_VISION end=PREFIX
 🚀 Performance Report 🚀
 ========================
 
-ID     Total %  Bound  OP Code                                  Device   Device Time  Op-to-Op Gap  Cores  DRAM      DRAM %  FLOPs        FLOPs %  Math Fidelity            
+ID     Total %  Bound  OP Code                                  Device   Device Time  Op-to-Op Gap  Cores  DRAM      DRAM %  FLOPs        FLOPs %  Math Fidelity
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
  8721    0.6 %         PermuteDeviceOperation                         0        80 μs                  110                                                       BF16 => BF16
  8722    0.6 %         ReshapeViewDeviceOperation                     0        81 μs          0 μs    110                                                       BF16 => BF16
@@ -45,7 +45,7 @@ PHASE: VLM PREFILL (Gemma-2B x18)   [start=VLM_PREFILL_18L end=DENOISE_LOOP_10x_
 🚀 Performance Report 🚀
 ========================
 
-ID     Total %  Bound  OP Code                                   Device   Device Time  Op-to-Op Gap  Cores  DRAM      DRAM %  FLOPs         FLOPs %  Math Fidelity            
+ID     Total %  Bound  OP Code                                   Device   Device Time  Op-to-Op Gap  Cores  DRAM      DRAM %  FLOPs         FLOPs %  Math Fidelity
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
  9169    0.0 %         SliceDeviceOperation                            0         1 μs                   72                                                        BF16 => BF16
  9170    0.0 %         SliceDeviceOperation                            0         1 μs         39 μs     72                                                        BF16 => BF16
@@ -71,7 +71,7 @@ PHASE: DENOISE LOOP (Gemma-300M adaRMS expert x10)   [start=DENOISE_LOOP_10x_EXP
 🚀 Performance Report 🚀
 ========================
 
-ID      Total %  Bound  OP Code                                 Device   Device Time  Op-to-Op Gap  Cores  DRAM      DRAM %  FLOPs        FLOPs %  Math Fidelity            
+ID      Total %  Bound  OP Code                                 Device   Device Time  Op-to-Op Gap  Cores  DRAM      DRAM %  FLOPs        FLOPs %  Math Fidelity
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
   9461    0.0 %   SLOW  MatmulDeviceOperation 64 x 32 x 1024          0         2 μs                   32   17 GB/s   3.3 %   1.9 TFLOPs    2.2 %  HiFi2 BF16 x BFP8 => BF16
   9462    0.0 %         BinaryNgDeviceOperation                       0         2 μs          4 μs    110                                                 BF16, BF16 => BF16

@@ -14,17 +14,21 @@ vision block, patch merger, and the top-level vision tower.
 
 from __future__ import annotations
 
-
 import os
 
 import torch
 import torch.nn.functional as F
 import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
-
-from tt_symbiote.core.module import TTNNModule, SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, TTNNLayerStack, run_on_devices
-from tt_symbiote.core.run_config import is_trace_enabled
 from ttnn.operations.transformer import SDPAProgramConfig
+
+from tt_symbiote.core.module import (
+    SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS,
+    StatelessTTNNModule,
+    TTNNLayerStack,
+    run_on_devices,
+)
+from tt_symbiote.core.run_config import is_trace_enabled
 
 # Tracy (perf): vision Matmul/SDPA show HiFi4; use lower fidelity for ViT matmul/SDPA only.
 # Norms (RMS/LayerNorm) keep HiFi4 for stability.
@@ -797,7 +801,7 @@ class TTNNDotsVision2DRoPE:
 # ---------------------------------------------------------------------------
 
 
-class TTNNDotsVisionRMSNorm(TTNNModule):
+class TTNNDotsVisionRMSNorm(StatelessTTNNModule):
     """RMSNorm for Dots vision blocks.
 
     When the HF checkpoint contains bias for the norm layer, this falls back
@@ -907,7 +911,7 @@ class TTNNDotsVisionRMSNorm(TTNNModule):
 # ---------------------------------------------------------------------------
 
 
-class TTNNDotsVisionMLP(TTNNModule):
+class TTNNDotsVisionMLP(StatelessTTNNModule):
     """SwiGLU MLP for Dots vision blocks: y = fc2(silu(fc1(x)) * fc3(x))."""
 
     def __init__(self):
@@ -1118,7 +1122,7 @@ class TTNNDotsVisionMLP(TTNNModule):
 # ---------------------------------------------------------------------------
 
 
-class TTNNDotsVisionPatchEmbed(TTNNModule):
+class TTNNDotsVisionPatchEmbed(StatelessTTNNModule):
     """Patch embedding for Dots vision (14x14 patches, no CLS token, no pos embed)."""
 
     def __init__(self):
@@ -1335,7 +1339,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
 # ---------------------------------------------------------------------------
 
 
-class TTNNDotsVisionAttention(TTNNModule):
+class TTNNDotsVisionAttention(StatelessTTNNModule):
     """Vision attention for Dots OCR with per-segment SDPA and 2D RoPE."""
 
     def __init__(self):
@@ -1740,7 +1744,7 @@ class TTNNDotsVisionAttention(TTNNModule):
 # ---------------------------------------------------------------------------
 
 
-class TTNNDotsVisionBlock(TTNNModule):
+class TTNNDotsVisionBlock(StatelessTTNNModule):
     """Single vision transformer block with post-norm architecture."""
 
     def __init__(self):
@@ -1827,7 +1831,7 @@ class TTNNDotsVisionBlock(TTNNModule):
 # ---------------------------------------------------------------------------
 
 
-class TTNNDotsPatchMerger(TTNNModule):
+class TTNNDotsPatchMerger(StatelessTTNNModule):
     """Patch merger for Dots vision: spatial merge + LayerNorm/RMSNorm + MLP(GELU)."""
 
     def __init__(self):
@@ -1851,6 +1855,12 @@ class TTNNDotsPatchMerger(TTNNModule):
         self.tt_w2 = None
         self.tt_w1_bias = None
         self.tt_w2_bias = None
+
+        # Additive batched-vision flag (default False -> hardware-validated
+        # col-shard path is byte-for-byte unchanged). When True AND on a
+        # multi-device mesh, w2 is loaded REPLICATED so the merger emits
+        # FULL-hidden output per device (each device owns one whole image).
+        self._batched_full_hidden = False
 
     @classmethod
     def from_torch(cls, hf_merger, hidden_size=1536, out_hidden_size=1536, spatial_merge_size=2):
@@ -1959,7 +1969,35 @@ class TTNNDotsPatchMerger(TTNNModule):
         # [intermediate, H] (already transposed); sharding dim=-1 gives each
         # device [intermediate, H/num_devices].
         num_devices = self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1
-        if num_devices > 1:
+        if num_devices > 1 and self._batched_full_hidden:
+            # ADDITIVE batched-vision path: load w2 (and bias) REPLICATED so each
+            # device emits FULL-hidden merger output [..., H]. With one DIFFERENT
+            # image per device (batch-sharded patches), the downstream scatter
+            # fuses each device's image into its own DP stream with NO hidden
+            # shard and NO repack. This branch only runs when the build-time
+            # batched_vision flag set self._batched_full_hidden=True; the default
+            # col-shard branch below is untouched.
+            replicate_mapper = ttnn.ReplicateTensorToMesh(self.device)
+            self.tt_w2 = ttnn.from_torch(
+                self._w2_weight.to(torch.bfloat16),
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=mem,
+                mesh_mapper=replicate_mapper,
+            )
+            if self._w2_bias is not None:
+                self.tt_w2_bias = ttnn.from_torch(
+                    self._w2_bias.to(torch.bfloat16),
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=mem,
+                    mesh_mapper=replicate_mapper,
+                )
+            else:
+                self.tt_w2_bias = None
+        elif num_devices > 1:
             col_shard_mapper = ttnn.ShardTensor2dMesh(
                 self.device,
                 dims=(None, -1),
@@ -2193,7 +2231,7 @@ class TTNNDotsVisionBlockStack(TTNNLayerStack):
 # ---------------------------------------------------------------------------
 
 
-class TTNNDotsOCRVisionTower(TTNNModule):
+class TTNNDotsOCRVisionTower(StatelessTTNNModule):
     """Native TTNNModule vision tower for dots.ocr.
 
     Full pipeline: PatchEmbed -> 42 VisionBlocks -> post-trunk RMSNorm -> PatchMerger.
@@ -2215,6 +2253,10 @@ class TTNNDotsOCRVisionTower(TTNNModule):
         self.spatial_merge_size = 2
         self._bypass_tensor_wrapping = True
         self._attn_mask_cache: dict = {}
+        # Additive batched-vision flag (default False). Set True by the pipeline
+        # factory before set_device/move_weights so the patch merger loads w2
+        # REPLICATED (full-hidden output per device) instead of col-sharded.
+        self._batched_vision = False
 
     @classmethod
     def from_torch(cls, hf_vision_tower, hf_config=None):
@@ -2300,6 +2342,13 @@ class TTNNDotsOCRVisionTower(TTNNModule):
                 self.patch_merger.preprocess_weights()
 
     def move_weights_to_device_impl(self):
+        # ADDITIVE: propagate the batched-vision flag to the merger BEFORE its
+        # weights move, so move_weights_to_device_impl sees _batched_full_hidden
+        # and loads w2 REPLICATED. No-op when self._batched_vision is False
+        # (default) -> the merger keeps its default col-shard path.
+        if self.patch_merger is not None:
+            self.patch_merger._batched_full_hidden = self._batched_vision
+
         if self.patch_embed is not None:
             self.patch_embed.move_weights_to_device()
         if self.block_stack is not None:

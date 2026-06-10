@@ -1,5 +1,5 @@
 {
-  "tt_metal_commit": "e3447fd55874d8625f3c2e894ecc9409bb606805",
+  "tt_metal_commit": "c09f09c35a1a59a428f0e1b5cdaa8fe59fb1b195",
   "device_arch": "T3K",
   "pcc_threshold": 0.99,
   "hf_model_id": "rednote-hilab/dots.ocr",

@@ -54,7 +54,7 @@ import math
 
 import ttnn
 
-from tt_symbiote.core.module import TTNNModule, DeviceArch, run_on_devices
+from tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices
 from tt_symbiote.modules.ttnn_embedding import TTNNEmbedding
 from tt_symbiote.modules.ttnn_linear import TTNNLinear
 

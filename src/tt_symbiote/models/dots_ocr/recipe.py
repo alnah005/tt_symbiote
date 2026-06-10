@@ -24,7 +24,7 @@ drive that, so this recipe:
   * ``make_kv_cache`` -> build the pipeline at ``set_device`` time (when the
     live mesh device is known) reusing the already-loaded HF weights.
 
-TT_METAL_COMMIT = "f2e12917564cfdfd50f81debcc12970a557412c8"
+TT_METAL_COMMIT = "c09f09c35a1a59a428f0e1b5cdaa8fe59fb1b195"
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ import torch
 from tt_symbiote.models.auto.auto_mappings import register_recipe
 from tt_symbiote.models.dots_ocr.pipeline import TTNNDotsOCRPipeline
 
-TT_METAL_COMMIT = "f2e12917564cfdfd50f81debcc12970a557412c8"
+TT_METAL_COMMIT = "c09f09c35a1a59a428f0e1b5cdaa8fe59fb1b195"
 
 
 def _wants_dp() -> bool:
@@ -73,7 +73,6 @@ def _make_generate_shim(model):
             )
         if input_ids is None:
             raise ValueError("generate() requires input_ids")
-
 
         # Greedy on-device argmax only: warn (don't fail) on sampling knobs.
         for k in ("do_sample", "temperature", "top_p", "top_k", "num_beams"):

@@ -49,8 +49,12 @@ def run(dev):
 
     # ---------- Gemma leaf modules: expert (seq64) + VLM (seq288) ----------
     from tt_symbiote.models.pi05.modeling_pi05_gemma import (
-        TTNNPi05GemmaMLP, TTNNPi05GemmaAttention, TTNNPi05GemmaBlock, TTNNPi05AdaRMSGemmaBlock,
+        TTNNPi05GemmaMLP,
+        TTNNPi05GemmaAttention,
+        TTNNPi05GemmaBlock,
+        TTNNPi05AdaRMSGemmaBlock,
     )
+
     # VLM at the 3-camera prefill (3*256 patches + 32 lang = 800); expert action-sized (64).
     for tag, cfg, seq in [("expert", GemmaConfig.gemma_300m(), 64), ("vlm", GemmaConfig.gemma_2b(), 800)]:
         torch.manual_seed(0)
@@ -69,15 +73,19 @@ def run(dev):
         cos, sin = _rope(dev, cfg.head_dim, seq, cfg.rope_base)
         x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
 
-        mlp = TTNNPi05GemmaMLP.from_torch(RG.GemmaMLP(cfg, w), cfg); set_device(mlp, dev)
+        mlp = TTNNPi05GemmaMLP.from_torch(RG.GemmaMLP(cfg, w), cfg)
+        set_device(mlp, dev)
         prof(f"GemmaMLP_{tag}", lambda: mlp.forward(x_tt))
-        attn = TTNNPi05GemmaAttention.from_torch(RG.GemmaAttention(cfg, w, 0), cfg); set_device(attn, dev)
+        attn = TTNNPi05GemmaAttention.from_torch(RG.GemmaAttention(cfg, w, 0), cfg)
+        set_device(attn, dev)
         prof(f"GemmaAttn_{tag}", lambda: attn.forward(x_tt, cos, sin)[0])
-        blk = TTNNPi05GemmaBlock.from_torch(RG.GemmaBlock(cfg, w, 0), cfg); set_device(blk, dev)
+        blk = TTNNPi05GemmaBlock.from_torch(RG.GemmaBlock(cfg, w, 0), cfg)
+        set_device(blk, dev)
         prof(f"GemmaBlock_{tag}", lambda: blk.forward(x_tt, cos, sin)[0])
 
     # ---------- AdaRMS expert block (seq64) ----------
-    cfg = GemmaConfig.gemma_300m(); seq = 64
+    cfg = GemmaConfig.gemma_300m()
+    seq = 64
     torch.manual_seed(0)
     wa = {
         "input_layernorm.dense.weight": torch.randn(3 * cfg.width, cfg.width) * 0.02,
@@ -97,52 +105,85 @@ def run(dev):
     cos, sin = _rope(dev, cfg.head_dim, seq, cfg.rope_base)
     x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
     cond_tt = ttnn.from_torch(cond, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
-    ab = TTNNPi05AdaRMSGemmaBlock.from_torch(RG.AdaRMSGemmaBlock(cfg, wa, 0), cfg); set_device(ab, dev)
+    ab = TTNNPi05AdaRMSGemmaBlock.from_torch(RG.AdaRMSGemmaBlock(cfg, wa, 0), cfg)
+    set_device(ab, dev)
     prof("AdaRMSBlock_expert", lambda: ab.forward(x_tt, cos, sin, cond_tt)[0])
 
     # ---------- SigLIP modules (seq256) ----------
     from tt_symbiote.models.pi05.modeling_pi05_siglip import (
-        TTNNPi05SigLIPMLP, TTNNPi05SigLIPAttention, TTNNPi05SigLIPBlock, TTNNPi05MultiModalProjector,
+        TTNNPi05SigLIPMLP,
+        TTNNPi05SigLIPAttention,
+        TTNNPi05SigLIPBlock,
+        TTNNPi05MultiModalProjector,
     )
-    sc = SigLIPConfig(); h, inter = sc.hidden_size, sc.intermediate_size
+
+    sc = SigLIPConfig()
+    h, inter = sc.hidden_size, sc.intermediate_size
     torch.manual_seed(0)
     ws = {
-        "layer_norm1.weight": torch.randn(h) * 0.02 + 1, "layer_norm1.bias": torch.randn(h) * 0.02,
-        "layer_norm2.weight": torch.randn(h) * 0.02 + 1, "layer_norm2.bias": torch.randn(h) * 0.02,
-        "self_attn.q_proj.weight": torch.randn(h, h) * 0.02, "self_attn.q_proj.bias": torch.randn(h) * 0.02,
-        "self_attn.k_proj.weight": torch.randn(h, h) * 0.02, "self_attn.k_proj.bias": torch.randn(h) * 0.02,
-        "self_attn.v_proj.weight": torch.randn(h, h) * 0.02, "self_attn.v_proj.bias": torch.randn(h) * 0.02,
-        "self_attn.out_proj.weight": torch.randn(h, h) * 0.02, "self_attn.out_proj.bias": torch.randn(h) * 0.02,
-        "mlp.fc1.weight": torch.randn(inter, h) * 0.02, "mlp.fc1.bias": torch.randn(inter) * 0.02,
-        "mlp.fc2.weight": torch.randn(h, inter) * 0.02, "mlp.fc2.bias": torch.randn(h) * 0.02,
+        "layer_norm1.weight": torch.randn(h) * 0.02 + 1,
+        "layer_norm1.bias": torch.randn(h) * 0.02,
+        "layer_norm2.weight": torch.randn(h) * 0.02 + 1,
+        "layer_norm2.bias": torch.randn(h) * 0.02,
+        "self_attn.q_proj.weight": torch.randn(h, h) * 0.02,
+        "self_attn.q_proj.bias": torch.randn(h) * 0.02,
+        "self_attn.k_proj.weight": torch.randn(h, h) * 0.02,
+        "self_attn.k_proj.bias": torch.randn(h) * 0.02,
+        "self_attn.v_proj.weight": torch.randn(h, h) * 0.02,
+        "self_attn.v_proj.bias": torch.randn(h) * 0.02,
+        "self_attn.out_proj.weight": torch.randn(h, h) * 0.02,
+        "self_attn.out_proj.bias": torch.randn(h) * 0.02,
+        "mlp.fc1.weight": torch.randn(inter, h) * 0.02,
+        "mlp.fc1.bias": torch.randn(inter) * 0.02,
+        "mlp.fc2.weight": torch.randn(h, inter) * 0.02,
+        "mlp.fc2.bias": torch.randn(h) * 0.02,
     }
-    xs = ttnn.from_torch(torch.randn(1, sc.num_patches, h) * 0.5, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
-    smlp = TTNNPi05SigLIPMLP.from_torch(RS.SigLIPMLP(sc, ws), sc); set_device(smlp, dev)
+    xs = ttnn.from_torch(
+        torch.randn(1, sc.num_patches, h) * 0.5, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev
+    )
+    smlp = TTNNPi05SigLIPMLP.from_torch(RS.SigLIPMLP(sc, ws), sc)
+    set_device(smlp, dev)
     prof("SigLIP_MLP", lambda: smlp.forward(xs))
-    sattn = TTNNPi05SigLIPAttention.from_torch(RS.SigLIPAttention(sc, ws), sc); set_device(sattn, dev)
+    sattn = TTNNPi05SigLIPAttention.from_torch(RS.SigLIPAttention(sc, ws), sc)
+    set_device(sattn, dev)
     prof("SigLIP_Attn", lambda: sattn.forward(xs))
-    sblk = TTNNPi05SigLIPBlock.from_torch(RS.SigLIPBlock(sc, ws), sc); set_device(sblk, dev)
+    sblk = TTNNPi05SigLIPBlock.from_torch(RS.SigLIPBlock(sc, ws), sc)
+    set_device(sblk, dev)
     prof("SigLIP_Block", lambda: sblk.forward(xs))
     proj_w = {"linear.weight": torch.randn(2048, h) * 0.02, "linear.bias": torch.randn(2048) * 0.02}
-    proj = TTNNPi05MultiModalProjector.from_torch(RS.MultiModalProjector(proj_w)); set_device(proj, dev)
+    proj = TTNNPi05MultiModalProjector.from_torch(RS.MultiModalProjector(proj_w))
+    set_device(proj, dev)
     prof("MMProjector", lambda: proj.forward(xs))
 
     # ---------- Suffix (action_in/out, adarms_cond) ----------
     from tt_symbiote.models.pi05.modeling_pi05_suffix import TTNNPi05SuffixEmbedding
+
     su = SuffixConfig()
     torch.manual_seed(0)
     wsf = {
-        "action_in_proj.weight": torch.randn(su.expert_width, su.action_dim) * 0.02, "action_in_proj.bias": torch.randn(su.expert_width) * 0.02,
-        "action_out_proj.weight": torch.randn(su.action_dim, su.expert_width) * 0.02, "action_out_proj.bias": torch.randn(su.action_dim) * 0.02,
-        "time_mlp_in.weight": torch.randn(su.expert_width, su.expert_width) * 0.02, "time_mlp_in.bias": torch.randn(su.expert_width) * 0.02,
-        "time_mlp_out.weight": torch.randn(su.expert_width, su.expert_width) * 0.02, "time_mlp_out.bias": torch.randn(su.expert_width) * 0.02,
+        "action_in_proj.weight": torch.randn(su.expert_width, su.action_dim) * 0.02,
+        "action_in_proj.bias": torch.randn(su.expert_width) * 0.02,
+        "action_out_proj.weight": torch.randn(su.action_dim, su.expert_width) * 0.02,
+        "action_out_proj.bias": torch.randn(su.action_dim) * 0.02,
+        "time_mlp_in.weight": torch.randn(su.expert_width, su.expert_width) * 0.02,
+        "time_mlp_in.bias": torch.randn(su.expert_width) * 0.02,
+        "time_mlp_out.weight": torch.randn(su.expert_width, su.expert_width) * 0.02,
+        "time_mlp_out.bias": torch.randn(su.expert_width) * 0.02,
     }
-    suf = TTNNPi05SuffixEmbedding.from_torch(RSf.Pi0_5SuffixEmbedding(su, wsf), su); set_device(suf, dev)
-    act = ttnn.from_torch(torch.randn(1, 64, su.action_dim) * 0.5, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
-    eo = ttnn.from_torch(torch.randn(1, 64, su.expert_width) * 0.5, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
+    suf = TTNNPi05SuffixEmbedding.from_torch(RSf.Pi0_5SuffixEmbedding(su, wsf), su)
+    set_device(suf, dev)
+    act = ttnn.from_torch(
+        torch.randn(1, 64, su.action_dim) * 0.5, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev
+    )
+    eo = ttnn.from_torch(
+        torch.randn(1, 64, su.expert_width) * 0.5, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev
+    )
     prof("Suffix_action_in", lambda: suf.embed_actions(act))
     prof("Suffix_action_out", lambda: suf.project_output(eo))
-    prof("Suffix_adarms_cond", lambda: suf.embed_adarms_cond(suf._ts(0.9) if hasattr(suf, "_ts") else __import__("torch").tensor([0.9])))
+    prof(
+        "Suffix_adarms_cond",
+        lambda: suf.embed_adarms_cond(suf._ts(0.9) if hasattr(suf, "_ts") else __import__("torch").tensor([0.9])),
+    )
     signpost(header="MOD_END")
     print("per-module profile done")
 

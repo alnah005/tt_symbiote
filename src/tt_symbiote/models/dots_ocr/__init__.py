@@ -4,7 +4,7 @@
 """tt_symbiote port of the dots.ocr model (text decoder + vision tower + pipeline).
 
 Vendored from ``models/experimental/tt_symbiote/`` in tt-metal at commit
-``f2e12917564cfdfd50f81debcc12970a557412c8``.
+``c09f09c35a1a59a428f0e1b5cdaa8fe59fb1b195``.
 
 Layout:
   Foundational (leading underscore) -- shared sharded variants the dots.ocr
@@ -17,7 +17,7 @@ Layout:
               _create_paged_kv_cache), kv_cache (thin re-export shim)
 """
 
-TT_METAL_COMMIT = "f2e12917564cfdfd50f81debcc12970a557412c8"
+TT_METAL_COMMIT = "c09f09c35a1a59a428f0e1b5cdaa8fe59fb1b195"
 
 from tt_symbiote.models.dots_ocr.dots_ocr_decoder_layer import (
     TTNNDotsOCRDecoderLayer,

@@ -1,74 +1,161 @@
 {
-  "model_name": "dots_ocr",
-  "model_id": "rednote-hilab/dots.ocr",
-  "device_arch": "T3K",
-  "tt_metal_commit": "e3447fd55874d8625f3c2e894ecc9409bb606805",
-  "trust_remote_code": true,
-  "architecture": "DotsOCRForCausalLM",
-  "extends": "Qwen2ForCausalLM",
+  "_comment": "dots.ocr (rednote-hilab/dots.ocr) module I/O shapes. text decoder 28L hidden=1536; vision 42L hidden=1536. T3K (8,1) DP.",
   "config": {
     "hidden_size": 1536,
+    "num_hidden_layers": 28,
     "num_attention_heads": 12,
     "num_key_value_heads": 2,
     "head_dim": 128,
     "intermediate_size": 8960,
-    "num_hidden_layers": 28,
-    "hidden_act": "silu",
-    "max_position_embeddings": 131072,
     "vocab_size": 151936,
-    "attention_bias": true,
-    "rms_norm_eps": 1e-06,
-    "rope_theta": 1000000
+    "image_token_id": 151665
   },
   "vision_config": {
-    "embed_dim": 1536,
     "hidden_size": 1536,
-    "intermediate_size": 4224,
     "num_hidden_layers": 42,
     "num_attention_heads": 12,
     "head_dim": 128,
-    "num_channels": 3,
+    "intermediate_size": 4224,
     "patch_size": 14,
-    "spatial_merge_size": 2,
-    "temporal_patch_size": 1,
-    "rms_norm_eps": 1e-05,
-    "use_bias": false,
-    "post_norm": true,
-    "init_merger_std": 0.02,
-    "patch_merger_hidden_size": 6144
+    "spatial_merge_size": 2
   },
-  "test_shapes": {
-    "batch_sizes": [1],
-    "seq_lengths": [32, 128],
-    "vision_seq_lengths": [256, 1024]
-  },
-  "module_shapes": {
-    "text": {
-      "q_proj":     {"input": [1, 128, 1536], "weight": [1536, 1536], "bias": [1536]},
-      "k_proj":     {"input": [1, 128, 1536], "weight": [256, 1536],  "bias": [256]},
-      "v_proj":     {"input": [1, 128, 1536], "weight": [256, 1536],  "bias": [256]},
-      "o_proj":     {"input": [1, 128, 1536], "weight": [1536, 1536], "bias": null},
-      "gate_proj":  {"input": [1, 128, 1536], "weight": [8960, 1536], "bias": null},
-      "up_proj":    {"input": [1, 128, 1536], "weight": [8960, 1536], "bias": null},
-      "down_proj":  {"input": [1, 128, 8960], "weight": [1536, 8960], "bias": null},
-      "lm_head":    {"input": [1, 128, 1536], "weight": [151936, 1536], "bias": null},
-      "input_layernorm":          {"input": [1, 128, 1536], "weight": [1536], "eps_attr": "variance_epsilon", "eps": 1e-06},
-      "post_attention_layernorm": {"input": [1, 128, 1536], "weight": [1536], "eps_attr": "variance_epsilon", "eps": 1e-06},
-      "norm":                     {"input": [1, 128, 1536], "weight": [1536], "eps_attr": "variance_epsilon", "eps": 1e-06}
+  "tiers": {
+    "tier1_ops": {
+      "embedding": {
+        "in_ids": [
+          1,
+          32
+        ],
+        "weight": [
+          151936,
+          1536
+        ],
+        "out": [
+          1,
+          32,
+          1536
+        ]
+      },
+      "rmsnorm_decode": {
+        "in": [
+          1,
+          1,
+          1536
+        ],
+        "out": [
+          1,
+          1,
+          1536
+        ]
+      }
     },
-    "vision": {
-      "qkv":       {"input": [256, 1536], "weight": [4608, 1536], "bias": null},
-      "proj":      {"input": [256, 1536], "weight": [1536, 1536], "bias": null},
-      "fc1":       {"input": [256, 1536], "weight": [4224, 1536], "bias": null},
-      "fc3":       {"input": [256, 1536], "weight": [4224, 1536], "bias": null},
-      "fc2":       {"input": [256, 4224], "weight": [1536, 4224], "bias": null},
-      "merger_mlp_0": {"input": [64, 6144], "weight": [6144, 6144], "bias": [6144]},
-      "merger_mlp_2": {"input": [64, 6144], "weight": [1536, 6144], "bias": [1536]},
-      "norm1": {"input": [256, 1536], "weight": [1536], "eps_attr": "eps", "eps": 1e-05},
-      "norm2": {"input": [256, 1536], "weight": [1536], "eps_attr": "eps", "eps": 1e-05},
-      "patch_embed_norm": {"input": [256, 1536], "weight": [1536], "eps_attr": "eps", "eps": 1e-05},
-      "ln_q":  {"input": [256, 1536], "weight": [1536], "bias": [1536]},
-      "patch_embed_proj": {"input": [256, 3, 14, 14], "weight": [1536, 3, 14, 14], "bias": [1536]}
+    "tier2_composites": {
+      "mlp_decode": {
+        "in": [
+          1,
+          1,
+          1536
+        ],
+        "gate_up": [
+          1536,
+          17920
+        ],
+        "down": [
+          8960,
+          1536
+        ],
+        "out": [
+          1,
+          1,
+          1536
+        ]
+      },
+      "mlp_prefill": {
+        "in": [
+          1,
+          128,
+          1536
+        ],
+        "out": [
+          1,
+          128,
+          1536
+        ]
+      },
+      "vision_block": {
+        "grid_thw": [
+          1,
+          88,
+          128
+        ],
+        "seq_len": 11264,
+        "in": [
+          1,
+          1,
+          11264,
+          1536
+        ],
+        "out": [
+          1,
+          1,
+          11264,
+          1536
+        ]
+      }
+    },
+    "tier3_decoder": {
+      "decode_one_layer": {
+        "hidden": [
+          1,
+          1,
+          1536
+        ],
+        "cache_position": [
+          1
+        ],
+        "out": [
+          1,
+          1,
+          1536
+        ]
+      },
+      "decode_full_28L": {
+        "hidden": [
+          1,
+          1,
+          1536
+        ],
+        "out": [
+          1,
+          1,
+          1536
+        ]
+      },
+      "prefill_one_layer": {
+        "hidden": [
+          1,
+          2816,
+          1536
+        ],
+        "cache_position": [
+          2816
+        ],
+        "out": [
+          1,
+          2816,
+          1536
+        ]
+      }
+    },
+    "tier4_modeling": {
+      "pipeline_text": {
+        "prompt_tokens": "chat-templated",
+        "max_new_tokens": 64
+      },
+      "pipeline_vision": {
+        "image_grid_thw": "derived",
+        "max_new_tokens": 128
+      }
     }
   }
 }

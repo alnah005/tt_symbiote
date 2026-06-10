@@ -5,19 +5,23 @@ import os
 
 import torch
 import ttnn
-from tt_symbiote.core.module import TTNNModule, DeviceArch, MeshShapeToDeviceArch, TTNNLayerStack, run_on_devices
-from tt_symbiote.core.run_config import trace_enabled
-from tt_symbiote.models.dots_ocr.dots_ocr_attention import (
-    TTNNDotsOCRAttention,
-    TTNNDotsOCRAttentionT3K,
+
+from tt_symbiote.core.module import (
+    DeviceArch,
+    MeshShapeToDeviceArch,
+    StatefulTTNNModule,
+    TTNNLayerStack,
+    run_on_devices,
 )
-from tt_symbiote.models.dots_ocr.dots_ocr_mlp import TTNNDotsOCRMLP
+from tt_symbiote.core.run_config import trace_enabled
 from tt_symbiote.models.dots_ocr._linear import (
     _decode_rmsnorm_program_config,
     _decode_width_sharded_input_memory_config,
     _tp_requires_ccl,
 )
 from tt_symbiote.models.dots_ocr._normalization import TTNNDistributedRMSNorm
+from tt_symbiote.models.dots_ocr.dots_ocr_attention import TTNNDotsOCRAttention, TTNNDotsOCRAttentionT3K
+from tt_symbiote.models.dots_ocr.dots_ocr_mlp import TTNNDotsOCRMLP
 
 
 def _mesh_dp_batch_sharded(device, batch_size: int) -> bool:
@@ -220,13 +224,26 @@ def _select_attention_class():
 
 
 @trace_enabled
-class TTNNDotsOCRDecoderLayer(TTNNModule):
+class TTNNDotsOCRDecoderLayer(StatefulTTNNModule):
     def __init__(self):
         super().__init__()
         self.input_layernorm = None
         self.post_attention_layernorm = None
         self.self_attn = None
         self.mlp = None
+
+    def reset_trace_state(self) -> None:
+        # STATEFUL only because it owns the stateful ``self.self_attn``
+        # (TTNNDotsOCRAttention, which writes the paged KV cache). This layer's own
+        # forward holds NO persistent trace state: it does only residual adds, RMSNorm,
+        # and MLP -- no in-place cache write and no lazy buffer allocation assigned to
+        # ``self``. The single KV write lives entirely in the descendant attention.
+        # The framework's trace tree-reset (TracedRun._reset_trace_state_tree) walks
+        # this subtree and calls reset_trace_state() on the stateful descendant
+        # (self.self_attn) independently, so there is nothing for THIS layer to reset.
+        # Hence a justified no-op (not the bare inherited hook -- this is a reasoned
+        # decision). Seq-counter advance happens outside the trace in post_trace_execute.
+        return None
 
     @classmethod
     def from_torch(cls, torch_layer):

@@ -4,19 +4,20 @@
 import torch
 import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
-from tt_symbiote.core.module import TTNNModule, SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, run_on_devices
+
+from tt_symbiote.core.module import SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, StatelessTTNNModule, run_on_devices
 from tt_symbiote.models.dots_ocr._linear import (
     TTNNLinearLLamaIColShardedWAllReducedFusedGateUp,
     TTNNLinearLLamaIColShardedWRowSharded,
+    _ccl_num_links,
     _decode_down_proj_dram_sharded_program_config,
     _decode_down_proj_input_memory_config,
     _decode_gate_up_dram_sharded_program_config,
     _dp_matmul_program_config,
     _dram_sharded_mem_config_2d,
-    _tp_requires_ccl,
-    _tp_mesh_mapper,
     _linear_mesh_num_devices,
-    _ccl_num_links,
+    _tp_mesh_mapper,
+    _tp_requires_ccl,
 )
 
 
@@ -316,7 +317,7 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
         return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
 
 
-class TTNNDotsOCRMLP(TTNNModule):
+class TTNNDotsOCRMLP(StatelessTTNNModule):
     """SwiGLU MLP with fused gate+up projection.
 
     Original (two separate matmuls + two CCL all-reduces):

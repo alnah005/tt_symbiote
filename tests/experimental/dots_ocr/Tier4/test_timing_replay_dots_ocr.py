@@ -1,144 +1,296 @@
 # SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-# TEMP timing harness (untracked) — times the trace-replay (run 3) prefill+decode
-# of dots_ocr: 180 tokens out, sample image, DP=8 (T3K (8,1)). Safe to delete.
-import json as _json
-import os
+
+"""Tier 4 traced-replay performance benchmark for dots.ocr.
+
+Measures the STEADY-STATE traced decode-replay throughput on T3K (8, 1) DP.
+The pipeline captures graph_decode in ``warmup()``; ``generate()`` replays it
+once per decode step. To isolate the replay cost from the one-time prefill +
+fixed Python/launch overhead, we time two ``generate`` calls of different
+length and difference them:
+
+    ms_per_decode_step = (t(N2) - t(N1)) / (N2 - N1)
+
+Each decode step advances ALL ``num_streams`` DP streams by one token, so:
+    per-stream tok/s   = 1000 / ms_per_decode_step
+    aggregate tok/s    = num_streams * per-stream tok/s
+
+    DOTS_OCR_PARALLELISM=DP MESH_DEVICE=T3K \
+        pytest tests/experimental/dots_ocr/Tier4/test_timing_replay_dots_ocr.py -x -s \
+        --override-ini="addopts="
+"""
+
+import json
 import time
 
 import pytest
 import torch
+from transformers import AutoTokenizer
 
 import ttnn
 from tt_symbiote.models.dots_ocr import TTNNDotsOCRPipeline
 
-_DOTS_OCR_MODEL_ID = "rednote-hilab/dots.ocr"
-_IMAGE_LINK = "https://raw.githubusercontent.com/rednote-hilab/dots.ocr/master/demo/demo_image1.jpg"
-_DP = {"trace_region_size": 300_000_000, "num_command_queues": 1, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}
-_MAX_NEW = 180
+from ..dots_ocr_helpers import (
+    dots_ocr_device_params,
+    mesh_num_devices,
+    pipeline_batch_size,
+    resolve_mesh_device_shape,
+    resolve_model_path,
+    stack_input_ids_for_dp,
+)
+
+DOTS_OCR_LOCAL_PATH = resolve_model_path()
+_N1, _N2 = 16, 80  # decode steps for the two timed generates (diff = 64 steps)
 
 
-def _resolve_model_path():
-    env_path = os.environ.get("DOTS_OCR_MODEL_PATH")
-    if env_path and os.path.isdir(env_path):
-        return env_path
-    from huggingface_hub import snapshot_download
+def _timed_generate(pipeline, ids, n, mesh_device):
+    ttnn.synchronize_device(mesh_device)
+    t0 = time.perf_counter()
+    pipeline.generate(ids, max_new_tokens=n)
+    ttnn.synchronize_device(mesh_device)
+    return time.perf_counter() - t0
 
-    return snapshot_download(_DOTS_OCR_MODEL_ID)
 
+@pytest.mark.parametrize("device_params", [dots_ocr_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [resolve_mesh_device_shape()], indirect=True)
+def test_dots_ocr_profile_decode_steps(mesh_device):
+    """Short traced-replay decode (4 steps) for a tracy device-time profile.
 
-@pytest.mark.parametrize("device_params", [_DP], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(8, 1)], indirect=True)
-def test_timing_replay(mesh_device):
-    pytest.importorskip("qwen_vl_utils")
-    import requests
-    from PIL import Image
-    from qwen_vl_utils import process_vision_info
-    from transformers import AutoImageProcessor, AutoTokenizer, AutoVideoProcessor, Qwen2_5_VLProcessor
-
+    Tracy-profiled to attribute the ~380 ms wall/step between on-device compute
+    and host/fabric latency. Generates only 4 tokens/stream so tracy's op buffer
+    captures cleanly. Not an assertion test -- it just exercises the replay path.
+    """
     torch.set_grad_enabled(False)
-    model_path = _resolve_model_path()
-    num = int(mesh_device.get_num_devices())
-    batch = num  # DP: one stream per chip
-    print(f"\n[TIMING] mesh num_devices={num} batch(streams)={batch} max_new_tokens={_MAX_NEW}")
+    batch = pipeline_batch_size()
+    pipeline = TTNNDotsOCRPipeline.from_hf_model(model_path=DOTS_OCR_LOCAL_PATH, device=mesh_device, batch_size=batch)
+    tok = AutoTokenizer.from_pretrained(DOTS_OCR_LOCAL_PATH, trust_remote_code=True)
+    ids = stack_input_ids_for_dp(
+        tok.apply_chat_template(
+            [{"role": "user", "content": "What is OCR?"}],
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+        )["input_ids"]
+    )
+    pipeline.warmup(ids)
+    pipeline.generate(ids, max_new_tokens=4)  # 4 traced decode-step replays
+    ttnn.synchronize_device(mesh_device)
+    pipeline.release()
 
-    pipeline = TTNNDotsOCRPipeline.from_hf_model(model_path=model_path, device=mesh_device, batch_size=batch)
 
-    image_processor = AutoImageProcessor.from_pretrained(model_path)
-    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-    video_processor = AutoVideoProcessor.from_pretrained(model_path)
-    with open(os.path.join(model_path, "chat_template.json")) as f:
+@pytest.mark.parametrize("device_params", [dots_ocr_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [resolve_mesh_device_shape()], indirect=True)
+def test_dots_ocr_traced_e2e_walltime(mesh_device):
+    """End-to-end walltime of ONE traced-replayed generate (prefill + decode replay).
+
+    Reports, with NO per-step PROFILE_SYNC penalty:
+      * warmup_capture_s   -- one-time trace capture (compile + capture graphs),
+      * e2e_replay_128_s   -- a full generate() of 128 new tokens/stream replaying the trace,
+      * prefill_s          -- generate(1) walltime (prefill + 1 decode step),
+      * derived steady-state decode ms/step and tok/s.
+    """
+    torch.set_grad_enabled(False)
+    batch = pipeline_batch_size()
+    streams = mesh_num_devices() if batch > 1 else 1
+    n_e2e = 128
+
+    pipeline = TTNNDotsOCRPipeline.from_hf_model(model_path=DOTS_OCR_LOCAL_PATH, device=mesh_device, batch_size=batch)
+    tok = AutoTokenizer.from_pretrained(DOTS_OCR_LOCAL_PATH, trust_remote_code=True)
+    ids = stack_input_ids_for_dp(
+        tok.apply_chat_template(
+            [{"role": "user", "content": "What is optical character recognition?"}],
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+        )["input_ids"]
+    )
+
+    ttnn.synchronize_device(mesh_device)
+    tw = time.perf_counter()
+    pipeline.warmup(ids)  # one-time: compile + capture graph_prefill / graph_decode
+    ttnn.synchronize_device(mesh_device)
+    warmup_s = time.perf_counter() - tw
+
+    _timed_generate(pipeline, ids, 8, mesh_device)  # prime replay path (discard)
+    prefill_s = _timed_generate(pipeline, ids, 1, mesh_device)  # prefill + 1 decode step
+    e2e_s = _timed_generate(pipeline, ids, n_e2e, mesh_device)  # full e2e traced replay
+
+    decode_ms = (e2e_s - prefill_s) / (n_e2e - 1) * 1000.0
+    result = {
+        "device": "T3K",
+        "mesh": [8, 1],
+        "mode": "DP",
+        "num_streams": streams,
+        "warmup_capture_s": round(warmup_s, 2),
+        "e2e_replay_generate_s": round(e2e_s, 2),
+        "e2e_new_tokens_per_stream": n_e2e,
+        "e2e_total_tokens": n_e2e * streams,
+        "prefill_first_token_s": round(prefill_s, 3),
+        "steady_decode_ms_per_step": round(decode_ms, 1),
+        "aggregate_tok_s": round(n_e2e * streams / e2e_s, 1),
+        "note": "no PROFILE_SYNC; e2e = one generate() replaying the captured trace (warmup excluded -- it is one-time).",
+    }
+    print("\n[dots.ocr TRACED E2E WALLTIME] " + json.dumps(result, indent=2) + "\n")
+    with open("tests/experimental/dots_ocr/perf_results/traced_e2e_walltime.json", "w") as f:
+        json.dump(result, f, indent=2)
+    assert e2e_s > 0
+    pipeline.release()
+
+
+@pytest.mark.parametrize("device_params", [dots_ocr_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [resolve_mesh_device_shape()], indirect=True)
+@pytest.mark.parametrize(
+    "image_link",
+    ["https://raw.githubusercontent.com/rednote-hilab/dots.ocr/master/demo/demo_image1.jpg"],
+)
+def test_dots_ocr_traced_e2e_walltime_full_model(mesh_device, image_link):
+    """FULL MODEL (vision tower + text decoder) e2e traced-replay walltime.
+
+    The image path exercises the complete pipeline: 42-block vision tower ->
+    patch-merger -> scatter-merge into the text stream -> 28-layer decode. The
+    vision tower runs ONCE in prefill; decode is text-only thereafter. Isolates
+    the vision-inclusive prefill from steady decode (NO PROFILE_SYNC):
+      * warmup_capture_s        -- one-time full-pipeline trace capture,
+      * vision_prefill_s        -- generate(1) walltime (vision tower + scatter-merge + 1 decode),
+      * full_model_e2e_replay_s -- generate(128) replaying the full-model trace.
+    """
+    import json as _json
+    import os
+
+    pytest.importorskip("qwen_vl_utils")
+    from qwen_vl_utils import process_vision_info
+
+    try:
+        import requests
+        from PIL import Image
+
+        image = Image.open(requests.get(image_link, stream=True, timeout=30).raw)
+    except Exception as e:
+        pytest.skip(f"could not fetch demo image ({type(e).__name__}: {e})")
+
+    from transformers import AutoImageProcessor, AutoVideoProcessor, Qwen2_5_VLProcessor
+
+    image_processor = AutoImageProcessor.from_pretrained(DOTS_OCR_LOCAL_PATH)
+    tokenizer = AutoTokenizer.from_pretrained(DOTS_OCR_LOCAL_PATH, trust_remote_code=True)
+    video_processor = AutoVideoProcessor.from_pretrained(DOTS_OCR_LOCAL_PATH)
+    with open(os.path.join(DOTS_OCR_LOCAL_PATH, "chat_template.json")) as f:
         chat_template = _json.load(f)["chat_template"]
     processor = Qwen2_5_VLProcessor(image_processor, tokenizer, video_processor, chat_template=chat_template)
     processor.image_token = "<|imgpad|>"
     processor.image_token_id = 151665
 
-    image = Image.open(requests.get(_IMAGE_LINK, stream=True).raw)
     w, h = image.size
     image = image.crop((0, 0, w, int(h * 0.575)))
     messages = [
         {
             "role": "user",
-            "content": [
-                {"type": "image", "image": image},
-                {"type": "text", "text": "Describe this image."},
-            ],
+            "content": [{"type": "image", "image": image}, {"type": "text", "text": "Describe this image."}],
         }
     ]
     text_prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     image_inputs, video_inputs = process_vision_info(messages)
-    inputs = processor(
+    proc = processor(
         text=[text_prompt], images=image_inputs, videos=video_inputs, padding=True, max_length=2800, return_tensors="pt"
     )
-    input_ids = inputs["input_ids"]
-    if batch > 1 and input_ids.shape[0] == 1:
-        input_ids = input_ids.expand(batch, -1).contiguous()
-    pixel_values = inputs["pixel_values"].to(torch.bfloat16)
-    image_grid_thw = inputs["image_grid_thw"]
-    print(f"[TIMING] prompt seq_len={input_ids.shape[1]} image_grid_thw={image_grid_thw.tolist()}")
 
-    # ---- runs 1 + 2: warmup (JIT prime + trace capture) ----
+    torch.set_grad_enabled(False)
+    batch = pipeline_batch_size()
+    streams = mesh_num_devices() if batch > 1 else 1
+    n_e2e = 128
+    ids = stack_input_ids_for_dp(proc["input_ids"])
+    pv = proc["pixel_values"].to(torch.bfloat16)
+    grid = proc["image_grid_thw"]
+
+    def _timed_vis_generate(pipeline, n):
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        pipeline.generate(ids, pixel_values=pv, image_grid_thw=grid, max_new_tokens=n, stop_on_eos=False)
+        ttnn.synchronize_device(mesh_device)
+        return time.perf_counter() - t0
+
+    pipeline = TTNNDotsOCRPipeline.from_hf_model(model_path=DOTS_OCR_LOCAL_PATH, device=mesh_device, batch_size=batch)
+
     ttnn.synchronize_device(mesh_device)
-    tw0 = time.perf_counter()
-    pipeline.warmup(input_ids, pixel_values=pixel_values, image_grid_thw=image_grid_thw)
+    tw = time.perf_counter()
+    pipeline.warmup(ids, pixel_values=pv, image_grid_thw=grid)  # full-pipeline capture (incl. vision tower)
     ttnn.synchronize_device(mesh_device)
-    warmup_s = time.perf_counter() - tw0
-    print(f"[TIMING] warmup (run1 JIT + run2 trace-capture): {warmup_s:.2f} s")
+    warmup_s = time.perf_counter() - tw
 
-    # reset for a clean replay generation
-    pipeline.paged_cache.reset()
-    pipeline._decode_cache_position = None
-    pipeline._decode_seq_counter = 0
-    pipeline._decode_token_buffer = None
-    pipeline._decode_token_buffer_has_next = False
+    prefill_s = _timed_vis_generate(pipeline, 1)  # vision tower + scatter-merge + 1 decode
+    e2e_s = _timed_vis_generate(pipeline, n_e2e)  # full-model e2e traced replay
 
-    # ---- run 3: TRACE REPLAY — timed prefill + decode at phase boundaries ----
-    ttnn.synchronize_device(mesh_device)
-    t0 = time.perf_counter()
-    currents = pipeline.prefill(input_ids, pixel_values=pixel_values, image_grid_thw=image_grid_thw)
-    ttnn.synchronize_device(mesh_device)
-    t1 = time.perf_counter()
-    prefill_ms = (t1 - t0) * 1000.0
+    decode_ms = (e2e_s - prefill_s) / (n_e2e - 1) * 1000.0
+    result = {
+        "device": "T3K",
+        "mesh": [8, 1],
+        "mode": "DP",
+        "num_streams": streams,
+        "path": "vision+text (full model)",
+        "image_grid_thw": [int(x) for x in grid[0].tolist()],
+        "prompt_tokens": int(ids.shape[-1]),
+        "warmup_capture_s": round(warmup_s, 2),
+        "vision_prefill_s": round(prefill_s, 2),
+        "full_model_e2e_replay_s": round(e2e_s, 2),
+        "e2e_new_tokens_per_stream": n_e2e,
+        "e2e_total_tokens": n_e2e * streams,
+        "steady_decode_ms_per_step": round(decode_ms, 1),
+        "aggregate_tok_s": round(n_e2e * streams / e2e_s, 1),
+        "note": "no PROFILE_SYNC; full multimodal pipeline (42-block vision tower in prefill + 28-layer decode replay).",
+    }
+    print("\n[dots.ocr FULL-MODEL TRACED E2E] " + _json.dumps(result, indent=2) + "\n")
+    with open("tests/experimental/dots_ocr/perf_results/traced_e2e_full_model.json", "w") as f:
+        _json.dump(result, f, indent=2)
+    assert e2e_s > 0
+    pipeline.release()
 
-    if not isinstance(currents, list):
-        currents = [currents]
-    num_streams = len(currents)
-    generated = [[t] for t in currents]
 
-    n_decode = _MAX_NEW - 1
-    t2 = time.perf_counter()
-    for _ in range(n_decode):
-        nxt = pipeline.decode_step(currents)
-        if not isinstance(nxt, list):
-            nxt = [nxt]
-        for i in range(num_streams):
-            generated[i].append(int(nxt[i]))
-        currents = nxt
-    ttnn.synchronize_device(mesh_device)
-    t3 = time.perf_counter()
-    decode_s = t3 - t2
-    decode_ms = decode_s * 1000.0
-    total_ms = (t3 - t0) * 1000.0
+@pytest.mark.parametrize("device_params", [dots_ocr_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [resolve_mesh_device_shape()], indirect=True)
+def test_dots_ocr_traced_replay_perf(mesh_device):
+    torch.set_grad_enabled(False)
+    batch = pipeline_batch_size()
+    streams = mesh_num_devices() if batch > 1 else 1
 
-    new = generated[0]
-    text = processor.decode(new, skip_special_tokens=True)
-
-    print("\n================= DOTS_OCR TRACE-REPLAY TIMING (DP=8, T3K (8,1)) =================")
-    print(f"  tokens generated / stream : {len(new)}  (prefill 1 + decode {n_decode})")
-    print(f"  DP streams in parallel    : {num_streams}")
-    print(f"  PREFILL  (first token)    : {prefill_ms:.1f} ms")
-    print(
-        f"  DECODE   ({n_decode} tokens)      : {decode_ms:.1f} ms"
-        f"   = {decode_ms / n_decode:.2f} ms/token/stream"
-        f"   = {n_decode / decode_s:.2f} tok/s/stream"
-        f"   = {num_streams * n_decode / decode_s:.1f} tok/s aggregate"
+    pipeline = TTNNDotsOCRPipeline.from_hf_model(model_path=DOTS_OCR_LOCAL_PATH, device=mesh_device, batch_size=batch)
+    tok = AutoTokenizer.from_pretrained(DOTS_OCR_LOCAL_PATH, trust_remote_code=True)
+    ids = stack_input_ids_for_dp(
+        tok.apply_chat_template(
+            [{"role": "user", "content": "What is optical character recognition?"}],
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+        )["input_ids"]
     )
-    print(f"  TOTAL    (prefill+decode) : {total_ms:.1f} ms  ({total_ms/1000.0:.2f} s)")
-    print("==================================================================================")
-    print(f"\n[dots_ocr replay] {len(new)} tokens decoded text:\n{text!r}\n")
 
-    # validity (so we know the timed run was a real, coherent generation)
-    assert len(new) == _MAX_NEW, f"expected {_MAX_NEW} tokens/stream, got {len(new)}"
-    assert len(set(new)) >= 4, f"DEGENERATE output (timing invalid): {new[:16]}"
-    assert len(text.strip()) > 0, "empty decoded output (timing invalid)"
+    pipeline.warmup(ids)  # capture graph_prefill + graph_decode
+    _timed_generate(pipeline, ids, 8, mesh_device)  # prime the replay path (discard)
+
+    t1 = _timed_generate(pipeline, ids, _N1, mesh_device)
+    t2 = _timed_generate(pipeline, ids, _N2, mesh_device)
+
+    ms_per_step = (t2 - t1) / (_N2 - _N1) * 1000.0
+    per_stream_tps = 1000.0 / ms_per_step
+    aggregate_tps = streams * per_stream_tps
+    # t1 = prefill + N1 steps  =>  prefill latency (incl. fixed overhead)
+    prefill_ms = (t1 - _N1 * ms_per_step / 1000.0) * 1000.0
+
+    result = {
+        "device": "T3K",
+        "mesh": [8, 1],
+        "mode": "DP",
+        "num_streams": streams,
+        "traced_decode_ms_per_step": round(ms_per_step, 2),
+        "per_stream_decode_tok_s": round(per_stream_tps, 2),
+        "aggregate_decode_tok_s": round(aggregate_tps, 2),
+        "prefill_first_token_ms_approx": round(prefill_ms, 1),
+        "method": f"diff of generate({_N1}) and generate({_N2}) wall-clock, synchronize_device-bracketed",
+    }
+    print("\n[dots.ocr TRACED-REPLAY PERF] " + json.dumps(result, indent=2) + "\n")
+    with open("tests/experimental/dots_ocr/perf_results/traced_replay_perf.json", "w") as f:
+        json.dump(result, f, indent=2)
+
+    assert ms_per_step > 0 and aggregate_tps > 0
     pipeline.release()

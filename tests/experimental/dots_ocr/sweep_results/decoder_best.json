@@ -1,7 +1,0 @@
-{
-  "csv_path": "/home/ttuser/salnahari/tt_symbiote/tests/models/dots_ocr/sweep_results/decoder_sweep.csv",
-  "pcc_threshold": 0.999,
-  "n_configs": 18,
-  "n_passing": 0,
-  "top5": []
-}

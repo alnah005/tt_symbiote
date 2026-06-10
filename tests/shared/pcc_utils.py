@@ -47,8 +47,7 @@ def compute_pcc(actual, expected):
     expected_tensors = _extract_tensors(expected, force_readback=False)
 
     assert len(actual_tensors) == len(expected_tensors), (
-        f"Mismatched output count: {len(actual_tensors)} (actual) "
-        f"vs {len(expected_tensors)} (expected)"
+        f"Mismatched output count: {len(actual_tensors)} (actual) " f"vs {len(expected_tensors)} (expected)"
     )
 
     results = []
@@ -78,10 +77,5 @@ def assert_pcc(actual, expected, threshold=0.99, msg=""):
     prefix = f"{msg}: " if msg else ""
     assert len(results) > 0, f"{prefix}No output tensors to compare"
     for i, (pcc, max_diff) in enumerate(results):
-        assert not torch.tensor(pcc).isnan(), (
-            f"{prefix}output[{i}]: PCC is NaN (max_abs_diff={max_diff:.6f})"
-        )
-        assert pcc >= threshold, (
-            f"{prefix}output[{i}]: PCC {pcc:.6f} < {threshold} "
-            f"(max_abs_diff={max_diff:.6f})"
-        )
+        assert not torch.tensor(pcc).isnan(), f"{prefix}output[{i}]: PCC is NaN (max_abs_diff={max_diff:.6f})"
+        assert pcc >= threshold, f"{prefix}output[{i}]: PCC {pcc:.6f} < {threshold} " f"(max_abs_diff={max_diff:.6f})"

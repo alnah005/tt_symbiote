@@ -53,7 +53,7 @@ from __future__ import annotations
 import ttnn
 from torch import nn
 
-from tt_symbiote.core.module import TTNNModule, DeviceArch, run_on_devices
+from tt_symbiote.core.module import DeviceArch, TTNNModule, run_on_devices
 from tt_symbiote.modules.ttnn_linear import TTNNLinear
 
 __all__ = [

@@ -4,13 +4,16 @@
 
 import torch
 import ttnn
-from tt_symbiote.core.module import TTNNModule, DeviceArch, SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, run_on_devices
-from tt_symbiote.core.tensor import TorchTTNNTensor
-from tt_symbiote.core.run_config import trace_enabled
-from tt_symbiote.models.dots_ocr._attention import (
-    TTNNPagedAttentionKVCache,
-    TTNNSDPAAttention,
+
+from tt_symbiote.core.module import (
+    SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS,
+    DeviceArch,
+    StatefulTTNNModule,
+    run_on_devices,
 )
+from tt_symbiote.core.run_config import trace_enabled
+from tt_symbiote.core.tensor import TorchTTNNTensor
+from tt_symbiote.models.dots_ocr._attention import TTNNPagedAttentionKVCache, TTNNSDPAAttention
 from tt_symbiote.models.dots_ocr._linear import (
     TTNNLinearLLamaIColShardedWAllReduced,
     TTNNLinearLLamaIReplicatedWColSharded,
@@ -170,7 +173,7 @@ class _TTNNDotsOCROProjPrefillLinear(TTNNLinearLLamaIReplicatedWColSharded):
 
 
 @trace_enabled
-class TTNNDotsOCRAttention(TTNNModule):
+class TTNNDotsOCRAttention(StatefulTTNNModule):
     _shared_rotary_setups = {}
 
     def __init__(self):
@@ -194,6 +197,29 @@ class TTNNDotsOCRAttention(TTNNModule):
         self._qkv_bias_torch = None
         self._q_size = None
         self._kv_size = None
+
+    def reset_trace_state(self) -> None:
+        # STATEFUL: decode forward writes K/V into the external paged KV cache via
+        # ``past_key_values.paged_update_on_device(..., current_pos=cur_pos_tt)`` (and prefill
+        # via ``paged_fill_on_device(..., batch_idx=0)``). Both use a write position taken from
+        # ``cache_position`` (the per-call ``cur_pos_tt``), which is FIXED during the trace-setup
+        # double-run -- cache_position is supplied per forward and is advanced OUTSIDE the trace
+        # (TTNNDotsOCRLayerStack/graph ``post_trace_execute`` -> ``update_seq_length``). So the
+        # device-side ``paged_update_cache``/``paged_fill_cache`` is an in-place OVERWRITE at a
+        # constant offset, NOT an advancing append: running forward twice (warm-up then capture)
+        # writes the SAME slot with the same value, leaving the cache exactly as a single capture
+        # run would -> the double-run is idempotent and there is NOTHING to revert.
+        #
+        # No lazy buffer allocation lands on the capture pass either: the only persistent buffers
+        # (``self._decode_cur_pos`` and the shared ``self._rotary_setup``) are pre-allocated in
+        # ``move_weights_to_device_impl``, before any trace setup. ``_get_cur_pos_device_tensor``
+        # only ``ttnn.copy``s the current position into the pre-existing ``_decode_cur_pos`` (a
+        # fixed-offset in-place write, idempotent under the double-run); it never assigns a freshly
+        # allocated tensor to ``self.``. Hence a justified no-op (NOT the bare inherited hook --
+        # this is a reasoned decision). Were the KV write ever changed to an advancing append
+        # (e.g. ttnn.update_cache, whose position advances per call), this MUST roll the write
+        # position back to its pre-forward baseline here instead.
+        return None
 
     @classmethod
     def from_torch(cls, hf_attn):

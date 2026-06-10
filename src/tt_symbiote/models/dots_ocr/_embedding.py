@@ -4,14 +4,11 @@
 
 """Embedding layer implementations for TTNN."""
 
+import ttnn
 from torch import nn
 
-import ttnn
-from tt_symbiote.core.module import TTNNModule, DeviceArch, run_on_devices
-from tt_symbiote.core.run_config import (
-    DistributedTensorConfig,
-    trace_enabled,
-)
+from tt_symbiote.core.module import DeviceArch, StatelessTTNNModule, run_on_devices
+from tt_symbiote.core.run_config import DistributedTensorConfig, trace_enabled
 
 
 def _next_power_of_2(n: int, minimum=256) -> int:
@@ -32,7 +29,7 @@ def _next_power_of_2(n: int, minimum=256) -> int:
 
 
 @trace_enabled
-class TTNNEmbedding(TTNNModule):
+class TTNNEmbedding(StatelessTTNNModule):
     """TTNN-accelerated embedding lookup for Ling/Bailing models.
 
     Replaces nn.Embedding (word_embeddings). Weight is replicated across all
@@ -49,6 +46,7 @@ class TTNNEmbedding(TTNNModule):
 
     def call(self, *args, **kwargs):
         import torch
+
         from tt_symbiote.core.tensor import TorchTTNNTensor
 
         if (
@@ -127,7 +125,7 @@ class TTNNEmbedding(TTNNModule):
         return out
 
 
-class TTNNBailingPaddedEmbedding(TTNNModule):
+class TTNNBailingPaddedEmbedding(StatelessTTNNModule):
     """Padded embedding wrapper that pads sequence to power-of-2 before lookup.
 
     Weight is sharded along hidden dim across mesh devices. Indices are
@@ -173,7 +171,7 @@ class TTNNBailingPaddedEmbedding(TTNNModule):
 
 
 @trace_enabled
-class TTNNRotaryEmbeddingCompute(TTNNModule):
+class TTNNRotaryEmbeddingCompute(StatelessTTNNModule):
     """Computes cos/sin from inv_freq and position_ids."""
 
     @staticmethod
@@ -209,7 +207,7 @@ class TTNNRotaryEmbeddingCompute(TTNNModule):
         return cos, sin
 
 
-class TTNNBailingRotaryEmbedding(TTNNModule):
+class TTNNBailingRotaryEmbedding(StatelessTTNNModule):
     """TTNN-accelerated rotary position embedding for Ling/Bailing models.
 
     Replaces BailingMoeV2RotaryEmbedding. Pre-computes cos/sin caches on device

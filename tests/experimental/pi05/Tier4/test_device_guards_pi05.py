@@ -59,9 +59,7 @@ def test_no_torch_in_device_forwards():
     import importlib.util
     import pathlib
 
-    pkg_dir = pathlib.Path(
-        importlib.util.find_spec("tt_symbiote.models.pi05").submodule_search_locations[0]
-    )
+    pkg_dir = pathlib.Path(importlib.util.find_spec("tt_symbiote.models.pi05").submodule_search_locations[0])
     offenders = []
     for path in pkg_dir.glob("modeling_pi05*.py"):
         tree = ast.parse(path.read_text())
@@ -70,10 +68,6 @@ def test_no_torch_in_device_forwards():
                 if not any("run_on_devices" in ast.dump(d) for d in fn.decorator_list):
                     continue
                 for sub in ast.walk(fn):
-                    if (
-                        isinstance(sub, ast.Attribute)
-                        and isinstance(sub.value, ast.Name)
-                        and sub.value.id == "torch"
-                    ):
+                    if isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name) and sub.value.id == "torch":
                         offenders.append(f"{path.name}:{cls.name}.{fn.name} -> torch.{sub.attr}")
     assert not offenders, "torch.* in device forward bodies: " + "; ".join(offenders)

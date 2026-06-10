@@ -104,7 +104,9 @@ def test_gemma_attention(dev):
     w = _attn_weights(cfg)
     ref = GemmaAttention(cfg, w, 0)
     x = torch.randn(1, seq, cfg.width) * 0.5
-    cos_t, sin_t = precompute_freqs_cis(cfg.head_dim, cfg.max_seq_len if hasattr(cfg, "max_seq_len") else 2048, cfg.rope_base)
+    cos_t, sin_t = precompute_freqs_cis(
+        cfg.head_dim, cfg.max_seq_len if hasattr(cfg, "max_seq_len") else 2048, cfg.rope_base
+    )
     out_ref, _ = ref.forward(x, cos_t, sin_t)
 
     tt = TTNNPi05GemmaAttention.from_torch(ref, cfg)

@@ -15,19 +15,17 @@ except ImportError:
     print("Could not import sdpa_attention_forward from transformers.integrations.sdpa_attention. ")
 
 import ttnn
-from tt_symbiote.core.module import TTNNModule, SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, run_on_devices
+
+from tt_symbiote.core.module import SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, StatelessTTNNModule, run_on_devices
 from tt_symbiote.core.tensor import TorchTTNNTensor
 from tt_symbiote.models.dots_ocr._linear import (
     TTNNLinear,
-    TTNNLinearIColShardedWRowSharded,
     TTNNLinearIColShardedWAllReduced,
+    TTNNLinearIColShardedWRowSharded,
     TTNNLinearIReplicatedWColSharded,
 )
-from tt_symbiote.models.dots_ocr._rope import (
-    TTNNRotaryPositionEmbedding,
-    TTNNDistributedRotaryPositionEmbedding,
-)
 from tt_symbiote.models.dots_ocr._normalization import TTNNDistributedRMSNorm
+from tt_symbiote.models.dots_ocr._rope import TTNNDistributedRotaryPositionEmbedding, TTNNRotaryPositionEmbedding
 
 try:
     from transformers.cache_utils import Cache
@@ -377,7 +375,7 @@ class TorchSDPAAttention(torch.nn.Module):
         return attn_output
 
 
-class TTNNSDPAAttention(TTNNModule):
+class TTNNSDPAAttention(StatelessTTNNModule):
     def __init__(self):
         super().__init__()
         self._fallback_torch_layer = TorchSDPAAttention()
@@ -554,7 +552,7 @@ class SelfAttention(torch.nn.Module):
         return (context_layer,)
 
 
-class TTNNFusedQKVSelfAttention(TTNNModule):
+class TTNNFusedQKVSelfAttention(StatelessTTNNModule):
     @classmethod
     def from_torch(cls, fused_qkv: "PytorchFusedQKVSelfAttention"):
         """Create TTNNViTSelfAttention from PyTorch ViTSelfAttention."""
@@ -619,7 +617,7 @@ class TTNNFusedQKVSelfAttention(TTNNModule):
         return queries, keys, values
 
 
-class TTNNSelfAttention(TTNNModule):
+class TTNNSelfAttention(StatelessTTNNModule):
     """TTNN-accelerated ViT Self-Attention layer."""
 
     def __init__(self, attention_config: SelfAttentionConfig) -> None:
@@ -728,7 +726,7 @@ class TTNNViTSelfAttention(TTNNSelfAttention):
         return new_self_attention
 
 
-class TTNNWhisperAttention(TTNNModule):
+class TTNNWhisperAttention(StatelessTTNNModule):
     """Minimal TTNN Whisper Attention with KV cache."""
 
     def __init__(
@@ -953,7 +951,7 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     return q_embed, k_embed
 
 
-class LlamaAttention(TTNNModule):
+class LlamaAttention(StatelessTTNNModule):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
     def __init__(
@@ -1239,7 +1237,7 @@ class LlamaAttention(TTNNModule):
         return self.o_proj(attn_out), None
 
 
-class TTNNGlm4MoeLiteAttention(TTNNModule):
+class TTNNGlm4MoeLiteAttention(StatelessTTNNModule):
     """TTNN-accelerated Multi-Latent Attention for Glm4MoeLite.
 
     Supports both standard DynamicCache and TTNNPagedAttentionKVCache
@@ -1821,7 +1819,7 @@ def gated_attention_forward_ttnn(
     return attn_output
 
 
-class TTNNQwen3NextGatedAttention(TTNNModule):
+class TTNNQwen3NextGatedAttention(StatelessTTNNModule):
     def __init__(self):
         super().__init__()
 
@@ -1992,7 +1990,7 @@ def _reverse_permute_1d(tensor: torch.Tensor, rotary_dim: int, head_dim: int = 0
     return result.reshape(dim)
 
 
-class TTNNBailingMoEAttention(TTNNModule):
+class TTNNBailingMoEAttention(StatelessTTNNModule):
     """TTNN Attention for BailingMoeV2 (Ling-mini-2.0 model).
 
     Uses TTNNPagedAttentionKVCache for paged attention with on-device KV storage.

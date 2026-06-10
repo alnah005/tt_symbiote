@@ -44,7 +44,7 @@ from transformers.models.resnet.modeling_resnet import (
     ResNetShortCut,
 )
 
-from tt_symbiote.core.module import TTNNModule, SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, run_on_devices
+from tt_symbiote.core.module import SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, TTNNModule, run_on_devices
 from tt_symbiote.core.run_config import trace_enabled
 from tt_symbiote.models.auto.auto_mappings import register_recipe
 from tt_symbiote.models.resnet.configuration_resnet import lookup_ttnn_tuning

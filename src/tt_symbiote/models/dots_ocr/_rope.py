@@ -5,11 +5,12 @@
 """Rotary Position Embedding (RoPE) implementations for TTNN."""
 
 from typing import Any, Tuple, Union
+
 import torch
 import torch.nn as nn
-
 import ttnn
-from tt_symbiote.core.module import TTNNModule, SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, run_on_devices
+
+from tt_symbiote.core.module import SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, StatelessTTNNModule, run_on_devices
 
 
 def rotate_half(x):
@@ -61,7 +62,7 @@ class TorchRotaryPositionEmbedding(nn.Module):
         return q_embed, k_embed
 
 
-class TTNNRotaryPositionEmbedding(TTNNModule):
+class TTNNRotaryPositionEmbedding(StatelessTTNNModule):
     """TTNN-accelerated Rotary Position Embedding."""
 
     @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
@@ -167,7 +168,7 @@ class TTNNRotaryPositionEmbedding(TTNNModule):
         return q_rotated, k_rotated
 
 
-class TTNNDistributedRotaryPositionEmbedding(TTNNModule):
+class TTNNDistributedRotaryPositionEmbedding(StatelessTTNNModule):
     """TTNN-accelerated Rotary Position Embedding for distributed/mesh devices.
 
     Uses ttnn.experimental.rotary_embedding_llama which is optimized for
