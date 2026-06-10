@@ -148,6 +148,63 @@ class TTNNPagedAttentionKVCache(Cache):
         self._is_on_device = True
         return self
 
+    def set_vllm_page_table(self, page_table: torch.Tensor) -> "TTNNPagedAttentionKVCache":
+        """Install an externally-managed page table (e.g. vLLM block ids).
+
+        By default the cache uses a contiguous identity mapping
+        (``arange(max_num_blocks)``) built in ``to_device``. Under
+        tt-inference-server's vLLM backend, the block manager assigns physical
+        block ids per request, so the serving adapter calls this to point the
+        paged ops (``paged_fill_on_device`` / ``paged_update_on_device`` /
+        ``paged_sdpa_decode``) at the blocks vLLM allocated.
+
+        This is **additive and HF-preserving**: HF ``generate()`` never calls it,
+        so the default contiguous mapping (and therefore every existing numeric
+        result) is unchanged. It is the single shared hook that unlocks paged
+        vLLM serving (Tier S2) for every tt_symbiote model whose attention uses
+        this cache. See docs/development/tt_inference_server_integration.md §9.
+
+        Args:
+            page_table: int32 tensor ``[batch, blocks_per_sequence]`` mapping
+                logical block index -> physical block id.
+
+        Note:
+            This reallocates the device page-table tensor, so call it *outside*
+            a trace boundary (e.g. at request setup / between decode traces).
+            A trace-stable in-place update is a follow-up for continuous-batching
+            performance; correctness does not depend on it.
+        """
+        if not self._is_on_device:
+            raise RuntimeError("KV cache not on device. Call to_device(device).")
+        if page_table.dim() != 2:
+            raise ValueError(
+                f"page_table must be 2D [batch, blocks_per_sequence], got shape {tuple(page_table.shape)}"
+            )
+
+        mesh_mapper = (
+            ttnn.ReplicateTensorToMesh(self._device)
+            if self._device.get_num_devices() > 1
+            else None
+        )
+        self.page_table = page_table.to(torch.int32).contiguous()
+
+        # Release the previous device page-table tensor before replacing it.
+        if self._tt_page_table is not None:
+            try:
+                ttnn.deallocate(self._tt_page_table)
+            except Exception:
+                pass
+
+        self._tt_page_table = ttnn.from_torch(
+            self.page_table,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self._device,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return self
+
     def paged_fill_on_device(
         self,
         key_states: ttnn.Tensor,

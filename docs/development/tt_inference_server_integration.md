@@ -365,16 +365,31 @@ Full vLLM integration: continuous batching, prefix caching, vLLM sampling.
   `forward(next_token, past_key_values=cache)`, return logits.
 
 **Requires one additive, HF-preserving tt_symbiote hook** (shared by all S2
-models, written once): allow an external page table + per-request cache
-positions on `TTNNPagedAttentionKVCache`, e.g.
+models, written once): install an external (vLLM block-manager) page table on
+`TTNNPagedAttentionKVCache`. Implemented as:
 
 ```python
-def set_vllm_page_table(self, tt_page_table, current_pos=None): ...
+def set_vllm_page_table(self, page_table: torch.Tensor): ...
+    # page_table: int32 [batch, blocks_per_sequence] logical->physical block ids.
+    # Replaces the default contiguous arange mapping; reallocates the device
+    # page-table tensor (call outside a trace boundary).
 ```
 
-Default behavior (internal `arange`) is unchanged, so HF `generate()` is
-byte-for-byte identical — `tt_symbiote` stays HF-shaped. This is the *only*
-tt_symbiote-side change the whole roadmap needs, and it is metadata-like.
+Per-request cache positions are NOT part of the hook — the adapter passes them
+through the model's normal HF `cache_position` argument, so the cache needs no
+position-tracking change. Default behavior (internal `arange`) is unchanged, so
+HF `generate()` is byte-for-byte identical — `tt_symbiote` stays HF-shaped. This
+is the *only* tt_symbiote-side change the whole roadmap needs.
+
+**Status (M2):** implemented in `tt_symbiote.modules.ttnn_attention` and
+**hardware-validated on T3K** — `tests/experimental/glm4_moe/Tier4/
+test_vllm_page_table_hook.py` installs a non-identity (reversed) table and
+confirms both `paged_fill_on_device` (prefill) and `paged_sdpa_decode` (decode
+read-back) stay correct (PCC ≥ 0.99) against a torch `DynamicCache` reference,
+plus a device page-table round-trip. The S2 adapter dispatch
+(`allocate_kv_cache` / `_prefill_s2` / `_decode_s2` in
+`tt_symbiote_generators.py`) is code-complete on top of this hook; full
+multi-user continuous-batching e2e awaits a registered S2 model.
 
 #### Tier S1 — logits, model-managed KV, no cross-request paging (fallback)
 Model returns logits but its cache isn't vLLM-paged. The adapter serves one
@@ -451,9 +466,14 @@ reused by every VLM recipe.
    wiring in `TTSymbioteGenerator`. **Zero tt_symbiote changes.** `max_num_seqs=1`,
    greedy. Validates the whole pipeline (image build, registration, serving) on
    `c09f09c3`.
-2. **M2 (Ling-mini, S2):** add the additive `set_vllm_page_table` hook to
-   `TTNNPagedAttentionKVCache` (the one shared tt_symbiote change) + S2 dispatch.
-   Unlocks continuous batching for the whole text-LLM family.
+2. **M2 (S2 seam):** add the additive `set_vllm_page_table` hook to
+   `TTNNPagedAttentionKVCache` (the one shared tt_symbiote change) + S2 dispatch
+   in the adapter. **Done + T3K-validated at the hook level** (see §9.2 Status).
+   Unlocks continuous batching for the whole text-LLM family once an S2 model is
+   registered. (Ling-mini/`bailing_moe_v2` is the intended first S2 model but
+   currently fails import — its `TTNNBailingMoeV2Model` extends `TTNNModule`
+   directly, which the class guard disallows; fixing that is the remaining step
+   to take S2 e2e.)
 3. **M3 (generalize):** `SERVING_RECIPES` + `serving_tier` metadata export; new
    models are one row. Port gemma4/qwen3_vl attention to reach S1/S2.
 
