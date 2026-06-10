@@ -570,51 +570,6 @@ def _vision_sdpa_compute_config(device, *, math_fidelity: ttnn.MathFidelity) -> 
 # ---------------------------------------------------------------------------
 
 
-def _rotate_half(x: ttnn.Tensor) -> ttnn.Tensor:
-    """Rotate-half helper for RoPE: [-x2, x1] from [x1, x2]."""
-    last = x.shape[-1]
-    half = last // 2
-    x1 = ttnn.slice(x, (0, 0, 0, 0), (x.shape[0], x.shape[1], x.shape[2], half))
-    x2 = ttnn.slice(x, (0, 0, 0, half), (x.shape[0], x.shape[1], x.shape[2], last))
-    neg_x2 = ttnn.mul(x2, -1, use_legacy=False)
-    return ttnn.concat([neg_x2, x1], dim=-1)
-
-
-def apply_rotary_tt(
-    q: ttnn.Tensor,
-    k: ttnn.Tensor,
-    cos: ttnn.Tensor,
-    sin: ttnn.Tensor,
-    out_dtype=None,
-) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Apply rotary embedding to Q and K tensors in fp32 then cast back."""
-    if out_dtype is None:
-        out_dtype = ttnn.bfloat8_b
-
-    f32 = getattr(ttnn, "float32", None)
-
-    if f32 is not None:
-        qf = ttnn.typecast(q, dtype=f32)
-        kf = ttnn.typecast(k, dtype=f32)
-        cos_f = ttnn.typecast(cos, dtype=f32)
-        sin_f = ttnn.typecast(sin, dtype=f32)
-    else:
-        qf, kf, cos_f, sin_f = q, k, cos, sin
-
-    q_embed = ttnn.add(
-        ttnn.mul(qf, cos_f, use_legacy=False), ttnn.mul(_rotate_half(qf), sin_f, use_legacy=False), dtype=ttnn.bfloat8_b
-    )
-    k_embed = ttnn.add(
-        ttnn.mul(kf, cos_f, use_legacy=False), ttnn.mul(_rotate_half(kf), sin_f, use_legacy=False), dtype=ttnn.bfloat8_b
-    )
-
-    if f32 is not None and out_dtype is not None:
-        q_embed = ttnn.typecast(q_embed, dtype=out_dtype)
-        k_embed = ttnn.typecast(k_embed, dtype=out_dtype)
-
-    return q_embed, k_embed
-
-
 class TTNNDotsVision2DRoPE:
     """2D factored RoPE for Dots vision attention.
 

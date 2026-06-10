@@ -739,24 +739,6 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
 
 
 @trace_disabled
-class TTNNLinearLLama(TTNNLinear):
-    """TTNN Linear layer optimized for LLaMA models using bfloat8."""
-
-    def preprocess_weights_impl(self):
-        """Preprocess linear weights with bfloat8 precision."""
-        self.tt_weight_host = preprocess_linear_weight(self.weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-        self.tt_bias_host = None
-        if self.bias is not None:
-            self.tt_bias_host = preprocess_linear_bias(self.bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-
-    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
-    @deallocate_weights_after
-    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-        """Forward pass with automatic weight deallocation."""
-        return super().forward(input_tensor)
-
-
-@trace_disabled
 class TTNNLinearLLamaIColShardedWRowSharded(TTNNLinearIColShardedWRowSharded):
     """TTNN Linear layer optimized for LLaMA models using bfloat8."""
 
@@ -1195,97 +1177,6 @@ class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
         )
         tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
         return tt_output
-
-
-@trace_disabled
-class TTNNLinearLLamaBFloat16(TTNNLinear):
-    """TTNN Linear layer optimized for LLaMA models using bfloat16."""
-
-    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
-    @deallocate_weights_after
-    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-        """Forward pass with automatic weight deallocation."""
-        return super().forward(input_tensor)
-
-
-class PytorchLinearActivation(nn.Module):
-    def __init__(self, dense, act_fn) -> None:
-        super().__init__()
-        self.dense = dense
-        self.intermediate_act_fn = act_fn
-
-    def forward(self, hidden_states):
-        hidden_states = self.dense(hidden_states)
-        hidden_states = self.intermediate_act_fn(hidden_states)
-
-        return hidden_states
-
-
-class TTNNLinearActivation(StatelessTTNNModule):
-    """Linear layer with activation using TTNN."""
-
-    @classmethod
-    def from_parameters(cls, weight, linear_class, ttnn_act_fn, nn_act_fn, bias=None):
-        new_linear = cls()
-        new_linear.dense = linear_class.from_parameters(weight=weight, bias=bias)
-        new_linear.activation = ttnn_act_fn
-        return new_linear
-
-    @classmethod
-    def from_torch(cls, linear: nn.Linear, linear_class, ttnn_act_fn, nn_act_fn):
-        new_linear = cls()
-        new_linear._fallback_torch_layer = PytorchLinearActivation(dense=linear, act_fn=nn_act_fn)
-        new_linear.dense = linear_class.from_torch(linear)
-        new_linear.activation = ttnn_act_fn
-        return new_linear
-
-    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
-    def forward(self, hidden_states):
-        hidden_states = self.dense(hidden_states)
-        hidden_states = self.activation(hidden_states)
-        return hidden_states
-
-
-class TTNNLinearGelu:
-    """Linear layer with GELU activation using TTNN."""
-
-    @classmethod
-    def from_parameters(cls, weight, bias=None, linear_class=TTNNLinear):
-        new_linear = TTNNLinearActivation.from_parameters(weight, linear_class, ttnn.gelu, nn.GELU(), bias)
-        return new_linear
-
-    @classmethod
-    def from_torch(cls, linear: nn.Linear, linear_class=TTNNLinear):
-        new_linear = TTNNLinearActivation.from_torch(linear, linear_class, ttnn.gelu, nn.GELU())
-        return new_linear
-
-
-class TTNNLinearSilu:
-    """SiLU activated Linear module with TTNN acceleration."""
-
-    @classmethod
-    def from_parameters(cls, weight, bias=None, linear_class=TTNNLinear):
-        new_linear = TTNNLinearActivation.from_parameters(weight, linear_class, ttnn.silu, nn.SiLU(), bias)
-        return new_linear
-
-    @classmethod
-    def from_torch(cls, linear: nn.Linear, linear_class=TTNNLinear):
-        new_linear = TTNNLinearActivation.from_torch(linear, linear_class, ttnn.silu, nn.SiLU())
-        return new_linear
-
-
-class TTNNViTIntermediate(TTNNLinearGelu):
-    """ViT Intermediate module with TTNN acceleration."""
-
-    @classmethod
-    def from_torch(cls, torch_vit_intermediate: "ViTIntermediate"):
-        assert (
-            torch_vit_intermediate.intermediate_act_fn.__class__.__name__ == "GELUActivation"
-        ), "Only GELU activation is supported."
-        new_intermediate = cls()
-        new_intermediate._fallback_torch_layer = torch_vit_intermediate
-        new_intermediate.dense = TTNNLinear.from_torch(torch_vit_intermediate.dense)
-        return new_intermediate
 
 
 # =============================================================================
