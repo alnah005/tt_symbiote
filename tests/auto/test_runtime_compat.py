@@ -116,9 +116,9 @@ def test_model_extras_reference_known_capabilities():
 def test_serving_tier_is_valid_when_present():
     for hf_class, pin in _runtime_pins.RUNTIME_PINS.items():
         if "serving_tier" in pin:
-            assert pin["serving_tier"] in _runtime_pins.SERVING_TIERS, (
-                f"{hf_class}: unknown serving_tier {pin['serving_tier']!r}"
-            )
+            assert (
+                pin["serving_tier"] in _runtime_pins.SERVING_TIERS
+            ), f"{hf_class}: unknown serving_tier {pin['serving_tier']!r}"
     # The default must itself be a valid tier.
     assert _runtime_pins.serving_tier_for("__missing__") in _runtime_pins.SERVING_TIERS
 

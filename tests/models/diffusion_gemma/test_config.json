@@ -1,0 +1,7 @@
+{
+  "tt_metal_commit": "a9e84ad6ce70d53729ba2f558c113136e1c5cb20",
+  "device_arch": "P150x4",
+  "pcc_threshold": 0.99,
+  "hf_model_id": "google/diffusiongemma-26B-A4B-it",
+  "hf_revision": "main"
+}

@@ -1,0 +1,358 @@
+{
+ "model_name": "diffusion_gemma",
+ "model_id": "google/diffusiongemma-26B-A4B-it",
+ "device_arch": "P150x4",
+ "tt_metal_commit": "a9e84ad6ce70d53729ba2f558c113136e1c5cb20",
+ "integration_path": "manual",
+ "started_at": "2026-06-10T18:10:00Z",
+ "validation_sample": "Block-diffusion (non-autoregressive) model; standard CausalLM continuation check does not apply. Per-module Tier1/Tier2 PCC is the current validation bar.",
+ "scope": "scaffold + Tier1/Tier2 (then pause for user review). Selected via /model-bringup intake.",
+ "environment": {
+  "python_env": "/home/ttuser/salnahari/tt-metal/python_env",
+  "tt_symbiote_install": "uv pip install -e . --no-deps (editable, deps untouched)",
+  "transformers": "5.11.0 (upgraded from 4.53.0 in shared env; required by tt_symbiote + native diffusion_gemma support)",
+  "torch": "2.11.0+cpu (source-built, untouched)",
+  "ttnn": "source-built in tt-metal python_env (untouched; pinned wheel install skipped via --no-deps)",
+  "hardware": "4x p300c (Blackhole), host bh-qbge-05",
+  "hardware_note": "Device access blocked at bring-up time: another user's job (iguser vibevoice/demo_ttnn.py) holds the Blackhole devices; ttnn device-open hangs on topology discovery. HW PCC validation pending device availability."
+ },
+ "phases": {
+  "scaffold": {
+   "status": "completed",
+   "artifacts": [
+    "src/tt_symbiote/models/diffusion_gemma/modeling_diffusion_gemma.py",
+    "src/tt_symbiote/models/diffusion_gemma/__init__.py",
+    "tests/models/diffusion_gemma/{test_config,shapes,op_map}.json",
+    "tests/models/diffusion_gemma/Tier1..Tier4/"
+   ],
+   "notes": "Implemented (pure-TTNN): RMSNorm, TextMLP, Router. Scaffolded (NotImplementedError): Experts (sparse MoE), Encoder/Decoder attention. DecoderLayer/Model not yet scaffolded (out of Tier1/2 scope).",
+   "started_at": "2026-06-10T18:10:00Z",
+   "completed_at": "2026-06-10T18:30:00Z"
+  },
+  "pcc_test_gen": {
+   "status": "completed",
+   "artifacts": [
+    "tests/models/diffusion_gemma/Tier1/test_ops_diffusion_gemma.py",
+    "tests/models/diffusion_gemma/Tier2/test_composites_diffusion_gemma.py",
+    "tests/models/diffusion_gemma/profiling/validate_tier12.py"
+   ],
+   "test_results": {
+    "tier1": {
+     "status": "pass",
+     "pcc": 0.999945,
+     "details": "On P150x4 HW: linear 0.999945, rms_norm 0.999980, gelu 0.999994."
+    },
+    "tier2": {
+     "status": "pass",
+     "pcc": 0.999379,
+     "details": "ALL 6 module types validated on P150x4 HW. RMSNorm(scale=True) 0.999972, RMSNorm(scale=False) 0.999980, TextMLP 0.999825, Router_probs 0.999217, Router_topk_weights[matched,sorted] 0.998331 (topk expert-set agreement 84.4%). Encoder+Decoder attention: sliding(L0,hd256) 0.9963, full(L5,hd512) 0.9930 (per-head Q/K/V RMSNorm + full-width RoPE + GQA SDPA, scale=1.0). MoE experts: ttnn.sparse_matmul (gemma4 prefill pattern) + expert-chunking to fit Blackhole 110-core grid -- reduced-scale 0.9949, FULL 128-expert scale 0.999379."
+    },
+    "tier3": {
+     "status": "pass",
+     "pcc": 0.998024,
+     "details": "Encoder+Decoder dual-FFN sandwich layer (input_norm->attn->post_norm->+res; MLP branch + MoE branch from post-attn residual -> combine -> post_ffn_norm -> +res * layer_scalar). Validated on P150x4 at reduced expert dims (real hidden/heads/rope) pcc 0.998024; composition logic is the tier target, individual modules validated full-scale in Tier2. Fixed router gather (rank-agnostic 2D/3D) + experts routing-mask dtype (uint32 before reshape; topk emits uint16) -- robustness improvements, Tier2 regression still 8/8."
+    },
+    "tier4": {
+     "status": "partial",
+     "pcc": 0.9807,
+     "details": "Encoder AND decoder text-model assemblies validated on P150x4 (reduced depth/scale; real hidden/heads/rope). Encoder (embed->encoder layers->norm, causal): 1L 0.9987, 2L 0.9881. Decoder (embed->self-conditioning->decoder layers cross-attending to encoder KV cache->norm): 2L 0.9807, finite. Encoder->decoder KV cross-attention handoff implemented (encoder.forward_with_cache exports per-layer K,V; decoder attention concatenates encoder KV on seq dim; decoder RoPE positions offset past encoder seq). Self-conditioning module (gated-MLP + pre/post norm) implemented. Standalone scaled-word embedding (P150x4 replicated; shared TTNNEmbedding is T3K-guarded). Attention is_causal config-driven (encoder causal). Output finiteness passes. Multi-layer bf16 accumulation -> model-assembly threshold 0.98. lm_head + final logit softcapping validated 0.999941. BLOCK-DIFFUSION GENERATION LOOP implemented (generation_diffusion_gemma.block_diffusion_generate: encoder once -> per-step decoder+lm_head with self-conditioning feedback + entropy-bound accept/renoise + temperature schedule, reusing HF sampler classes host-side) and validated end-to-end on P150x4: 6 steps, finite canvas of valid token ids, step-0 logits vs HF pcc 0.985. FULL forward + generation pipeline complete at reduced depth/scale. REMAINING: multimodal vision embedder (out of text path); perf phase (tracy/sweep/config-optimize/trace; fp32 accumulation to recover bf16 stack drift; expert-parallel sharding to replace MoE G=2 chunking on a larger mesh). Full 26B does not fit a 4-device Blackhole; true semantic coherence needs real weights at full scale."
+    }
+   },
+   "started_at": "2026-06-10T18:30:00Z",
+   "completed_at": "2026-06-10T20:50:00Z"
+  },
+  "sharding": {
+   "status": "completed",
+   "artifacts": [
+    "src/tt_symbiote/models/diffusion_gemma/modeling_diffusion_gemma.py",
+    "src/tt_symbiote/models/diffusion_gemma/generation_diffusion_gemma.py",
+    "tests/models/diffusion_gemma/profiling/_shard_helpers.py",
+    "tests/models/diffusion_gemma/profiling/_probe_capabilities.py",
+    "tests/models/diffusion_gemma/profiling/_probe_ep_experts.py",
+    "tests/models/diffusion_gemma/profiling/_probe_share_identity.py",
+    "tests/models/diffusion_gemma/profiling/_probe_layer_sharded.py",
+    "tests/models/diffusion_gemma/profiling/_probe_stack_sharded.py",
+    "tests/models/diffusion_gemma/profiling/_probe_generate_sharded.py"
+   ],
+   "notes": "Converted fully-replicated weights to tensor/expert-parallel SHARDED on P150x4. Col/row-parallel linears (Topology.Linear, cluster_axis=1, fp32-acc, native all_reduce, per-shard as_tensor cache); EXPERT-PARALLEL MoE (gate/up/down sharded on expert dim /4=32 local, routing mask E-sharded via column-sharded identity one-hot, single final all_reduce); vocab-sharded embedding (per-chip offset subtract + clamp-invalid-to-0 + ZERO-via-validity-mask + all_reduce, ROW_MAJOR weight); V-sharded lm_head (host ConcatMeshToTensor dim=-1); full-attn kv=2<TP=4 handled by REPEAT-kv-to-TP-then-col-shard (1/chip aligned to q-head GQA block); encoder<->decoder on-device weight SHARE (alias tt_* handles, skip-load guard). KEY FINDINGS: (1) FABRIC_1D required for CCL (ttnn.set_fabric_config before open_mesh). (2) ttnn.embedding indexes LOCALLY into a vocab-shard and reads OOB->inf at index==V_local (NOT auto-zero) -> must clamp invalid to 0 and zero output via mask. (3) ttnn.count_nonzero absent -> nnz verified host-side (static all-ones). (4) embedding weight must be ROW_MAJOR (TILE->NaN). (5) Real model runs sdpa: encoder attention is_causal=True (CAUSAL) under mask=None; decoder is_causal=False. (6) set_device recurses + calls preprocess/move per child directly, so SHARE must mark each aliased child _weights_on_device=True.",
+   "stage_results": {
+    "stage0_2_api": {
+     "status": "pass",
+     "details": "All sharding/CCL/fp32 APIs present. sparse_matmul+SDPA+linear expose compute_kernel_config. ttnn.count_nonzero ABSENT (nnz verified host-side). DRAM via ttnn.get_memory_view(md, BufferType.DRAM)."
+    },
+    "stage0_A_share_identity": {
+     "status": "pass",
+     "details": "45/45 encoder tt_* handles identical Python objects to decoder (one resident copy); self_conditioning decoder-only extra; encoder load skipped via _shared guard. Reduced 2-layer E=128."
+    },
+    "stage0_B_ep_experts": {
+     "status": "pass",
+     "pcc": 0.99792,
+     "details": "EP experts vs torch-fp32 128-expert reference: reduced-dims 0.995116, full-E128 0.997920 (>=0.99). sparse_matmul ran hang-free; all_reduce combined 4-chip partials exactly."
+    },
+    "stage1_D1_capabilities": {
+     "status": "pass",
+     "details": "Real per-device DRAM=31.83 GB (>28 assumed), 110 cores (11x10). Sharded bf16 weight budget=12.10 GB/chip, headroom 19.73 GB. bf16 experts fit; no bf8_b needed."
+    },
+    "stage1_D2_shard_linear": {
+     "status": "pass",
+     "pcc": 0.999997,
+     "details": "col-parallel 0.999998, row-parallel+all_reduce 0.999997 at full dims H=2816 Ff=2112. Linear-topology CCL closes; matches Ring math."
+    },
+    "stage1_D5_layer": {
+     "status": "pass",
+     "details": "Single full-dim sharded layer (causal encoder + sdpa ref), 3x hang-free: enc_sliding 0.997515, dec_sliding 0.997157, dec_full(kv=2,hd=512,v_proj=None,kv-repeat) 0.995888. per-layer DRAM 0.389 GB/chip -> projected 30-layer+embed+lmhead=12.37 GB/chip < 31.8 GB."
+    },
+    "reduced_scale_resharded": {
+     "status": "pass",
+     "pcc": 0.999435,
+     "details": "Existing reduced encoder-layer probe re-validated through the now-sharded classes (edit 13)."
+    },
+    "stage2_D6_share": {
+     "status": "pass",
+     "details": "30-layer SHARED stack DRAM gate: decoder resident 0.385-0.389 GB/layer; encoder ADDED after share = 0.000 GB/chip (ONE copy, NOT 2x); projected 30-layer+embed+lmhead(full V=262144)=12.24-12.34 GB/chip (NOT ~25); identity enc.tt_gate is dec.tt_gate = True. 211 tt_* aliased (6-layer). Measured at L=2 and L=6 (full HF 30-layer host-build is RAM/time-prohibitive; per-layer DRAM extrapolated x30, consistent with D5)."
+    },
+    "stage2_D7_forward": {
+     "status": "pass_meaningful",
+     "details": "Decoder forward FINITE; lm_head single-matmul PCC=1.000000 (>=0.99); encoder no-catastrophic-drift: L=2 PCC=0.989 (>=0.95 PASS), L=6 PCC=0.869 (graceful per-layer compounding ~0.977/layer = bf16 + random-MoE-selection drift, the documented G9 random-weight artifact; bounded mad~3, NOT catastrophic). True correctness established by real-weight checks below."
+    },
+    "stage3_mechanical": {
+     "status": "pass",
+     "details": "block_diffusion_generate SHARDED (L=6, E=128, V=4096, canvas=128, 6 steps) completes hang-free: canvas (1,128) finite=True, valid_ids in [0,V)=True, unique_tokens=127 (non-degenerate), no per-step DRAM growth (2.324->2.323 GB), V-sharded lm_head readback via ConcatMeshToTensor(dim=-1). Random-weight step0_pcc=0.755 (G9 6-layer drift)."
+    },
+    "stage3_D8_real_layer": {
+     "status": "pass",
+     "pcc": 0.998064,
+     "details": "REAL decoder layer 0 (sliding) from checkpoint shard 1, sharded TTNN vs HF PCC=0.998064 (>=0.99). Confirms sharding correct on real trained weights (no random degeneracy)."
+    },
+    "stage3_real_step0": {
+     "status": "pass",
+     "pcc": 0.999552,
+     "details": "REAL 2-layer step-0 logits (vocab-sharded embed -> encoder forward_with_cache -> SHARED-weight decoder forward -> V-sharded lm_head + softcap, full V=262144) vs HF: PCC=0.999552 (>=0.98). THE decisive real-weight correctness gate; confirms the full sharded pipeline. Full 30-layer real generation deferred (host-RAM/time/device-flakiness); the 0.98 step-0 gate is met on real weights at tractable depth."
+    }
+   },
+   "started_at": "2026-06-11T00:00:00Z",
+   "completed_at": "2026-06-11T03:40:00Z"
+  },
+  "op_sweep": {
+   "status": "completed",
+   "artifacts": [
+    "tests/models/diffusion_gemma/profiling/_sweep_linear.py",
+    "tests/models/diffusion_gemma/sweep_results/linear_sweep_pcc.csv",
+    "tests/models/diffusion_gemma/sweep_results/linear_best.json"
+   ],
+   "notes": "Dense-linear sweep (weight_dtype{bf16,bf8_b} x fidelity{LoFi,HiFi2,HiFi4} x fp32_dest_acc), [1,128,2816]@[2816,2112], single tracy capture (HW-frugal). ALL 12 configs PCC>=0.9994. KEY FINDING (tracy device time): the dense linear is DISPATCH/OVERHEAD-bound at this size, NOT math-bound -- all configs ~67-68us, only ~1-2% spread. Fastest PCC-safe: bf8_b+LoFi (67.4us, pcc 0.9996, 1.02x vs HiFi4+fp32). => rec #4 (linear fidelity) yields negligible gain; real levers are Metal Trace (op-to-op dispatch gap, 98.7% wall-clock) and the MoE sparse_matmul 2-core grids (G=2 chunking). MoE sparse_matmul grid sweep NOT YET run (hang-prone; higher value)."
+  },
+  "tracy_profiling": {
+   "status": "completed",
+   "artifacts": [
+    "tests/models/diffusion_gemma/profiling/{_perf_layer.py,ops_perf_results_layer.csv,perf_report.txt,perf_report_steady.txt}"
+   ],
+   "notes": "Profiled single full-dim SHARDED encoder layer on P150x4 via tracy. Device-time ranking: SparseMatmul(MoE) 62.2%, Slice(chunking) 19.0%, Matmul(dense) 10.5%. tt-perf-report (pipx) installed+used. KEY: op-to-op host gaps ~98.7% of wall-clock -> Metal Trace is the top win. MoE sparse_matmul runs on only 2 cores (G=2 chunk grid); dense linears run HiFi4 (overkill)."
+  },
+  "perf_analysis": {
+   "status": "completed",
+   "artifacts": [
+    "tests/models/diffusion_gemma/perf_results/recommendation.json"
+   ],
+   "notes": "4 prioritized recs: (1) Metal Trace (traced-execution) ~98.7% wall-clock win; (2) MoE sparse_matmul bf8_b + larger grid / fewer chunks (62% device); (3) reduce expert-chunk Slice overhead, pre-slice at load (19%); (4) dense linears HiFi4->LoFi + bf8_b (10.5%). Device time SOLELY from tracy CSV."
+  },
+  "config_optimize": {
+   "status": "not_started",
+   "artifacts": [],
+   "notes": "",
+   "started_at": null,
+   "completed_at": null
+  },
+  "traced_execution": {
+   "status": "completed",
+   "artifacts": [
+    "tests/models/diffusion_gemma/profiling/_trace_layer.py",
+    "@trace_enabled on TTNNDiffusionGemma{Encoder,Decoder}TextLayer (decorator-only, Req5)"
+   ],
+   "notes": "Metal Trace capture/replay validated on sharded encoder layer (raw ttnn begin/end_trace_capture + execute_trace; trace_region_size 400MB). PCC(replay vs normal)=1.000000 delta=0 -> trace is NUMERICALLY EXACT. BUT speedup ~1.0x (NORMAL 43.25ms vs TRACE 43.30ms per forward). HONEST CORRECTION: the earlier tracy 'save 98.7%' figure was a WARM-UP/COMPILE artifact -- steady-state op-to-op gaps are 1-2us (perf_report_steady.txt); with async dispatch the host overlaps, so the layer is DEVICE-COMPUTE-BOUND (43ms dominated by MoE sparse_matmul, the profiled 62%). Trace removes host dispatch only -> no win for this device-bound layer. Real lever = MoE sparse_matmul device compute (2-core G=2 grids). Trace remains correct + may help the full generation loop (more host work). @trace_enabled added for the TracedRun framework path."
+  },
+  "layer_stack_pipeline": {
+   "status": "completed (static); HW smoke test interrupted",
+   "artifacts": [
+    "src/tt_symbiote/models/diffusion_gemma/pipeline.py (PipelineConfig + TTNNDiffusionGemmaPipeline)",
+    "src/tt_symbiote/models/diffusion_gemma/recipe.py (@register_recipe DiffusionGemmaForBlockDiffusion)",
+    "TTNNDiffusionGemmaLayerStack in modeling_diffusion_gemma.py (trace-enabled TTNNLayerStack subclass)",
+    "tests/models/diffusion_gemma/profiling/_probe_pipeline.py",
+    "src/tt_symbiote/models/__init__.py (+diffusion_gemma in _RECIPE_BEARING_SUBPACKAGES)"
+   ],
+   "notes": "dots_ocr-pattern layer stack + pipeline + recipe. TTNNDiffusionGemmaLayerStack: trace-enabled stack (per-layer-type cos/sin + decoder encoder_kv; forward_with_cache exports per-layer KV) -- the unit Metal Trace captures across all 30 layers. TTNNDiffusionGemmaPipeline.from_hf_model builds encoder+decoder models (share_text_weights => one on-device copy) + lm_head + exposes encoder_stack/decoder_stack views; warmup() + generate() run the block-diffusion denoising loop (reuses block_diffusion_generate + HF sampler). Recipe: build_module_dict->{}, post_register->install generate shim, make_kv_cache->build pipeline at set_device. STATIC VALIDATION: compiles, imports, recipe REGISTERED in TT_MODEL_REGISTRY, structure lint 0 errors. HW end-to-end smoke test (_probe_pipeline.py, reduced) was started but KILLED at user request (iguser's vibevoice job back on the shared box); re-run when the device is free + recover any wedge with tt-smi -r 0,1,2,3."
+  }
+ },
+ "references_read": [
+  {
+   "tt_metal_commit": "a9e84ad6ce70d53729ba2f558c113136e1c5cb20",
+   "timestamp": "2026-06-11T00:00:00Z",
+   "phase": "sharding",
+   "tech_reports": [
+    "data_formats/data_formats.md",
+    "tensor_sharding/tensor_sharding.md",
+    "FlashAttention/FlashAttention.md",
+    "Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md",
+    "GEMM_FLOPS/GEMM_FLOPS.md (background)"
+   ],
+   "reference_impls": [
+    "models/demos/gemma4/tt/ccl.py (ccl_allreduce: ttnn.all_reduce cluster_axis, Topology.Linear)",
+    "models/demos/gemma4/tt/experts/weights.py (as_tensor + col/row mappers + cache_file_name)",
+    "models/demos/gemma4/tt/precision.py (dtype_to_str / tp_suffix cache key)",
+    "models/tt_transformers/tt/model_config.py (WormholeComputeKernelConfig HiFi4 fp32_dest_acc block ~L767)",
+    "models/demos/gemma4/tests/test_factory.py (FABRIC_1D enablement for multi-device meshes)"
+   ],
+   "consulted_paths": [
+    "src/tt_symbiote/modules/ttnn_linear.py (T3K Ring variants -> NOT reusable; model-local P150x4 subclasses)",
+    "src/tt_symbiote/core/module.py (run_on_devices mesh-shape: P150x4 no required shape; SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)",
+    "src/tt_symbiote/utils/device_management.py (set_device recurses + calls preprocess/move per child directly)"
+   ]
+  },
+  {
+   "tt_metal_commit": "a9e84ad6ce70d53729ba2f558c113136e1c5cb20",
+   "timestamp": "2026-06-10T18:25:00Z",
+   "tech_reports": [
+    "ttnn/TTNN-model-bringup.md"
+   ],
+   "reference_impls": [
+    "models/tt_transformers/tt/attention.py",
+    "models/tt_transformers/tt/mlp.py",
+    "models/tt_transformers/tt/decoder.py",
+    "models/tt_transformers/tt/mixtral_moe.py",
+    "models/demos/gemma4/tt/moe.py",
+    "models/demos/deepseek_v3/tt/moe.py"
+   ],
+   "consulted_paths": [
+    "src/tt_symbiote/models/gemma4/modeling_gemma4_text.py",
+    "src/tt_symbiote/modules/ttnn_linear.py",
+    "src/tt_symbiote/modules/ttnn_normalization.py",
+    "src/tt_symbiote/modules/ttnn_moe.py",
+    "transformers/models/diffusion_gemma/modeling_diffusion_gemma.py"
+   ]
+  },
+  {
+   "tt_metal_commit": "a9e84ad6ce70d53729ba2f558c113136e1c5cb20",
+   "timestamp": "2026-06-11T22:20:00Z",
+   "phase": "incoherence_localization_fix",
+   "tech_reports": [
+    "data_formats/data_formats.md (bf16 softcap/accumulation)",
+    "tensor_serialization/tensor_serialization.md (as_tensor disk cache semantics)",
+    "FlashAttention/FlashAttention.md (SDPA is_causal / KV concat)"
+   ],
+   "reference_impls": [
+    "transformers/models/diffusion_gemma/modeling_diffusion_gemma.py (HF reference: attention, rope, dual-FFN, lm_head softcap, decoder mask)",
+    "transformers/models/diffusion_gemma/generation_diffusion_gemma.py (HF generate loop, EntropyBoundSampler, temperature schedule)"
+   ],
+   "consulted_paths": [
+    "src/tt_symbiote/models/diffusion_gemma/{modeling_diffusion_gemma,pipeline,generation_diffusion_gemma}.py",
+    "tests/models/diffusion_gemma/profiling/{_probe_real_step0,_run_full_traced,_shard_helpers}.py"
+   ]
+  }
+ ],
+ "decision_log": [
+  {
+   "timestamp": "2026-06-10T18:05:00Z",
+   "decision": "model_discovery",
+   "reason": "model_type='diffusion_gemma' (DiffusionGemmaForBlockDiffusion) native to transformers 5.11.0 but NOT a *ForCausalLM and block-diffusion (non-autoregressive). Manual integration path. No remote .py files (native model).",
+   "result": "pass"
+  },
+  {
+   "timestamp": "2026-06-10T18:08:00Z",
+   "decision": "environment",
+   "reason": "USER: install into tt-metal python_env. tt_symbiote installed editable --no-deps to protect source-built torch/ttnn; transformers upgraded 4.53.0->5.11.0 (required, native diffusion_gemma support + tt_symbiote API).",
+   "result": "pass"
+  },
+  {
+   "timestamp": "2026-06-10T18:09:00Z",
+   "decision": "device_arch",
+   "reason": "USER: P150x4. Detected HW is 4x p300c Blackhole; targeting 4-chip mesh. P150x4 is in SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS so TTNNLinear runs.",
+   "result": "pass"
+  },
+  {
+   "timestamp": "2026-06-10T18:09:30Z",
+   "decision": "scope",
+   "reason": "USER: scaffold + Tier1/Tier2 first, then pause for review.",
+   "result": "pass"
+  },
+  {
+   "timestamp": "2026-06-10T18:30:00Z",
+   "decision": "tier2_composite_split",
+   "reason": "Implemented RMSNorm/MLP/Router in pure TTNN (clear mappings). Deferred attention (partial-RoPE+per-head norm+sliding/full GQA+softcap) and sparse 128-expert MoE to post-Tier1/2 review (bespoke, multi-day; matches skill scaffold-template NotImplementedError convention).",
+   "result": "pass"
+  },
+  {
+   "timestamp": "2026-06-10T18:35:00Z",
+   "decision": "hardware_unavailable",
+   "reason": "ttnn device-open hangs (SIGTERM at 300s timeout, zero output) due to another user's active job holding the Blackhole devices. Did NOT reset devices (would crash their run). HW PCC validation deferred until devices free.",
+   "result": "blocked"
+  },
+  {
+   "timestamp": "2026-06-10T18:45:00Z",
+   "decision": "test_runner_wiring",
+   "reason": "device/mesh_device/device_params fixtures live in $TT_METAL_HOME/conftest.py, which imports tt-metal's 'tests.scripts' package. tt_symbiote also has a top-level 'tests' package, so loading tt-metal's conftest from this repo's CWD collides. This blocks pytest collection of ALL hardware tests here (shared tests hit the same wall), independent of this bring-up.",
+   "result": "blocked"
+  },
+  {
+   "timestamp": "2026-06-10T20:38:00Z",
+   "decision": "driver_recovery",
+   "reason": "Host rebooted (boot 20:33) into kernel 6.17.0-35-generic with no tt-kmd module built (prior kernel was 6.17.0-29) -> /dev/tenstorrent gone, 0 chips. USER approved recovery. Rebuilt+installed tenstorrent/2.9.1-pre via DKMS for -35 (headers present, MOK-signed), modprobe loaded it, /dev/tenstorrent/{0..3} restored, ttnn detects 4 chips.",
+   "result": "pass"
+  },
+  {
+   "timestamp": "2026-06-10T20:50:00Z",
+   "decision": "tier12_validation",
+   "reason": "Ran standalone harness (tests/models/diffusion_gemma/profiling/validate_tier12.py) on P150x4 mesh (MESH_DEVICE=P150x4) since pytest fixture wiring is unavailable. 8/8 PASS at >=0.998 PCC. Module COMPUTE validated via .forward() (raw ttnn) to bypass the harness __call__/TorchTTNNTensor readback ambiguity. Router gather bug fixed (ttnn.embedding needs 2D uint32 indices); router weights validated as sorted multiset on bf16/fp32 topk-agreeing tokens.",
+   "result": "pass"
+  },
+  {
+   "timestamp": "2026-06-10T21:10:00Z",
+   "decision": "attention_impl",
+   "reason": "Implemented shared Encoder/Decoder attention (per-head Q/K/V RMSNorm + manual rotate-half RoPE on full-width cos/sin + GQA via ttnn.transformer.scaled_dot_product_attention, scale=1.0, v=k when v_proj absent). Validated both layer types on P150x4: sliding 0.9963, full 0.9930.",
+   "result": "pass"
+  },
+  {
+   "timestamp": "2026-06-10T21:55:00Z",
+   "decision": "moe_sparse_impl",
+   "reason": "USER chose sparse (not dense). Implemented ttnn.sparse_matmul MoE (gemma4 prefill pattern). Hit: device NOC hang (reset), blocks>cores grid error, per_core_N tiling bug (PCC 0.5), soft-hang (reset x2). Root constraints: nnz must equal count_nonzero; grid must divide n_tiles AND cover expert*group blocks; 128 experts > 110-core Blackhole grid. USER chose port+expert-chunking. Solution: chunk experts by G=gcd(gate_nt,down_nt,E) (=2 at full scale; divides E so no padding, divides both n_tiles for valid per_core_N), process per 32-token tile, route-weight + accumulate. Reduced-scale PCC 0.9949; FULL 128-expert scale PCC 0.999379 on P150x4. Recovered device via tt-smi reset (DKMS-restored driver) after each hang.",
+   "result": "pass"
+  },
+  {
+   "timestamp": "2026-06-11T22:20:00Z",
+   "phase": "incoherence_localization_fix",
+   "summary": "Localized + fixed the degenerate-token incoherence in the assembled 30-layer P150x4 model.",
+   "root_cause_primary": "POISONED DISK TENSOR CACHE. _ShardedLinearP150x4 / _KVRepeatColParallel / TTNNDiffusionGemmaTextExperts keyed their ttnn.as_tensor disk cache on role+shape+dtype ONLY. A tile written by a different-weights build was silently served for the real weights, corrupting encoder K/V (PCC -0.007) -> garbage decoder hidden -> degenerate-symbol (236772/236761/506) domination. PROOF: _probe_real_step0 regressed 0.9996->0.128 WITH the stale cache, and recovered to 0.999626 with DIFFUSION_GEMMA_NO_CACHE=1; progressive intermediate harness pinpointed ENC_KV_K/V as the first failing boundary (embed+self-cond passed).",
+   "fix_primary": "Added _content_sig(host_tensor) (blake2b of weight bytes) woven into EVERY disk-cache key (sharded linear, kv-repeat, experts) so a weight-value change can never reuse a stale tile. Cleared the poisoned ~48GB cache. After fix: ENC_KV_K/V 0.9999, full 30-layer step-0 argmax-agreement vs HF = 1.0000, degenerate-symbol fraction 0.000.",
+   "root_cause_secondary": "Pipeline hardcoded t_min=0.5/t_max=1.0; the model's HF generation_config is t_min=0.4/t_max=0.8 (entropy_bound 0.1 matched). The entropy-bound sampler is sensitive to the temperature schedule.",
+   "fix_secondary": "PipelineConfig defaults -> t_min=0.4/t_max=0.8; from_hf_model now reads t_min/t_max/entropy_bound from hf_model.generation_config.",
+   "coherence_finding": "HF's OWN reference .generate() on the real 26B model produces EOS/pad collapse for this prompt (raw->'', chat-turn->'\\n\\n', argmax all-EOS at step0) on CPU bf16 + default gen config. The TTNN model now FAITHFULLY matches HF (full-depth step-0 argmax agreement 1.0, EOS collapse). The degenerate-symbol DEFECT is fixed; human-coherent text is not achievable here because the HF reference itself is not coherent for this prompt/setup (tokenizer has no chat_template) -- outside the TTNN bug scope.",
+   "residual_note": "Full-30-layer raw-logit PCC vs HF = 0.926 (mad~11): documented bf16 multi-layer accumulation drift (S2-DRIFT null hypothesis), gradual not sharp, argmax-preserving -> NOT the incoherence cause. Optional future: fp32 accumulation in MoE sparse_matmul + residual adds."
+  }
+ ],
+ "retry_counts": {
+  "scaffold": 0,
+  "pcc_test_gen": 0,
+  "op_sweep": 0,
+  "tracy_profiling": 0,
+  "perf_analysis": 0,
+  "config_optimize": 0,
+  "traced_execution": 0
+ },
+ "semantic_validation": {
+  "input": "block-diffusion denoising over a 32-token canvas (reduced random model)",
+  "output": "finite canvas of valid token ids; loop completes; step-0 logits match HF at pcc 0.985",
+  "status": "loop_validated_functional",
+  "note": "The generation loop mechanics + per-step model forward are validated against HF on a reduced random model. True text coherence requires the real 26B trained weights, which do not fit a 4-device Blackhole; full-scale semantic validation is deferred to a larger-mesh / weight-sharded deployment.",
+  "incoherence_fix": {
+   "status": "degenerate_defect_fixed; faithful_to_HF",
+   "degenerate_token_fraction": 0.0,
+   "full_depth_step0_argmax_agreement_vs_hf": 1.0,
+   "full_depth_step0_pcc_vs_hf": 0.925943,
+   "hf_reference_coherent": false,
+   "note": "HF's OWN reference .generate() on the real 26B model produces EOS/pad collapse for this prompt (raw->'', chat-turn->'\\n\\n', argmax all-EOS at step0) on CPU bf16 + default gen config. The TTNN model now FAITHFULLY matches HF (full-depth step-0 argmax agreement 1.0, EOS collapse). The degenerate-symbol DEFECT is fixed; human-coherent text is not achievable here because the HF reference itself is not coherent for this prompt/setup (tokenizer has no chat_template) -- outside the TTNN bug scope."
+  }
+ },
+ "runner_blocker": {
+  "status": "blocked",
+  "detail": "tt-metal conftest 'import tests.scripts' collides with repo top-level tests pkg; pytest cannot collect hardware tests. Runnable path = profiling/*.py harnesses. Committed pytest mirrors are skip-guarded and auto-enable if the collision is fixed."
+ }
+}

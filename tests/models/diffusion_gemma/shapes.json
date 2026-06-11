@@ -1,0 +1,53 @@
+{
+  "_comment": "Shapes for google/diffusiongemma-26B-A4B-it (text_config). batch=1; seq in {32,128}. head_dim differs by layer type: sliding=256, full=512.",
+  "sharding_p150x4": {
+    "_comment": "Tensor/expert-parallel SHARDED layout on the 1x4 P150x4 line mesh (TP=4, cluster_axis=1, Topology.Linear, num_links=1). Inter-module activations are REPLICATED full-H; sharding is intra-block.",
+    "tp": 4,
+    "num_experts_local": 32,
+    "mlp_gate_up": {"shard": "col (output Ff)", "per_chip_weight": [2816, 528], "ccl": "none"},
+    "mlp_down": {"shard": "row (input Ff)", "per_chip_weight": [528, 2816], "ccl": "all_reduce"},
+    "attn_q": {"shard": "col (q-heads /4 = 4/chip)", "ccl": "none"},
+    "attn_kv_sliding": {"shard": "col (kv-heads /4 = 2/chip)", "ccl": "none"},
+    "attn_kv_full": {"shard": "repeat kv 2->4 heads then col-shard -> 1/chip", "ccl": "none", "note": "kv=2<TP=4; v_proj=None so V=K"},
+    "attn_o": {"shard": "row (input local_q*hd)", "ccl": "all_reduce"},
+    "experts_gate_up": {"shard": "expert dim (E/4=32 local)", "per_chip": [1, 32, 2816, 704], "ccl": "single final all_reduce"},
+    "experts_down": {"shard": "expert dim (E/4=32 local)", "per_chip": [1, 32, 704, 2816]},
+    "routing_mask": {"shard": "E columns via column-sharded identity eye", "per_chip": [1, 1, "N", 32]},
+    "embedding": {"shard": "vocab dim 0 (V/4 rows/chip)", "per_chip": [65536, 2816], "ccl": "all_reduce (per-chip offset + clamp-OOR)"},
+    "lm_head": {"shard": "col (output V/4)", "per_chip_weight": [2816, 65536], "ccl": "host ConcatMeshToTensor(dim=-1)"}
+  },
+  "model_config": {
+    "hidden_size": 2816,
+    "intermediate_size": 2112,
+    "moe_intermediate_size": 704,
+    "num_experts": 128,
+    "num_attention_heads": 16,
+    "num_key_value_heads_sliding": 8,
+    "num_global_key_value_heads_full": 2,
+    "head_dim_sliding": 256,
+    "head_dim_full": 512,
+    "num_hidden_layers": 30,
+    "rms_norm_eps": 1e-06,
+    "hidden_activation": "gelu_pytorch_tanh",
+    "final_logit_softcapping": 30.0
+  },
+  "tiers": {
+    "tier1_ops": {
+      "linear_gate_up": {"in": [1, 128, 2816], "weight": [2112, 2816], "out": [1, 128, 2112]},
+      "linear_down": {"in": [1, 128, 2112], "weight": [2816, 2112], "out": [1, 128, 2816]},
+      "router_proj": {"in": [1, 128, 2816], "weight": [128, 2816], "out": [1, 128, 128]},
+      "rms_norm_hidden": {"in": [1, 128, 2816], "weight": [2816], "out": [1, 128, 2816]},
+      "rms_norm_head_sliding": {"in": [1, 128, 16, 256], "weight": [256], "out": [1, 128, 16, 256]},
+      "gelu_tanh": {"in": [1, 128, 2112], "out": [1, 128, 2112]}
+    },
+    "tier2_composites": {
+      "rmsnorm_scaled": {"in": [1, 128, 2816], "out": [1, 128, 2816]},
+      "rmsnorm_weightless": {"in": [1, 128, 2816], "out": [1, 128, 2816]},
+      "text_mlp": {"in": [1, 128, 2816], "out": [1, 128, 2816]},
+      "router": {"in": [1, 128, 2816], "out_probs": [1, 128, 128]},
+      "experts_DEFERRED": {"in": [1, 128, 2816], "out": [1, 128, 2816]},
+      "encoder_attention_DEFERRED": {"in": [1, 128, 2816], "out": [1, 128, 2816]},
+      "decoder_attention_DEFERRED": {"in": [1, 128, 2816], "out": [1, 128, 2816]}
+    }
+  }
+}
