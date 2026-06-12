@@ -555,12 +555,18 @@ def _vision_sdpa_compute_config(device, *, math_fidelity: ttnn.MathFidelity) -> 
     instead of round-tripping through DRAM, which directly speeds up the
     inner softmax-reduce loop. ``math_approx_mode=True`` uses the fast
     polynomial path for transcendentals (matches the decode-mode SDPA).
+
+    ``fp32_dest_acc_en=True`` is REQUIRED: the chunked/online softmax accumulates
+    the exp-sum denominator over the full key length (up to 11264 vision tokens).
+    With a bf16 dest accumulator that running sum loses precision catastrophically,
+    collapsing attention toward uniform weights and decorrelating the output
+    (vision-tower PCC vs torch went negative). fp32 accumulation fixes it.
     """
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=math_fidelity,
         math_approx_mode=True,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
 

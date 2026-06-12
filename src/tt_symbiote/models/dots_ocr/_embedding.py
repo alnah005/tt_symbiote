@@ -73,7 +73,7 @@ class TTNNEmbedding(StatelessTTNNModule):
         ttnn.deallocate(self.tt_weight)
         super().deallocate_weights_impl()
 
-    @run_on_devices(DeviceArch.T3K, DeviceArch.P150x4)
+    @run_on_devices(DeviceArch.N300, DeviceArch.T3K, DeviceArch.P150x4)
     def forward(self, tt_indices):
         # Embedding op requires UINT32 input; tokenizer ids arrive as INT32.
         # Typecast requires last dim to be a multiple of 32 for row-major, so

@@ -169,7 +169,7 @@ class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
             tt_out = ttnn.reshape(tt_out, [tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]])
         return tt_out
 
-    @run_on_devices(DeviceArch.T3K, DeviceArch.P150x4)
+    @run_on_devices(DeviceArch.N300, DeviceArch.T3K, DeviceArch.P150x4)
     def forward(self, inp):
         original_shape = inp.shape
         # Sharded LN fast path: decode-shape (M=1) and single-device or pure DP
@@ -204,12 +204,11 @@ class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
 def _select_attention_class():
     """Pick the attention subclass by the active MESH_DEVICE arch at build time.
 
-    T3K uses TTNNDotsOCRAttentionT3K (resurrected 1c50f66 width-sharded
-    nlp_create_qkv_heads + standard rotary_embedding decode). Every other arch
-    (incl. P150x4) uses the dd67664 TTNNDotsOCRAttention. Active-arch-only.
+    T3K/N300/P150x4 use TTNNDotsOCRAttentionT3K (1c50f66 width-sharded
+    nlp_create_qkv_heads + standard rotary_embedding decode). Active-arch-only.
     """
     arch = MeshShapeToDeviceArch.get(os.environ.get("MESH_DEVICE"))
-    if arch is DeviceArch.T3K:
+    if arch in (DeviceArch.T3K, DeviceArch.N300):
         return TTNNDotsOCRAttentionT3K
     return TTNNDotsOCRAttention
 
@@ -269,9 +268,10 @@ class TTNNDotsOCRDecoderLayer(StatefulTTNNModule):
         past_key_value.update_seq_length(layer_idx=layer_idx, seq_len=seq_len)
 
     @run_on_devices(
+        DeviceArch.N300,
         DeviceArch.T3K,
         DeviceArch.P150x4,
-        mesh_shape={DeviceArch.T3K: (8, 1), DeviceArch.P150x4: (4, 1)},
+        mesh_shape={DeviceArch.N300: (2, 1), DeviceArch.T3K: (8, 1), DeviceArch.P150x4: (4, 1)},
     )
     def forward(
         self,
@@ -377,7 +377,7 @@ class TTNNDotsOCRLayerStack(TTNNLayerStack):
                     attn._decode_cur_pos = shared_buf
         self._shared_decode_cur_pos = shared_buf
 
-    @run_on_devices(DeviceArch.T3K, DeviceArch.P150x4)
+    @run_on_devices(DeviceArch.N300, DeviceArch.T3K, DeviceArch.P150x4)
     def forward(self, hidden_states, **kwargs):
         seq_len = hidden_states.shape[-2]
         if (

@@ -606,7 +606,7 @@ class TTNNDotsOCRAttention(StatefulTTNNModule):
         attn_output = ttnn.squeeze(attn_output, 1)
         return attn_output, None
 
-    @run_on_devices(DeviceArch.T3K, DeviceArch.P150x4)
+    @run_on_devices(DeviceArch.N300, DeviceArch.T3K, DeviceArch.P150x4)
     def forward(
         self,
         hidden_states,
@@ -635,11 +635,10 @@ class TTNNDotsOCRAttention(StatefulTTNNModule):
 
 @trace_enabled  # optional (inherited from parent); kept for explicitness
 class TTNNDotsOCRAttentionT3K(TTNNDotsOCRAttention):
-    """T3K-only attention: resurrects the pre-dd67664 (1c50f66) decode.
+    """Width-sharded attention: resurrects the pre-dd67664 (1c50f66) decode.
 
-    Selected at build time by ``dots_ocr_decoder_layer.from_torch`` when
-    ``MESH_DEVICE`` maps to ``DeviceArch.T3K``. The dd67664 parent
-    ``TTNNDotsOCRAttention`` remains the P150x4 path, byte-identical/untouched.
+    Selected at build time by ``dots_ocr_decoder_layer.from_torch`` for
+    T3K/N300/P150x4. The dd67664 parent ``TTNNDotsOCRAttention`` is the fallback.
 
     Overrides exactly three things (everything else inherited):
       * ``from_torch`` builds a KV-group-interleaved ``qkv_proj`` (the layout the
@@ -874,9 +873,10 @@ class TTNNDotsOCRAttentionT3K(TTNNDotsOCRAttention):
         return attn_output, None
 
     @run_on_devices(
+        DeviceArch.N300,
         DeviceArch.T3K,
         DeviceArch.P150x4,
-        mesh_shape={DeviceArch.T3K: (8, 1), DeviceArch.P150x4: (4, 1)},
+        mesh_shape={DeviceArch.N300: (2, 1), DeviceArch.T3K: (8, 1), DeviceArch.P150x4: (4, 1)},
     )
     def forward(self, *args, **kwargs):
         # Re-declared SOLELY to carry the @run_on_devices guard on the T3K path

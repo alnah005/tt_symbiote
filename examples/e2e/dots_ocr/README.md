@@ -1,7 +1,7 @@
 # dots.ocr batched OCR demo
 
 Runs `rednote-hilab/dots.ocr` on a Tenstorrent data-parallel mesh, OCR-ing **`dp`
-different images at once** — one per stream (device `b` → image `b`). DP = 4 or 8.
+different images at once** — one per stream (device `b` → image `b`). DP = 2, 4 or 8.
 
 ## Run
 
@@ -14,9 +14,7 @@ python examples/e2e/dots_ocr/run_dots_ocr.py --image-dir ~/scans/   # your image
 python examples/e2e/dots_ocr/run_dots_ocr.py --images a.png b.jpg
 ```
 
-`--dp 8` → T3K `(8,1)`; `--dp 4` → P150x4 `(4,1)` (the mesh/arch are set
-automatically). Other flags: `--prompt`, `--max-new-tokens` (default 256),
-`--output-dir`. Images beyond `dp` run in successive batches.
+`--dp 2` → N300 `(2,1)`; `--dp 8` → T3K `(8,1)`; `--dp 4` → P150x4 `(4,1)` (the mesh/arch are set automatically). Other flags: `--prompt`, `--max-new-tokens` (default 256), `--output-dir`. Images beyond `dp` run in successive batches.
 
 ## Output
 
