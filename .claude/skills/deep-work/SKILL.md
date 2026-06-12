@@ -9,6 +9,24 @@ You are orchestrating the deep-work flow. Every iteration: produce a deep plan, 
 
 Use `TaskCreate` to track iterations so the user can see progress.
 
+## External Reference Skills (MANDATORY AWARENESS)
+
+When a deep-work iteration involves debugging a correctness/accuracy failure or optimizing
+performance, you MUST read `.claude/skills/_shared/external_agentic_references.md` and have
+the planners + executors operate by the principles of these canonical tt-metal agentic skills
+(binding guidance):
+
+- **autodebug** (inspection) — module-by-module compare vs the reference (HF), complete the
+  causal chain (don't stop at the first plausible bug), and account for async completion
+  boundaries (a host assertion passing does NOT prove queued device work finished).
+- **autofix** (repair loop) — treat every suspected bug as a hypothesis; design the smallest
+  verify/refute experiment; implement the smallest fix ONLY after it is verified; refute and
+  discard the rest. Prefer one forked subagent per hypothesis.
+- **optimize / datatype-sweep** (performance/precision iterations) — Performance Accounting
+  (roofline ↔ device-time ↔ end-to-end) and full-model top-1/top-5 as the acceptance truth.
+
+See the shared file for links + offline `git show` commands + full digests.
+
 ---
 
 ## Phase 0 — Setup

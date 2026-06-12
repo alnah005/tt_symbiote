@@ -7,6 +7,19 @@ description: Run tracy profiling on a model/module test to capture device perfor
 
 Profile a pytest test or standalone script to measure TTNN op device times.
 
+## External Reference Skills (MANDATORY AWARENESS)
+
+Before executing, you MUST read `.claude/skills/_shared/external_agentic_references.md`
+and operate by the principles of this canonical tt-metal agentic skill (binding here):
+
+- **optimize — Performance Accounting**: device time from the tracy CSV is only ONE of three
+  numbers; a profile is most useful when paired with the DRAM roofline and warmed end-to-end
+  ms so the host dispatch-gap is quantified, not just observed. When the structure repeats
+  (decoder layers), profile a representative layer set rather than all N (faster, same per-op
+  device time) and report the composition. Capture a signposted steady-state window.
+
+See the shared file for links + offline `git show` commands + full digests.
+
 ## Conventions (apply to ALL artifacts this skill creates)
 
 **File naming**: Model directories use HuggingFace `transformers` snake_case naming.

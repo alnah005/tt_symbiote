@@ -7,6 +7,25 @@ description: Fully autonomous deep-work driver for 0-to-100 model bring-up on Te
 
 End-to-end autonomous orchestration for bringing up a new HuggingFace model on Tenstorrent hardware. This skill IS the deep-work driver -- it contains the plan-evaluate-execute-replan loop inline and spawns fresh sub-agents as executors for each stage.
 
+## External Reference Skills (MANDATORY AWARENESS)
+
+This orchestrator composes the profiling / optimize / debug stages, so it MUST propagate the
+principles in `.claude/skills/_shared/external_agentic_references.md` into every executor
+prompt for the matching stage (binding guidance, canonical tt-metal agentic skills):
+
+- **optimize** (profiling / config-optimize stages) — Performance Accounting (roofline ↔
+  device-time ↔ end-to-end), remove host gaps, import the canonical precision policy, tune one
+  group at a time on real weights, measure traced.
+- **datatype-sweep** (op-sweep / config-optimize stages) — full-model top-1/top-5 (argmax-
+  agreement vs HF) is the acceptance truth; emit a COMPLETE selected-precision config.
+- **autodebug / autofix** (any accuracy/correctness failure in a stage) — module-by-module
+  compare vs HF, complete the causal chain, account for async completion boundaries; then
+  treat each suspected bug as a hypothesis and keep only verified fixes.
+
+Each executor sub-agent prompt for these stages MUST cite the shared file so the executor
+operates by these principles. See the shared file for links + offline `git show` commands +
+full digests.
+
 ## User Decision Profile
 
 Every decision this orchestrator makes is governed by the following encoded profile. The orchestrator NEVER stops to ask the user. All decisions are made automatically per this table, and every decision is logged with its rationale in `bringup_status.json`.

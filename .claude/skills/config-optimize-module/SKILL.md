@@ -7,6 +7,21 @@ description: Apply optimal config from perf-analysis to a single module via mode
 
 Fine-tune configuration for one specific module.
 
+## External Reference Skills (MANDATORY AWARENESS)
+
+Before executing, you MUST read `.claude/skills/_shared/external_agentic_references.md`
+and operate by the principles of these canonical tt-metal agentic skills (binding here):
+
+- **optimize** — reconcile roofline ↔ device-time ↔ end-to-end from the SAME run; **import
+  the canonical precision/fidelity policy** (`tt_transformers/PERF.md`, `tt/model_config.py`)
+  before inventing one; tune this module's dtype/fidelity one group at a time on REAL weights.
+- **datatype-sweep** — full-model top-1/top-5 (here: argmax-agreement vs HF) is the source of
+  truth, not module PCC alone; record the module's selected config completely.
+- **autofix** (on regression) — hypothesis → smallest verify/refute experiment → keep only
+  verified fixes.
+
+See the shared file for links + offline `git show` commands + full digests.
+
 ## Conventions (apply to ALL artifacts this skill creates)
 
 **File naming**: Model directories use HuggingFace `transformers` snake_case naming.

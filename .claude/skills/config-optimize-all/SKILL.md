@@ -7,6 +7,24 @@ description: Apply optimal configs from perf-analysis to all modules via model-s
 
 Apply the best-known configurations to every module in a model.
 
+## External Reference Skills (MANDATORY AWARENESS)
+
+Before executing, you MUST read `.claude/skills/_shared/external_agentic_references.md`
+and operate by the principles of these canonical tt-metal agentic skills (binding here):
+
+- **optimize** — reconcile roofline ↔ device-time ↔ end-to-end from the SAME run; remove
+  host gaps, don't just note them; **import the canonical precision/fidelity policy**
+  (`tt_transformers/PERF.md`, `tt/model_config.py`) before inventing one; tune ONE dtype
+  group at a time on REAL weights so regressions are assignable.
+- **datatype-sweep** — full-model top-1/top-5 (here: argmax-agreement vs HF + degenerate
+  fraction) is the source of truth, not PCC alone; emit a COMPLETE
+  `selected_precision_config.json` (weight groups, layer exceptions, fidelities, CCL/KV
+  dtype) — "bf8_b weights" alone is incomplete.
+- **autofix** (on PCC/accuracy regression) — treat each suspected cause as a hypothesis;
+  smallest verify/refute experiment first; keep only verified fixes.
+
+See the shared file for links + offline `git show` commands + full digests.
+
 ## Conventions (apply to ALL artifacts this skill creates)
 
 **File naming**: Model directories use HuggingFace `transformers` snake_case naming.

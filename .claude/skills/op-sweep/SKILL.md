@@ -7,6 +7,21 @@ description: Sweep TTNN op configurations (weight dtype, math fidelity, memory l
 
 Systematically explore the configuration space for TTNN ops to find optimal settings.
 
+## External Reference Skills (MANDATORY AWARENESS)
+
+Before executing, you MUST read `.claude/skills/_shared/external_agentic_references.md`
+and operate by the principles of these canonical tt-metal agentic skills (binding here):
+
+- **datatype-sweep** — the sweep is only ordering candidates; **full-model top-1/top-5**
+  (here: argmax-agreement vs HF) is the real acceptance gate, not per-op PCC alone. Seed the
+  grid from the **canonical precision policy** (BF16 activations/norms, BFP8 attn/MLP weights,
+  selective BFP4 MLP/expert) rather than a blunt sweep, and record a COMPLETE selected config.
+- **optimize** — device time comes SOLELY from the tracy CSV (signposted window); pair any
+  chosen config with the roofline ↔ device-time ↔ end-to-end reconciliation before declaring
+  it "best".
+
+See the shared file for links + offline `git show` commands + full digests.
+
 ## Conventions (apply to ALL artifacts this skill creates)
 
 **File naming**: Model directories use HuggingFace `transformers` snake_case naming.

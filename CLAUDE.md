@@ -449,6 +449,14 @@ analyze, optimize, trace) is a separate deep-work cycle: plan (1 planner) -> eva
 execute -> re-plan on failure (up to 3 retries per stage, with up to 2 evaluator rejections
 per retry attempt).
 
+**External Agentic Reference Skills**: `.claude/skills/_shared/external_agentic_references.md`
+lists canonical tt-metal agentic skills (**optimize**, **datatype-sweep**, **autodebug**,
+**autofix**) with commit-pinned links, offline `git show` access, and operating-principle
+digests. Any agent running an optimize/sweep/profile/debug skill (`config-optimize-all`,
+`config-optimize-module`, `op-sweep`, `perf-analysis`, `tracy-profiling`, `model-bringup`,
+`deep-work`) MUST read that file and operate by the relevant principles — those skills carry a
+mandatory-awareness block pointing to it. The principles are binding guidance, not optional.
+
 ## Common Commands
 
 ```bash

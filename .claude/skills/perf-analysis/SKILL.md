@@ -7,6 +7,21 @@ description: Analyze tracy profiling data and sweep results to identify performa
 
 Analyze profiling data to identify bottlenecks and recommend optimizations.
 
+## External Reference Skills (MANDATORY AWARENESS)
+
+Before executing, you MUST read `.claude/skills/_shared/external_agentic_references.md`
+and operate by the principles of this canonical tt-metal agentic skill (binding here):
+
+- **optimize — Performance Accounting**: a bottleneck analysis MUST reconcile THREE numbers
+  from the SAME run — (1) DRAM roofline (bytes-moved-per-token ÷ aggregate DRAM BW),
+  (2) device-time from the signposted `tt-perf-report`/tracy CSV, (3) warmed end-to-end ms —
+  and use the gaps to drive recommendations (`end-to-end = device-time + dispatch-gap +
+  host-work`). **Treat host op-to-op gaps as a primary target, not a footnote.** Reference the
+  canonical precision policy (`tt_transformers/PERF.md`, `tt/model_config.py`) when
+  recommending dtype/fidelity changes.
+
+See the shared file for links + offline `git show` commands + full digests.
+
 ## Conventions (apply to ALL artifacts this skill creates)
 
 **File naming**: Model directories use HuggingFace `transformers` snake_case naming.
