@@ -364,6 +364,11 @@ class TTNNDotsOCRLayerStack(TTNNLayerStack):
         filtered = {k: kwds[k] for k in ("past_key_value", "cache_position") if k in kwds}
         return super().call(*args, **filtered)
 
+    def weight_cache_excluded_attrs(self):
+        # Runtime position buffer, not a weight. Excluding it makes this composite own 0 cacheable
+        # tensors -> always runs _impl -> the recursion over self.layers still runs on warm.
+        return frozenset({"_shared_decode_cur_pos"})
+
     def move_weights_to_device_impl(self):
         super().move_weights_to_device_impl()
         shared_buf = None

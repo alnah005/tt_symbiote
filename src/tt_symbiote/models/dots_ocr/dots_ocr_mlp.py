@@ -75,12 +75,16 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
         else:
             self.tt_bias = None
 
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
+    def configure_runtime(self):
+        # FusedGateUp (DP) config from the parent, then a LoFi override on the TP-CCL branch.
+        super().configure_runtime()
+        if _tp_requires_ccl(self.device):
+            self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
 
     @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor, output_memory_config=None) -> ttnn.Tensor:
@@ -191,14 +195,12 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
             )
         self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
-        self.compute_kernel_config = _decoder_compute_kernel_config()
         # Second weight (DRAM_WIDTH_SHARDED) for the decode DRAM-sharded matmul.
         # Allocated via ``as_tensor`` so no reshard kernel is launched. Prefill
         # uses ``self.tt_weight`` (DRAM_INTERLEAVED). Memory cost: ~7 MB / layer
         # for down_proj (8960x1536 BFP4; N=1536 is exactly 12*32*4 so no padding).
-        self._down_proj_dram_input_shard_cfg = (
-            _decode_down_proj_input_memory_config(self.in_features) if use_dram_sharded else None
-        )
+        # (``compute_kernel_config`` / ``_down_proj_dram_input_shard_cfg`` are NON-TENSOR ->
+        # configure_runtime.)
         self._down_proj_dram_weight = None
         self._down_proj_dram_bias = None
         if use_dram_sharded and raw_weight_torch is not None:
@@ -226,6 +228,12 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
 
     def _get_down_proj_dram_sharded_weight(self):
         return self._down_proj_dram_weight, self._down_proj_dram_bias
+
+    def configure_runtime(self):
+        self.compute_kernel_config = _decoder_compute_kernel_config()
+        self._down_proj_dram_input_shard_cfg = (
+            _decode_down_proj_input_memory_config(self.in_features) if self._down_proj_use_dram_sharded() else None
+        )
 
     @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor, output_memory_config=None) -> ttnn.Tensor:

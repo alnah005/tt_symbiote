@@ -48,17 +48,6 @@ class TTNNDistributedRMSNorm(StatelessTTNNModule):
             mesh_mapper=(ttnn.ShardTensor2dMesh(self.device, dims=(None, 2), mesh_shape=list(self.device.shape))),
         )
         self.weight_distributed = ttnn.to_device(self.weight_distributed, self.device)
-        # Compute kernel matches the proven tt_transformers/multimodal/llama_layernorm.py
-        # pattern: HiFi4 (RMSNorm is sensitive — keep) but fp32_dest_acc_en=False to
-        # double the dst register from 4 -> 8 tiles (~halves the kernel passes), and
-        # packer_l1_acc=False to drop the L1 accumulator buffer. The variance reduction
-        # itself runs in the kernel's internal FP32 path, so output accuracy is preserved.
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-        )
         # Single-device meshes cannot use fabric-backed all_gather in the distributed path.
         self.tt_weight_local = None
         if _mesh_num_devices(self.device) <= 1:
@@ -68,6 +57,16 @@ class TTNNDistributedRMSNorm(StatelessTTNNModule):
                 layout=ttnn.TILE_LAYOUT,
             )
             self.tt_weight_local = ttnn.to_device(self.tt_weight_local, self.device)
+
+    def configure_runtime(self):
+        # Compute kernel matches tt_transformers/multimodal/llama_layernorm.py: HiFi4 (RMSNorm is
+        # sensitive) with fp32_dest_acc_en=False / packer_l1_acc=False.
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
 
     @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, inp):

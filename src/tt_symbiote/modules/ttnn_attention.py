@@ -2049,12 +2049,13 @@ class TTNNBailingMoEAttention(StatefulTTNNModule):
         super().preprocess_weights_impl()
 
     def move_weights_to_device_impl(self):
-        """Move weights to device and initialize SDPA config.
-
-        Note: Base class handles calling move_weights_to_device() on all child modules.
-        """
+        """Canary-clean cold path: only the base recursion into children runs here (sdpa configs +
+        BailingRotarySetup are NON-TENSOR -> configure_runtime)."""
         super().move_weights_to_device_impl()
 
+    def configure_runtime(self):
+        """Parent attention is the SINGLE owner of the ``self.sdpa`` child's program/compute configs;
+        the ``BailingRotarySetup`` builds its device tensors OUTSIDE the canary window here."""
         # Initialize SDPA config when device is available
         if self.sdpa.program_config is None:
             self.sdpa.program_config = ttnn.SDPAProgramConfig(

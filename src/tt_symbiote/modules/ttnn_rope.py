@@ -176,31 +176,32 @@ class TTNNDistributedRotaryPositionEmbedding(StatelessTTNNModule):
     """
 
     def move_weights_to_device_impl(self):
-        # Cache key based on device and mode
-        self._trans_mat_cache = {}
-        for is_decode in [True, False]:
-            cache_key = is_decode
-            if cache_key not in self._trans_mat_cache:
-                # Create transformation matrix: swaps pairs and negates for rotation
-                dhead = ttnn.TILE_SIZE  # Assuming head_dim is equal to tile size for optimal performance
-                trans_mat = torch.zeros(1, 1, dhead, dhead)
-                trans_mat[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
-                trans_mat[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1
+        # The former ``dict`` container of trans matrices is forbidden by the impl-purity gate -> two
+        # FLAT ttnn.Tensor attrs. Content is identical for both modes (only the ``is_decode_mode``
+        # kernel flag differs at call time); both are materialized to preserve the prior behavior.
+        # Create transformation matrix: swaps pairs and negates for rotation
+        dhead = ttnn.TILE_SIZE  # Assuming head_dim is equal to tile size for optimal performance
+        trans_mat = torch.zeros(1, 1, dhead, dhead)
+        trans_mat[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
+        trans_mat[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1
 
-                # Convert to device tensor
-                mesh_mapper = None
-                if isinstance(self.device, ttnn._ttnn.multi_device.MeshDevice):
-                    mesh_mapper = ttnn.ReplicateTensorToMesh(self.device)
+        # Convert to device tensor
+        mesh_mapper = None
+        if isinstance(self.device, ttnn._ttnn.multi_device.MeshDevice):
+            mesh_mapper = ttnn.ReplicateTensorToMesh(self.device)
 
-                trans_mat_tensor = ttnn.from_torch(
-                    trans_mat,
-                    device=self.device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat16,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=mesh_mapper,
-                )
-                self._trans_mat_cache[cache_key] = trans_mat_tensor
+        def _to_device():
+            return ttnn.from_torch(
+                trans_mat,
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
+
+        self._trans_mat_decode = _to_device()
+        self._trans_mat_prefill = _to_device()
 
     @run_on_devices(DeviceArch.T3K)
     def forward(
@@ -246,8 +247,8 @@ class TTNNDistributedRotaryPositionEmbedding(StatelessTTNNModule):
         seq_len = q.shape[2] if len(q.shape) == 4 else q.shape[1]
         is_decode_mode = False  # (seq_len == 1)
 
-        # Get transformation matrix
-        trans_mat = self._trans_mat_cache[is_decode_mode]
+        # trans mat (flat attrs replaced the dict)
+        trans_mat = self._trans_mat_decode if is_decode_mode else self._trans_mat_prefill
 
         # Apply rotary embedding using distributed-optimized operation
         q_rotated = ttnn.experimental.rotary_embedding_llama(

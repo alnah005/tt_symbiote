@@ -4,7 +4,7 @@
 
 """``set_device`` contract tests (no real hardware required).
 
-Verifies the four pieces of the §4.4 contract:
+Verifies the four pieces of the set_device contract:
 
 1. ``_device`` is set on every TTNNModule after ``set_device``.
 2. ``preprocess_weights`` and ``move_weights_to_device`` are called
@@ -26,31 +26,32 @@ import torch.nn as nn
 from tt_symbiote.core.module import DeviceArch, StatelessTTNNModule, TTNNModule, run_on_devices
 from tt_symbiote.utils.device_management import set_device
 
-
-class _StubMeshDevice:
-    """Minimal ``ttnn.MeshDevice`` stand-in for tests."""
-
-    def __init__(self, num_devices: int = 1):
-        self._n = num_devices
-
-    def get_num_devices(self) -> int:
-        return self._n
+# Shared mesh-device stub from conftest (rich superset; here only get_num_devices is read).
+from .conftest import _StubMeshDevice
 
 
 class _CountingTTNNModule(StatelessTTNNModule):
-    """TTNNModule that records preprocess/move calls and exposes a forward."""
+    """TTNNModule recording preprocess/move calls on a mutable holder dict (stable id,
+    len/tensor-membership unchanged) so the canary stays happy."""
 
     def __init__(self):
         super().__init__()
-        self.preprocess_calls = 0
-        self.move_calls = 0
+        self._calls = {"pre": 0, "move": 0}
+
+    @property
+    def preprocess_calls(self):
+        return self._calls["pre"]
+
+    @property
+    def move_calls(self):
+        return self._calls["move"]
 
     def preprocess_weights_impl(self):
-        self.preprocess_calls += 1
+        self._calls["pre"] += 1
         return super().preprocess_weights_impl()
 
     def move_weights_to_device_impl(self):
-        self.move_calls += 1
+        self._calls["move"] += 1
         return super().move_weights_to_device_impl()
 
     def forward(self, *args, **kwargs):

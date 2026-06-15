@@ -822,16 +822,15 @@ class TTNNDotsVisionRMSNorm(StatelessTTNNModule):
             )
 
     def move_weights_to_device_impl(self):
-        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
-
-        self.compute_kernel_config = _vision_sdpa_compute_config(self.device, math_fidelity=VISION_NORM_MATH_FIDELITY)
-
         if self._use_layer_norm:
             self.tt_weight = ttnn.to_device(self.tt_weight, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             if self.tt_bias is not None:
                 self.tt_bias = ttnn.to_device(self.tt_bias, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
             self.tt_weight = ttnn.to_device(self.tt_weight, self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    def configure_runtime(self):
+        self.compute_kernel_config = _vision_sdpa_compute_config(self.device, math_fidelity=VISION_NORM_MATH_FIDELITY)
 
     @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, x: ttnn.Tensor, *, output_l1: bool = False) -> ttnn.Tensor:
@@ -959,8 +958,6 @@ class TTNNDotsVisionMLP(StatelessTTNNModule):
                 return None
             return ttnn.to_device(t, self.device, memory_config=mem)
 
-        self.compute_kernel_config = _vision_matmul_compute_config(self.device, math_fidelity=ttnn.MathFidelity.LoFi)
-
         self.tt_fused_gate_up_weight = _to_dev(getattr(self, "tt_fused_gate_up_weight", None))
         self.tt_fused_gate_up_bias = _to_dev(getattr(self, "tt_fused_gate_up_bias", None))
         self.tt_fc1_weight = _to_dev(getattr(self, "tt_fc1_weight", None))
@@ -969,6 +966,9 @@ class TTNNDotsVisionMLP(StatelessTTNNModule):
         self.tt_fc2_bias = _to_dev(self.tt_fc2_bias)
         self.tt_fc3_weight = _to_dev(getattr(self, "tt_fc3_weight", None))
         self.tt_fc3_bias = _to_dev(getattr(self, "tt_fc3_bias", None))
+
+    def configure_runtime(self):
+        self.compute_kernel_config = _vision_matmul_compute_config(self.device, math_fidelity=ttnn.MathFidelity.LoFi)
 
     @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
@@ -1142,11 +1142,12 @@ class TTNNDotsVisionPatchEmbed(StatelessTTNNModule):
             # (which pads 588→608 on device every forward call) into a plain Tilize.
             tile = 32
             k = self._proj_weight.shape[-1]
-            k_padded = ((k + tile - 1) // tile) * tile
+            k_padded = ((k + tile - 1) // tile) * tile  # LOCAL var only; the int self-attr
+            # ``_proj_k_padded`` is set in configure_runtime so preprocess stays gate-clean
+            # (an int is not an allowed preprocess write).
             w = self._proj_weight.to(torch.bfloat16)
             if k_padded != k:
                 w = F.pad(w, (0, k_padded - k))
-            self._proj_k_padded = k_padded
             self.tt_proj_weight = ttnn.from_torch(
                 w,
                 dtype=ttnn.bfloat8_b,
@@ -1180,6 +1181,13 @@ class TTNNDotsVisionPatchEmbed(StatelessTTNNModule):
         if self.tt_norm_weight is not None:
             self.tt_norm_weight = ttnn.to_device(self.tt_norm_weight, self.device, memory_config=mem)
 
+    def configure_runtime(self):
+        # Recompute the padded-K int that preprocess stashed; the source survives (_proj_weight is
+        # never del'd). Pure Python int math on a .shape[-1] read -- no torch.
+        if self._proj_weight is not None:
+            tile = 32
+            k = int(self._proj_weight.shape[-1])
+            self._proj_k_padded = ((k + tile - 1) // tile) * tile
         self.vision_matmul_compute_kernel_config = _vision_matmul_compute_config(
             self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
         )
@@ -1318,6 +1326,8 @@ class TTNNDotsVisionAttention(StatelessTTNNModule):
         self.tt_qkv_bias = None
         self.tt_o_proj_weight = None
         self.tt_o_proj_bias = None
+        self.compute_kernel_config = None  # set in configure_runtime
+        self.sdpa_compute_kernel_config = None
 
     @classmethod
     def from_torch(cls, hf_attn, hidden_size=1536, num_heads=12):
@@ -1386,15 +1396,15 @@ class TTNNDotsVisionAttention(StatelessTTNNModule):
                 return None
             return ttnn.to_device(t, self.device, memory_config=mem)
 
-        self.compute_kernel_config = _vision_matmul_compute_config(
-            self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
-        )
-
         self.tt_qkv_weight = _to_dev(self.tt_qkv_weight)
         self.tt_qkv_bias = _to_dev(self.tt_qkv_bias)
         self.tt_o_proj_weight = _to_dev(self.tt_o_proj_weight)
         self.tt_o_proj_bias = _to_dev(self.tt_o_proj_bias)
 
+    def configure_runtime(self):
+        self.compute_kernel_config = _vision_matmul_compute_config(
+            self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
+        )
         self.sdpa_compute_kernel_config = _vision_sdpa_compute_config(
             self.device, math_fidelity=VISION_SDPA_MATH_FIDELITY
         )
@@ -1987,10 +1997,17 @@ class TTNNDotsPatchMerger(StatelessTTNNModule):
         else:
             self.tt_w2 = _to_dev(self.tt_w2)
             self.tt_w2_bias = _to_dev(self.tt_w2_bias)
+        # NOTE: the READ of self._batched_full_hidden above is a BUILD-TIME input flag relayed
+        # at construction time in pipeline.py (NOT a gate offender; never WRITTEN in any _impl).
 
+    def configure_runtime(self):
         self.compute_kernel_config = _vision_matmul_compute_config(
             self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
         )
+
+    def weight_cache_variant(self) -> str:
+        # Fold the build-time _batched_full_hidden flag so batched vs non-batched w2 never collide.
+        return f"bf{int(self._batched_full_hidden)}"
 
     @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
@@ -2198,6 +2215,9 @@ class TTNNDotsOCRVisionTower(StatelessTTNNModule):
     Full pipeline: PatchEmbed -> 42 VisionBlocks -> post-trunk RMSNorm -> PatchMerger.
     """
 
+    # Process-memoized 2D-RoPE setups keyed on (id(device), head_dim, spatial_merge_size, theta).
+    _shared_rope_setups: dict = {}
+
     def __init__(self):
         super().__init__()
         self._hf_config = None
@@ -2303,13 +2323,11 @@ class TTNNDotsOCRVisionTower(StatelessTTNNModule):
                 self.patch_merger.preprocess_weights()
 
     def move_weights_to_device_impl(self):
-        # ADDITIVE: propagate the batched-vision flag to the merger BEFORE its
-        # weights move, so move_weights_to_device_impl sees _batched_full_hidden
-        # and loads w2 REPLICATED. No-op when self._batched_vision is False
-        # (default) -> the merger keeps its default col-shard path.
-        if self.patch_merger is not None:
-            self.patch_merger._batched_full_hidden = self._batched_vision
-
+        # NON-TENSOR writes (the parent-sets-child ``_batched_full_hidden`` relay and
+        # ``self.rope``) are NOT done here -- the merger flag is relayed at BUILD TIME in
+        # pipeline.py and self.rope is rebuilt in configure_runtime. This composite owns 0
+        # cacheable tensors -> always runs _impl -> recurses, so the vision leaves load
+        # independently on warm.
         if self.patch_embed is not None:
             self.patch_embed.move_weights_to_device()
         if self.block_stack is not None:
@@ -2322,11 +2340,18 @@ class TTNNDotsOCRVisionTower(StatelessTTNNModule):
             if self.patch_merger is not None:
                 self.patch_merger.move_weights_to_device()
 
-        self.rope = TTNNDotsVision2DRoPE(
-            device=self.device,
-            head_dim=self.head_dim,
-            spatial_merge_size=self.spatial_merge_size,
-        )
+    def configure_runtime(self):
+        # Rebuild self.rope (process-memoized; cheap torch __init__, device work deferred to
+        # rope.build() at forward). Runs on cold AND warm.
+        key = (id(self.device), self.head_dim, self.spatial_merge_size, 10000.0)
+        cache = TTNNDotsOCRVisionTower._shared_rope_setups
+        if key not in cache:
+            cache[key] = TTNNDotsVision2DRoPE(
+                device=self.device,
+                head_dim=self.head_dim,
+                spatial_merge_size=self.spatial_merge_size,
+            )
+        self.rope = cache[key]
 
     def to_device(self, device):
         super().to_device(device)
