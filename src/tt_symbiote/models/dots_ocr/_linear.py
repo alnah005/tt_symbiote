@@ -11,6 +11,7 @@ import ttnn
 from torch import nn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
+from tt_symbiote.core.arch import is_blackhole
 from tt_symbiote.core.module import (
     SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS,
     StatelessTTNNModule,
@@ -98,6 +99,32 @@ def _dp_prefill_matmul_program_config(device, input_shape, weight_shape):
 
     tile = 32
     k_tiles = math.ceil(k_dim / tile)
+
+    if is_blackhole():
+        n_tiles = math.ceil(n_dim / tile)
+        m_tiles = math.ceil(m_dim / tile)
+        grid_x = _largest_divisor_at_most(n_tiles, grid_x)
+        per_core_n = n_tiles // grid_x
+        per_core_m = math.ceil(m_tiles / grid_y)
+        if per_core_n > 24:
+            return None
+        if k_tiles % grid_y == 0:
+            in0_block_w = _largest_divisor_at_most(k_tiles // grid_y, 8)
+        else:
+            in0_block_w = 2 if k_tiles % 2 == 0 else 1
+        out_subblock_h = 1
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(grid_x, grid_y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=_out_subblock_w(per_core_n, out_subblock_h),
+            per_core_M=per_core_m,
+            per_core_N=per_core_n,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+
     per_core_m = math.ceil(m_dim / (tile * grid_y))
     per_core_n = math.ceil(n_dim / (tile * grid_x))
 

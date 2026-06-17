@@ -208,7 +208,7 @@ def _select_attention_class():
     nlp_create_qkv_heads + standard rotary_embedding decode). Active-arch-only.
     """
     arch = MeshShapeToDeviceArch.get(os.environ.get("MESH_DEVICE"))
-    if arch in (DeviceArch.T3K, DeviceArch.N300):
+    if arch in (DeviceArch.T3K, DeviceArch.N300, DeviceArch.P150x4):
         return TTNNDotsOCRAttentionT3K
     return TTNNDotsOCRAttention
 
