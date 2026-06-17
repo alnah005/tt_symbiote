@@ -194,17 +194,6 @@ def set_device(obj, device) -> None:
     dump_visualization = bool(getattr(obj, "_tt_dump_visualization", False))
     device_init = DeviceInit  # never overridden anywhere in-tree
 
-    # ttnn/model compatibility gate, secondary hook: covers hand-constructed models
-    # that bypass AutoModel*.from_pretrained. De-duplicated against the
-    # from_pretrained call so a normal load path warns at most once. No-op for
-    # models absent from RUNTIME_PINS.
-    try:
-        from tt_symbiote.utils.runtime_compat import check_ttnn_compat
-
-        check_ttnn_compat(type(obj).__name__)
-    except Exception:
-        pass
-
     try:
         from tt_symbiote.utils.compatibility import reset_swapped_registry
 

@@ -19,7 +19,6 @@ from typing import Any, Optional, Type
 
 from tt_symbiote.models.auto.auto_mappings import TT_MODEL_REGISTRY
 from tt_symbiote.utils.module_replacement import register_modules
-from tt_symbiote.utils.runtime_compat import check_ttnn_compat
 
 __all__ = ["_BaseAutoModelClass", "_BaseAutoBackboneClass"]
 
@@ -95,10 +94,6 @@ class _BaseAutoModelClass:
             m._tt_register_forward_hook = register_forward_hook
 
         hf_class_name = type(model).__name__
-        # Warn (or, under TT_SYMBIOTE_STRICT_TTNN=1, raise) if the installed ttnn's
-        # tt-metal commit != the one this recipe was verified against. No-op for
-        # models absent from RUNTIME_PINS.
-        check_ttnn_compat(hf_class_name)
         recipe = TT_MODEL_REGISTRY.get(hf_class_name)
         if recipe is None:
             warnings.warn(

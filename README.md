@@ -58,18 +58,14 @@ pip install "tt_symbiote[all]"     # every model's optional deps
 ```
 
 The install pulls the transitive HF stack (`torch`, `transformers==5.9.0`,
-`accelerate`, `tokenizers`, …) plus the `ttnn` runtime from PyPI. The `[vision]`
-extra adds `torchvision`, which HF's multimodal `AutoProcessor` classes require
-(mirrors the upstream `transformers[vision]` extra).
+`accelerate`, `tokenizers`, …). The `[vision]` extra adds `torchvision`, which
+HF's multimodal `AutoProcessor` classes require (mirrors the upstream
+`transformers[vision]` extra).
 
-> **One ttnn runtime per release.** This release pins `ttnn==0.68.0`. A process
-> can import exactly one `ttnn`, so each model *also* records the specific
-> `tt_metal_commit` it was verified against — metadata enforced at load time by a
-> compatibility gate that warns when the installed `ttnn` was built from a
-> different commit (see
-> [`docs/development/ttnn_pinning.md`](docs/development/ttnn_pinning.md)).
-> Contributors can override the pinned wheel with a tt-metal source build at
-> `$TT_METAL_HOME`; `import tt_symbiote` auto-wires it.
+> **ttnn is provided by the environment, not pip.** `ttnn` is built from tt-metal
+> at `$TT_METAL_HOME` (like `tracy`) and is never declared as a dependency, so
+> installing `tt_symbiote` never tries to resolve a ttnn wheel. A process can
+> import exactly one `ttnn`; `import tt_symbiote` auto-wires the source build.
 >
 > ttnn JIT-compiles firmware kernels at the first `open_mesh_device(...)` call
 > using the `sfpi` RISC-V toolchain. See

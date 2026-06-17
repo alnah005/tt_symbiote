@@ -162,7 +162,7 @@ class TTNNPagedAttentionKVCache(Cache):
         so the default contiguous mapping (and therefore every existing numeric
         result) is unchanged. It is the single shared hook that unlocks paged
         vLLM serving (Tier S2) for every tt_symbiote model whose attention uses
-        this cache. See docs/development/tt_inference_server_integration.md §9.
+        this cache.
 
         Args:
             page_table: int32 tensor ``[batch, blocks_per_sequence]`` mapping

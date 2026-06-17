@@ -6,7 +6,7 @@
 This validates the single shared seam that lets tt-inference-server's vLLM
 backend drive ``TTNNPagedAttentionKVCache`` with an externally-managed (vLLM
 block-manager) page table, instead of the cache's default contiguous identity
-mapping. See docs/development/tt_inference_server_integration.md §9.
+mapping.
 
 It uses a small GLM4-MoE-Lite attention (random weights via ``from_config`` so
 there is no large download) as the vehicle, because that attention module routes
