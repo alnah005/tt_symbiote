@@ -32,7 +32,7 @@ from typing import Optional
 
 from tt_symbiote.models._runtime_pins import RUNTIME_PINS, TTNN_VERSION_COMMITS
 
-__all__ = ["check_ttnn_compat", "installed_ttnn_commit", "reset_warned"]
+__all__ = ["check_ttnn_compat", "ensure_ttnn_available", "installed_ttnn_commit", "reset_warned"]
 
 # (hf_class_name, want_commit, have_commit) tuples already emitted, so the two
 # hook sites (from_pretrained + set_device) don't double-warn for one model.
@@ -73,9 +73,9 @@ def installed_ttnn_commit() -> Optional[str]:
 
 def _install_hint() -> str:
     return (
-        " The release ships a single ttnn runtime; to reproduce the verified result, "
-        "install/build the ttnn matching the recipe's tt_metal_commit "
-        "(see docs/development/ttnn_pinning.md)."
+        " ttnn is source-built (never pip-installed); to reproduce the verified "
+        "result, build ttnn from the recipe's tt_metal_commit "
+        "(see the Installation section of the README)."
     )
 
 
@@ -122,3 +122,47 @@ def check_ttnn_compat(hf_class_name: str) -> None:
     if os.environ.get("TT_SYMBIOTE_STRICT_TTNN") == "1":
         raise RuntimeError(msg)
     warnings.warn(msg, stacklevel=2)
+
+
+def ensure_ttnn_available(hf_class_name: Optional[str] = None) -> None:
+    """Raise a clear, actionable :class:`ImportError` if ttnn is not importable.
+
+    ttnn is provided by a tt-metal SOURCE BUILD (never a PyPI wheel) and is
+    intentionally NOT a pip dependency of tt_symbiote. This surfaces a
+    model-aware message — naming the
+    recipe's pinned ``tt_metal_commit`` when ``hf_class_name`` is known — instead
+    of letting a bare ``ModuleNotFoundError: No module named 'ttnn'`` surface deep
+    inside a modeling module.
+
+    No-op when ttnn is importable. Treats a ``sys.modules['ttnn']`` entry as
+    present (covers the ``tests/auto`` / release-smoke stub) before falling back
+    to :func:`importlib.util.find_spec`. Never raises anything but ``ImportError``.
+    """
+    if sys.modules.get("ttnn") is not None:
+        return
+    try:
+        import importlib.util
+
+        if importlib.util.find_spec("ttnn") is not None:
+            return
+    except (ImportError, ValueError):
+        pass
+
+    commit = ""
+    if hf_class_name:
+        try:
+            commit = (RUNTIME_PINS.get(hf_class_name) or {}).get("tt_metal_commit") or ""
+        except Exception:
+            commit = ""
+    detail = (
+        f" {hf_class_name} is verified against tt-metal commit {commit[:12]}; build ttnn "
+        f"from that commit."
+        if commit
+        else ""
+    )
+    raise ImportError(
+        "tt_symbiote requires `ttnn`, which is provided by a tt-metal SOURCE BUILD "
+        "(not a PyPI wheel) and is not installed. Build tt-metal at the model's pinned "
+        "commit and point $TT_METAL_HOME at it so `ttnn` is importable." + detail
+        + " See the Installation section of the README."
+    )

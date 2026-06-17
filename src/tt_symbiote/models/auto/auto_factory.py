@@ -19,7 +19,7 @@ from typing import Any, Optional, Type
 
 from tt_symbiote.models.auto.auto_mappings import TT_MODEL_REGISTRY
 from tt_symbiote.utils.module_replacement import register_modules
-from tt_symbiote.utils.runtime_compat import check_ttnn_compat
+from tt_symbiote.utils.runtime_compat import check_ttnn_compat, ensure_ttnn_available
 
 __all__ = ["_BaseAutoModelClass", "_BaseAutoBackboneClass"]
 
@@ -95,6 +95,9 @@ class _BaseAutoModelClass:
             m._tt_register_forward_hook = register_forward_hook
 
         hf_class_name = type(model).__name__
+        # Fail fast with a model-aware message if ttnn (a tt-metal source build,
+        # never a pip dep) is missing, naming this recipe's pinned commit.
+        ensure_ttnn_available(hf_class_name)
         # Warn (or, under TT_SYMBIOTE_STRICT_TTNN=1, raise) if the installed ttnn's
         # tt-metal commit != the one this recipe was verified against. No-op for
         # models absent from RUNTIME_PINS.

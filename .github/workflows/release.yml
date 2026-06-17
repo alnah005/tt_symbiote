@@ -58,21 +58,22 @@ jobs:
           name: dist
           path: dist/
       - name: install built wheel
-        # `ttnn==0.68.0` IS resolved from PyPI here (it's a hard dep
-        # since 0.1.1), so the install side of the smoke test exercises
-        # the real dependency graph that a PyPI user gets.
+        # ttnn is NOT a dependency of the wheel (it is source-build-only), so
+        # this install pulls only the real, ttnn-free dependency graph that a
+        # PyPI user gets — and crucially can never overwrite a source-built ttnn.
         run: python -m pip install dist/*.whl
       - name: import tt_symbiote (ttnn pre-stubbed; CI has no sfpi)
         run: |
           python - <<'PY'
           import sys
           from unittest.mock import MagicMock
-          # The wheel install above DOES pull a real `ttnn==0.68.0` from
-          # PyPI. We still pre-stub `sys.modules["ttnn"]` here because
-          # the GitHub Actions runner has no /opt/tenstorrent/sfpi/
-          # toolchain installed — letting the real ttnn module load
-          # would either crash at import-time (looking up sfpi paths)
-          # or, if it survived import, crash at first
+          # ttnn is NOT installed by the wheel above. We pre-stub
+          # `sys.modules["ttnn"]` so the import guard in tt_symbiote's
+          # __init__ (which treats a sys.modules entry as "ttnn present")
+          # is satisfied without a real build: the GitHub Actions runner
+          # has no /opt/tenstorrent/sfpi/ toolchain, so letting a real
+          # ttnn load would either crash at import-time (looking up sfpi
+          # paths) or, if it survived import, crash at first
           # `open_mesh_device(...)`. The goal of the smoke step is to
           # catch packaging errors (missing files, broken
           # from_pretrained imports, syntax errors at module load),
