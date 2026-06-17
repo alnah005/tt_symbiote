@@ -10,6 +10,7 @@ no real ttnn (``tests/auto/conftest.py`` installs sys.modules stubs).
 """
 
 import json
+import re
 import sys
 import warnings
 from pathlib import Path
@@ -141,3 +142,44 @@ def test_pyproject_extras_in_sync_with_registry():
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+# --- ttnn is never an installable dependency (source-build-only) ------------- #
+
+
+def _req_name(spec: str) -> str:
+    """Distribution name from a PEP 508 requirement string (lowercased)."""
+    return re.split(r"[\s<>=!~;@\[\(]", spec.strip(), maxsplit=1)[0].lower()
+
+
+def test_pyproject_has_no_ttnn_dependency():
+    """ttnn must NOT appear in installable deps -- it is source-build-only, and a
+    PyPI wheel would silently overwrite the source build from the pinned commit."""
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # py<3.11
+        tomllib = pytest.importorskip("tomli")
+    data = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text())
+    deps = data["project"]["dependencies"]
+    offenders = [d for d in deps if _req_name(d) == "ttnn"]
+    assert not offenders, f"ttnn must not be an installable dependency: {offenders}"
+
+
+def test_ensure_ttnn_available_noop_when_present():
+    """conftest installs a sys.modules['ttnn'] stub -> treated as available."""
+    runtime_compat.ensure_ttnn_available()
+    runtime_compat.ensure_ttnn_available(_DOTS)
+
+
+def test_ensure_ttnn_available_raises_when_absent(monkeypatch):
+    monkeypatch.delitem(sys.modules, "ttnn", raising=False)
+    monkeypatch.setattr("importlib.util.find_spec", lambda name, *a, **k: None)
+    with pytest.raises(ImportError, match="tt-metal SOURCE BUILD"):
+        runtime_compat.ensure_ttnn_available()
+
+
+def test_ensure_ttnn_available_message_names_model_commit(monkeypatch):
+    monkeypatch.delitem(sys.modules, "ttnn", raising=False)
+    monkeypatch.setattr("importlib.util.find_spec", lambda name, *a, **k: None)
+    with pytest.raises(ImportError, match=re.escape(_DOTS_COMMIT[:12])):
+        runtime_compat.ensure_ttnn_available(_DOTS)

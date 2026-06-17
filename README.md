@@ -58,18 +58,20 @@ pip install "tt_symbiote[all]"     # every model's optional deps
 ```
 
 The install pulls the transitive HF stack (`torch`, `transformers==5.9.0`,
-`accelerate`, `tokenizers`, …) plus the `ttnn` runtime from PyPI. The `[vision]`
-extra adds `torchvision`, which HF's multimodal `AutoProcessor` classes require
-(mirrors the upstream `transformers[vision]` extra).
+`accelerate`, `tokenizers`, …). The `[vision]` extra adds `torchvision`, which
+HF's multimodal `AutoProcessor` classes require (mirrors the upstream
+`transformers[vision]` extra).
 
-> **One ttnn runtime per release.** This release pins `ttnn==0.68.0`. A process
-> can import exactly one `ttnn`, so each model *also* records the specific
+> **`ttnn` is NOT installed by pip — you must provide it from source.** `ttnn` is
+> a compiled extension tied to a specific `tt-metal` commit, so `tt_symbiote`
+> deliberately does **not** depend on it: a PyPI `ttnn` wheel would silently
+> overwrite the source build and corrupt numerics. Build `tt-metal` at the
+> model's pinned commit and set `$TT_METAL_HOME` so `ttnn` is importable;
+> `import tt_symbiote` auto-wires the source-built `ttnn` (and raises a clear,
+> actionable error if none is found). Each model records the specific
 > `tt_metal_commit` it was verified against — metadata enforced at load time by a
 > compatibility gate that warns when the installed `ttnn` was built from a
-> different commit (see
-> [`docs/development/ttnn_pinning.md`](docs/development/ttnn_pinning.md)).
-> Contributors can override the pinned wheel with a tt-metal source build at
-> `$TT_METAL_HOME`; `import tt_symbiote` auto-wires it.
+> different commit.
 >
 > ttnn JIT-compiles firmware kernels at the first `open_mesh_device(...)` call
 > using the `sfpi` RISC-V toolchain. See

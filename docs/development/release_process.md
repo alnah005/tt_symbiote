@@ -98,8 +98,10 @@ python -m venv /tmp/tt_smoke
 /tmp/tt_smoke/bin/python - <<'PY'
 import sys
 from unittest.mock import MagicMock
-# /tmp/tt_smoke has no Tenstorrent hardware. MagicMock (vs
-# types.ModuleType) so eager attribute accesses at module load time
+# /tmp/tt_smoke has no Tenstorrent hardware, AND the wheel does NOT
+# install ttnn (it is source-build-only, never a pip dep), so we stub
+# `sys.modules["ttnn"]` to satisfy tt_symbiote's import guard. MagicMock
+# (vs types.ModuleType) so eager attribute accesses at module load time
 # (e.g. `ttnn.float32`) get a usable, hashable placeholder.
 # tracy does NOT need stubbing — core/run_config.py has a fallback
 # no-op signpost when tracy is unavailable.
@@ -120,14 +122,18 @@ pip index versions tt_symbiote 2>&1 || true
 #   pyproject.toml *before* publishing.
 ```
 
-### Phase 2 — bump the `(ttnn, sfpi)` pair (skip if unchanged)
+### Phase 2 — bump the ttnn provenance / source-build pin (skip if unchanged)
 
-If this release ships a new `ttnn` wheel, bump these two files **in
-the same commit** so the bootstrap script and the PyPI extra never
-disagree:
+`ttnn` is **never** a dependency of the published wheel — it is built from
+source at each model's pinned tt-metal commit. So a release never ships a ttnn
+wheel; there is nothing in `pyproject.toml` to bump. If the verified runtime
+changed, update **in the same commit**:
 
-- [`scripts/ttnn-pin.txt`](../scripts/ttnn-pin.txt)
-- [`pyproject.toml`](../pyproject.toml) → `[project.optional-dependencies].ttnn`
+- [`scripts/ttnn-pin.txt`](../scripts/ttnn-pin.txt) — the source-build pin the
+  bootstrap script uses.
+- `RELEASE_TTNN` (and the `version → commit` entry in `TTNN_VERSION_COMMITS`) in
+  [`src/tt_symbiote/models/_runtime_pins.py`](../src/tt_symbiote/models/_runtime_pins.py)
+  — provenance only, consumed by the runtime gate; not installed.
 
 Then rerun Phase 1.
 
@@ -184,9 +190,19 @@ python -m venv /tmp/tt_test
 rm -rf /tmp/tt_test
 
 # After dispatch with target=pypi (skip for rcN versions):
+# NOTE: the wheel does NOT install ttnn (source-build-only), so import it with a
+# stub here too — a real `import ttnn` only works in a venv with a source-built
+# ttnn (validated by the on-device demo below).
 python -m venv /tmp/tt_prod
 /tmp/tt_prod/bin/pip install "tt_symbiote==$VERSION"
-/tmp/tt_prod/bin/python -c "import tt_symbiote, ttnn; print(tt_symbiote.__version__, ttnn.__version__)"
+/tmp/tt_prod/bin/python - <<'PY'
+import sys
+from unittest.mock import MagicMock
+for n in ("ttnn", "ttnn.model_preprocessing", "ttnn.distributed"):
+    sys.modules[n] = MagicMock()
+import tt_symbiote
+print(tt_symbiote.__version__)
+PY
 rm -rf /tmp/tt_prod
 ```
 
@@ -275,5 +291,5 @@ removes both problems:
   phase history that the version numbers track (internal-only,
   excluded from sdist).
 - [`../scripts/bootstrap_venv.sh`](../scripts/bootstrap_venv.sh) —
-  the contributor install path that runs *against* the same pin the
-  PyPI extra ships.
+  the contributor install path that builds/wires `ttnn` from source
+  (`scripts/ttnn-pin.txt`); the published wheel ships no ttnn.
