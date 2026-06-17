@@ -134,6 +134,8 @@ GRANDFATHERED_NEEDS_UPGRADE = {"bailing_moe_v2", "gemma4", "qwen3_vl", "resnet"}
 RUN_ON_DEVICES_EXEMPT = {
     ("src/tt_symbiote/core/module.py", "TTNNModule"),  # NotImplementedError stub
     ("src/tt_symbiote/core/module.py", "TTNNLayerStack"),  # arch-agnostic dispatcher
+    ("src/tt_symbiote/core/d2d_bridge.py", "D2DBridge"),  # overrides call(); forward() only raises
+    ("src/tt_symbiote/core/d2d_pipeline.py", "Pipeline"),  # overrides call(); forward() only raises
 }
 # (model, tier) cells whose TTNN component is genuinely DEFERRED in src. An empty dir here is a
 # sanctioned deferral, not a defect. Source of truth: the model's own deferred list

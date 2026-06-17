@@ -560,9 +560,7 @@ def run_on_devices(
                 try:
                     from tt_symbiote.core.arch import determine_device_name
 
-                    mesh_device = MeshShapeToDeviceArch.get(
-                        determine_device_name(self.device)
-                    )
+                    mesh_device = MeshShapeToDeviceArch.get(determine_device_name(self.device))
                 except Exception:
                     mesh_device = None
             if mesh_device is None:

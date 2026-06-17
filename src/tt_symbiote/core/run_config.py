@@ -376,14 +376,23 @@ def to_ttnn_wrap_keep_torch(e):
     return e
 
 
-def set_device_wrap(device):
+def set_device_wrap(device, module_name=None):
     from tt_symbiote.core.tensor import TorchTTNNTensor
 
     def _set_device_wrap(e):
-        if isinstance(e, ttnn.Tensor) and device is not None and e.device() != device:
-            e = ttnn.to_device(e, device)
-        elif isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None and e.ttnn_tensor.device() != device:
-            e.ttnn_tensor = ttnn.to_device(e.ttnn_tensor, device)
+        # host->device allowed; on-device -> different-device RAISES (route via D2DBridge).
+        if isinstance(e, ttnn.Tensor) and device is not None:
+            dev = e.device()
+            if dev is None:
+                e = ttnn.to_device(e, device)
+            elif dev != device:
+                raise RuntimeError(_cross_device_msg(dev, device, module_name))
+        elif isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None and device is not None:
+            dev = e.ttnn_tensor.device()
+            if dev is None:
+                e.ttnn_tensor = ttnn.to_device(e.ttnn_tensor, device)
+            elif dev != device:
+                raise RuntimeError(_cross_device_msg(dev, device, module_name))
         if isinstance(e, TorchTTNNTensor) and e.ttnn_tensor is not None:
             assert e.ttnn_tensor.device() is not None
         return e
@@ -431,23 +440,40 @@ def compose_transforms(*transforms):
     return _composed
 
 
-def fast_unwrap_to_device(device):
-    """Lightweight transform: extract ttnn.Tensor and ensure on-device. No TorchTTNNTensor wrapping."""
+def fast_unwrap_to_device(device, module_name=None):
+    """Extract the ttnn.Tensor on-device; raise on a cross-device move (names the module)."""
     from tt_symbiote.core.tensor import TorchTTNNTensor
 
     def _transform(e):
         if isinstance(e, TorchTTNNTensor):
             t = e.ttnn_tensor if e.ttnn_tensor is not None else e.to_ttnn
-            if device is not None and t.device() != device:
-                t = ttnn.to_device(t, device)
+            if device is not None:
+                dev = t.device()
+                if dev is None:
+                    t = ttnn.to_device(t, device)
+                elif dev != device:
+                    raise RuntimeError(_cross_device_msg(dev, device, module_name))
             return t
         elif isinstance(e, ttnn.Tensor):
-            if device is not None and e.device() != device:
-                e = ttnn.to_device(e, device)
+            if device is not None:
+                dev = e.device()
+                if dev is None:
+                    e = ttnn.to_device(e, device)
+                elif dev != device:
+                    raise RuntimeError(_cross_device_msg(dev, device, module_name))
             return e
         return e
 
     return _transform
+
+
+def _cross_device_msg(found_device, module_device, module_name=None) -> str:
+    who = f"{module_name}: " if module_name else ""
+    return (
+        f"{who}refusing to move an on-device tensor from {found_device} to {module_device}: "
+        f"cross-device tensor movement is forbidden. Route cross-device data through a "
+        f"tt_symbiote.core.d2d_bridge.D2DBridge (on-device socket transfer)."
+    )
 
 
 def post_process_ttnn_module_output(self, result):
@@ -599,9 +625,11 @@ class NormalRun:
         )
         bypass = getattr(self, "_bypass_tensor_wrapping", False)
         if bypass:
-            transform = fast_unwrap_to_device(self.device)
+            transform = fast_unwrap_to_device(self.device, self.module_name)
         else:
-            transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
+            transform = compose_transforms(
+                wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device, self.module_name)
+            )
         _map = flat_map_bypass if bypass else tree_map
         func_args = _map(transform, args)
         # TODO: fix kwds not being passed correctly
@@ -681,9 +709,11 @@ class NormalRunWithFallback(NormalRun):
             return self._fallback_torch_layer(*args, **kwds)
         bypass = getattr(self, "_bypass_tensor_wrapping", False)
         if bypass:
-            transform = fast_unwrap_to_device(self.device)
+            transform = fast_unwrap_to_device(self.device, self.module_name)
         else:
-            transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
+            transform = compose_transforms(
+                wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device, self.module_name)
+            )
         func_args = tree_map(transform, args)
         func_kwargs = tree_map(transform, kwds)
         self.preprocess_weights()
@@ -727,7 +757,7 @@ class SELRun(NormalRun):
         torch_output = tree_map(wrap_to_torch_ttnn_tensor, self._fallback_torch_layer(*torch_args, **torch_kwargs))
         result = torch_output
         if self.device is not None:
-            transform = compose_transforms(to_ttnn_wrap, set_device_wrap(self.device))
+            transform = compose_transforms(to_ttnn_wrap, set_device_wrap(self.device, self.module_name))
             ttnn_args = tree_map(transform, torch_args)
             ttnn_kwargs = tree_map(transform, torch_kwargs)
             self.preprocess_weights()
@@ -765,7 +795,9 @@ class DPLRun(NormalRun):
         torch_output = tree_map(wrap_to_torch_ttnn_tensor, self._fallback_torch_layer(*torch_args, **torch_kwargs))
         result = torch_output
         if self.device is not None:
-            transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
+            transform = compose_transforms(
+                wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device, self.module_name)
+            )
             ttnn_args = tree_map(transform, torch_args)
             ttnn_kwargs = tree_map(transform, torch_kwargs)
             self.preprocess_weights()
@@ -806,7 +838,9 @@ class DPLRunNoErrorProp(NormalRun):
         if self.device is not None:
             independent_ttnn_args = tree_map(copy_to_ttnn(self.__class__.__name__), args)
             independent_ttnn_kwargs = tree_map(copy_to_ttnn(self.__class__.__name__), kwds)
-            transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
+            transform = compose_transforms(
+                wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device, self.module_name)
+            )
             ttnn_args = tree_map(transform, independent_ttnn_args)
             ttnn_kwargs = tree_map(transform, independent_ttnn_kwargs)
             self.preprocess_weights()
@@ -1308,9 +1342,11 @@ class TracedRun(LightweightRun):
         # Transform inputs
         bypass = getattr(self, "_bypass_tensor_wrapping", False)
         if bypass:
-            transform = fast_unwrap_to_device(self.device)
+            transform = fast_unwrap_to_device(self.device, self.module_name)
         else:
-            transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
+            transform = compose_transforms(
+                wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device, self.module_name)
+            )
         _map = flat_map_bypass if bypass else tree_map
         func_args = _map(transform, args)
         other_kwargs = {k: v for k, v in kwds.items() if "past_key_value" not in k}
@@ -1438,15 +1474,21 @@ class TracedRun(LightweightRun):
         return post_process_ttnn_module_output(self, result)
 
 
+@contextlib.contextmanager
+def trace_running():
+    global _TRACE_RUNNING
+    was_tracing = _TRACE_RUNNING
+    _TRACE_RUNNING = True
+    try:
+        yield
+    finally:
+        _TRACE_RUNNING = was_tracing
+
+
 def disable_trace(fn):
     def new_fn(*args, **kwargs):
-        global _TRACE_RUNNING
-        was_tracing = _TRACE_RUNNING
-        _TRACE_RUNNING = True
-        try:
+        with trace_running():
             return fn(*args, **kwargs)
-        finally:
-            _TRACE_RUNNING = was_tracing
 
     return new_fn
 
