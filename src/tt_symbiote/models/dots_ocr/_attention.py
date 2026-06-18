@@ -59,6 +59,31 @@ class PagedAttentionConfig:
 
 
 class TTNNPagedAttentionKVCache(Cache):
+    """dots.ocr's forked paged KV cache.
+
+    TS-5 contract -- page-table ownership and the per-device write index:
+
+      * **Default page table** is the contiguous identity ``arange`` (one
+        sequence laid out in contiguous blocks). dots.ocr is DATA-PARALLEL: the
+        table is ``[batch_size, blocks_per_sequence]`` and DP-sharded so device
+        ``d`` holds row ``d`` (its own sequence). The identity default is correct
+        and required for the standalone / HF ``generate()`` path, which does not
+        page.
+      * **Serving (vLLM Tier-S2)** overrides the identity table via
+        :meth:`set_vllm_page_table`, which installs the block-manager-assigned
+        physical block ids (one row per DP stream) IN PLACE (trace-stable).
+      * **``batch_idx=0`` on ``paged_fill_on_device`` is intentional, not a TODO.**
+        Because the page table is DP-sharded to ONE row per device, ``batch_idx=0``
+        is the only valid (and correct) per-device index -- each chip fills its own
+        single sequence. (A non-DP shared cache that packed multiple sequences into
+        one device's batch dim would need a varying ``batch_idx``; that is the
+        shared-cache design, not this DP fork.)
+
+    So the ``arange`` default and ``batch_idx=0`` are deliberately kept: removing
+    them would corrupt KV for the DP layout. The Tier-S2 deliverable is the
+    ``set_vllm_page_table`` hook (installed) plus per-row decode positions.
+    """
+
     def __init__(
         self,
         num_layers: int,
@@ -93,6 +118,8 @@ class TTNNPagedAttentionKVCache(Cache):
         self._seen_tokens = 0
         self._external_seq_tracking = False
 
+        # Default = contiguous identity (standalone/HF path). vLLM serving
+        # overrides this via set_vllm_page_table (see class docstring, TS-5).
         page_table = torch.arange(config.max_num_blocks, dtype=torch.int32)
         self.page_table = page_table.reshape(config.batch_size, config.blocks_per_sequence)
 
@@ -100,6 +127,9 @@ class TTNNPagedAttentionKVCache(Cache):
         self._tt_value_cache: list[Optional[ttnn.Tensor]] = [None] * num_layers
         self._tt_page_table: Optional[ttnn.Tensor] = None
         self._is_on_device = False
+        # TS-5 observability: True once a vLLM block-manager table is installed
+        # (serving), False while the contiguous identity default is in use.
+        self._vllm_page_table_installed = False
 
     def to_device(self, device) -> "TTNNPagedAttentionKVCache":
         if self._is_on_device and self._device == device:
@@ -231,6 +261,7 @@ class TTNNPagedAttentionKVCache(Cache):
         # In-place: preserve _tt_page_table's buffer identity for trace safety.
         ttnn.copy(upload, self._tt_page_table)
         ttnn.deallocate(upload)
+        self._vllm_page_table_installed = True
         return self
 
     def paged_fill_on_device(

@@ -1305,46 +1305,55 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         )
         self._decode_token_buffer_has_next = True
         self._decode_seq_counter = self.paged_cache.get_seq_length(layer_idx=0)
+
+        # TS-6: per-row decode positions are the SINGLE decode-position path.
+        # There is no longer a cross-stream "global" scalar shared by every DP
+        # stream -- each mesh device carries its own cache position. The seed is
+        # either the externally-supplied per-stream positions (Tier-S2 vLLM
+        # continuous batching) or, for native generate()/S0, the current cache
+        # length replicated across the rows (all streams start together, then the
+        # device-side ``+1`` in ``decode_step`` advances each independently).
+        bs = int(self.config.batch_size)
+        dp = self._batch_input_mapper is not None and bs > 1
+
         if self._external_decode_positions is not None:
-            # Per-DP-stream cache positions (Tier-S2 continuous batching): one
-            # independent sequence per mesh device. Shard a [batch, 1] host
-            # vector along the batch dim (same mapper as the token buffer) so
-            # device ``d`` holds its own scalar position; the device-side ``+1``
-            # in ``decode_step`` then advances every stream independently. We
-            # keep the device tensor 1-D ([batch]) so it matches the cur_pos
-            # shape the paged kernels and rotary expect (per device: [1]).
-            bs = int(self.config.batch_size)
             if len(self._external_decode_positions) != bs:
                 raise ValueError(
-                    f"set_decode_positions expects {bs} positions (one per DP stream), "
+                    f"decode positions expects {bs} values (one per DP stream), "
                     f"got {len(self._external_decode_positions)}"
                 )
+            positions = [int(p) for p in self._external_decode_positions]
+        else:
+            positions = [int(self._decode_seq_counter)] * bs
+
+        if dp:
+            # One independent position per mesh device. Always activate the
+            # per-stream position buffer on the decoder stack so the decode graph
+            # never collapses the [batch] position vector to a single scalar.
+            enable = getattr(self.decoder_stack, "enable_per_stream_positions", None)
+            if callable(enable):
+                enable(bs, self._batch_input_mapper)
             # Keep the host tensor 1-D [batch]: the DP batch-shard mapper slices
             # it into a [1] shard per device (one independent position per DP
             # stream), matching the cur_pos shape the paged kernels consume. A
             # post-upload reshape to (batch,) would run per-shard (volume 1) and
             # fail the volume check, so build the final shape up front.
-            self._decode_cache_pos_host = torch.tensor(
-                self._external_decode_positions, dtype=torch.int32
-            )
-            pos_mapper = (
-                self._batch_input_mapper
-                if self._batch_input_mapper is not None
-                else ttnn.ReplicateTensorToMesh(self.device)
-            )
+            self._decode_cache_pos_host = torch.tensor(positions, dtype=torch.int32)
             self._decode_cache_position = ttnn.from_torch(
                 self._decode_cache_pos_host,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
-                mesh_mapper=pos_mapper,
+                mesh_mapper=self._batch_input_mapper,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
-            self._decode_cache_pos_host = torch.tensor([self._decode_seq_counter], dtype=torch.int32)
-            # Scalar cache position: always replicate (same global index on every
-            # device). Do not use ``_batch_input_mapper`` here: ND shard expects one
-            # host chunk per mesh device, which a length-1 tensor does not satisfy.
+            # Single stream (no DP, or batch_size==1): one position. This is the
+            # lone sequence's own position, NOT a cross-stream global. Replicate
+            # so a 1-device or replicated mesh holds the same scalar everywhere.
+            # (ND shard expects one host chunk per mesh device, which a length-1
+            # tensor does not satisfy, so do not use _batch_input_mapper here.)
+            self._decode_cache_pos_host = torch.tensor([positions[0]], dtype=torch.int32)
             self._decode_cache_position = ttnn.from_torch(
                 self._decode_cache_pos_host,
                 dtype=ttnn.int32,
@@ -1444,12 +1453,15 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
                     flush=True,
                 )
             # Device-side cache_position increment for both DP and non-DP.
-            # ``_decode_cache_position`` is REPLICATED across the mesh (a
-            # single global counter, see ``_init_decode_buffers``) so the
-            # ``ttnn.add`` runs identically on every chip and stays in sync
-            # without any host-side h2d. Used to be DP-gated to a host h2d
-            # path (``_batch_input_mapper is not None``); removing the gate
-            # cuts another per-iter ``ttnn.from_torch + copy_host_to_device``
+            # TS-6: ``_decode_cache_position`` is per-row -- under DP it is the
+            # [batch] vector sharded one position per chip (see
+            # ``_init_decode_buffers``), and a single replicated scalar only when
+            # there is one stream. The element-wise ``+1`` advances each stream's
+            # own position independently (for native generate every row was
+            # seeded equal, so they stay in step; under vLLM S2 the positions are
+            # overwritten per step instead). No host-side h2d. Used to be DP-gated
+            # to a host h2d path (``_batch_input_mapper is not None``); removing
+            # the gate cuts a per-iter ``ttnn.from_torch + copy_host_to_device``
             # (~3-5 ms wall-clock at DP=8 on T3K).
             with _profile_stage(self.device, "decode.cache_position_device_inc"):
                 # NOTE: tried ``ttnn.add(..., output_tensor=cache_position)``
@@ -1628,13 +1640,9 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         pos_full = [max(0, p) for p in pos_list] + [0] * (bs - n_in)
 
         # Fresh request (buffers cleared by the preceding prefill) -> build the
-        # stable per-stream buffers once via the existing TS-3 path; thereafter
-        # update them in place.
+        # stable per-row buffers once (``_init_decode_buffers`` activates the
+        # per-stream position path for DP); thereafter update them in place.
         if self._decode_cache_position is None or self._decode_token_buffer is None:
-            if self._batch_input_mapper is not None:
-                enable = getattr(self.decoder_stack, "enable_per_stream_positions", None)
-                if callable(enable):
-                    enable(bs, self._batch_input_mapper)
             self._external_decode_positions = list(pos_full)
             self._init_decode_buffers(prev_full)
         else:
@@ -1688,6 +1696,16 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
             stream: ``List[int]``. DP batch-parallel: ``List[List[int]]`` with
             one inner list per stream (same decode depth; each stream stops
             appending on EOS unless ``stop_on_eos`` is disabled).
+
+        TS-6 note: this is the STANDALONE static-batch path (HF ``generate`` shim,
+        the e2e demo, S0 single-stream serving, and the regression tests). On a
+        fixed DP mesh every chip decodes in step, so the ``stop_on_eos`` loop here
+        is host-side bookkeeping (it stops *appending* per stream) -- it cannot do
+        dynamic admission. LOCKSTEP-FREE continuous batching (independent
+        per-sequence admission / eviction) is the vLLM Tier-S2 serving path, which
+        drives ``forward_logits_prefill`` / ``forward_logits_decode`` per engine
+        step and never enters this loop. Decode positions are per-row in BOTH
+        paths now (no cross-stream global scalar; see ``_init_decode_buffers``).
         """
         _dots_ocr_signpost("dots_ocr.model_start")
         try:
