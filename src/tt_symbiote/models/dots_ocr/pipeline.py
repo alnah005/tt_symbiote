@@ -637,6 +637,12 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         self._decode_seq_counter: int = 0
         self._dp_readback_ring: Optional[List[ttnn.Tensor]] = None
         self._dp_readback_ring_n: int = 0
+        # Opt-in per-DP-stream decode positions (Tier-S2 continuous batching).
+        # ``None`` -> the default single global replicated cache position is
+        # used (HF / standalone-generate path is byte-for-byte unchanged).
+        # When set (via ``set_decode_positions``), each mesh device serves one
+        # independent sequence at its own cache position.
+        self._external_decode_positions: Optional[List[int]] = None
 
     # ------------------------------------------------------------------
     # Factory
@@ -1149,6 +1155,53 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
     # Decode
     # ------------------------------------------------------------------
 
+    def set_decode_positions(self, positions: List[int]) -> None:
+        """Seed distinct per-DP-stream decode cache positions (Tier-S2 path).
+
+        Each mesh device serves one independent vLLM sequence; ``positions[d]``
+        is the next cache position (i.e. the prompt length / number of tokens
+        already in the KV cache) for the sequence on device ``d``. Must provide
+        exactly ``config.batch_size`` values (one per DP stream).
+
+        Sentinel ``-1`` rows -- inactive / finished streams under continuous
+        batching, which vLLM pads the batch with -- are clamped to ``0`` so the
+        paged kernels never index out of range; vLLM discards those rows'
+        outputs.
+
+        This is **opt-in**: HF ``generate()`` never calls it, so the default
+        single global replicated cache position (and every existing numeric
+        result) is unchanged. Calling this forces the decode-loop buffers to
+        rebuild so the new positions take effect on the next ``decode_step``.
+        """
+        bs = int(self.config.batch_size)
+        if len(positions) != bs:
+            raise ValueError(
+                f"set_decode_positions expects {bs} positions (one per DP stream), got {len(positions)}"
+            )
+        clamped = [0 if int(p) < 0 else int(p) for p in positions]
+        self._external_decode_positions = clamped
+        # Tell the decoder stack to stop collapsing the per-stream position
+        # vector to a single global scalar, and to allocate its stable
+        # per-stream position buffer.
+        enable = getattr(self.decoder_stack, "enable_per_stream_positions", None)
+        if callable(enable):
+            enable(bs, self._batch_input_mapper)
+        # Rebuild the decode buffers (next decode_step re-inits with the new
+        # per-stream positions via the ``_external_decode_positions`` branch).
+        self._reset_decode_loop_state()
+
+    def clear_decode_positions(self) -> None:
+        """Revert to the default single global replicated cache position.
+
+        Restores the HF / standalone-generate behavior after a Tier-S2 serving
+        session. Forces a decode-buffer rebuild.
+        """
+        self._external_decode_positions = None
+        disable = getattr(self.decoder_stack, "disable_per_stream_positions", None)
+        if callable(disable):
+            disable()
+        self._reset_decode_loop_state()
+
     def _init_decode_buffers(self, prev_token_id: Union[int, List[int]]):
         """Allocate reusable device buffers for decode loop on first call."""
         if isinstance(prev_token_id, int):
@@ -1169,18 +1222,54 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         )
         self._decode_token_buffer_has_next = True
         self._decode_seq_counter = self.paged_cache.get_seq_length(layer_idx=0)
-        self._decode_cache_pos_host = torch.tensor([self._decode_seq_counter], dtype=torch.int32)
-        # Scalar cache position: always replicate (same global index on every
-        # device). Do not use ``_batch_input_mapper`` here: ND shard expects one
-        # host chunk per mesh device, which a length-1 tensor does not satisfy.
-        self._decode_cache_position = ttnn.from_torch(
-            self._decode_cache_pos_host,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if self._external_decode_positions is not None:
+            # Per-DP-stream cache positions (Tier-S2 continuous batching): one
+            # independent sequence per mesh device. Shard a [batch, 1] host
+            # vector along the batch dim (same mapper as the token buffer) so
+            # device ``d`` holds its own scalar position; the device-side ``+1``
+            # in ``decode_step`` then advances every stream independently. We
+            # keep the device tensor 1-D ([batch]) so it matches the cur_pos
+            # shape the paged kernels and rotary expect (per device: [1]).
+            bs = int(self.config.batch_size)
+            if len(self._external_decode_positions) != bs:
+                raise ValueError(
+                    f"set_decode_positions expects {bs} positions (one per DP stream), "
+                    f"got {len(self._external_decode_positions)}"
+                )
+            # Keep the host tensor 1-D [batch]: the DP batch-shard mapper slices
+            # it into a [1] shard per device (one independent position per DP
+            # stream), matching the cur_pos shape the paged kernels consume. A
+            # post-upload reshape to (batch,) would run per-shard (volume 1) and
+            # fail the volume check, so build the final shape up front.
+            self._decode_cache_pos_host = torch.tensor(
+                self._external_decode_positions, dtype=torch.int32
+            )
+            pos_mapper = (
+                self._batch_input_mapper
+                if self._batch_input_mapper is not None
+                else ttnn.ReplicateTensorToMesh(self.device)
+            )
+            self._decode_cache_position = ttnn.from_torch(
+                self._decode_cache_pos_host,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                mesh_mapper=pos_mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            self._decode_cache_pos_host = torch.tensor([self._decode_seq_counter], dtype=torch.int32)
+            # Scalar cache position: always replicate (same global index on every
+            # device). Do not use ``_batch_input_mapper`` here: ND shard expects one
+            # host chunk per mesh device, which a length-1 tensor does not satisfy.
+            self._decode_cache_position = ttnn.from_torch(
+                self._decode_cache_pos_host,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
     def _reset_decode_loop_state(self) -> None:
         """Reset the lazily-allocated decode-loop buffers as a unit.
@@ -1265,7 +1354,7 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
             # DEBUG: log generation step + the cache_position SDPA will see
             # on the NEXT decode iteration. Throttled to keep host output
             # readable. ``_decode_seq_counter`` is the next-token cache pos.
-            _gen_step = self._decode_seq_counter - int(self._decode_cache_pos_host.item())
+            _gen_step = self._decode_seq_counter - int(self._decode_cache_pos_host.reshape(-1)[0].item())
             if _gen_step == 1 or _gen_step % 100 == 0:
                 print(
                     f"[decode] gen_step={_gen_step}  " f"cache_position={self._decode_seq_counter}",

@@ -146,6 +146,93 @@ class TTNNPagedAttentionKVCache(Cache):
         self._is_on_device = True
         return self
 
+    def _page_table_mesh_mapper(self):
+        """Mesh mapper for the page table, matching ``to_device``.
+
+        Under DP (``batch_size == num_devices`` on an (N,1)/(1,N) mesh) the
+        page table is sharded along the batch dim so device ``d`` holds the
+        block ids for sequence ``d``. Otherwise it is replicated.
+        """
+        bs = self.config.batch_size
+        mapper = dp_batch_shard_tensor_mapper(self._device, bs)
+        if mapper is None and self._device.get_num_devices() > 1:
+            mapper = ttnn.ReplicateTensorToMesh(self._device)
+        return mapper
+
+    def set_vllm_page_table(self, page_table: torch.Tensor) -> "TTNNPagedAttentionKVCache":
+        """Install an externally-managed page table (e.g. vLLM block ids).
+
+        By default the cache uses a contiguous identity mapping
+        (``arange(max_num_blocks)``) built in ``to_device``. Under
+        tt-inference-server's vLLM backend the block manager assigns physical
+        block ids per request (one row per DP stream), so the serving adapter
+        calls this to point the paged ops (``paged_fill_on_device`` /
+        ``paged_update_on_device`` / ``paged_sdpa_decode``) at the blocks vLLM
+        allocated.
+
+        This is **additive and HF-preserving**: HF ``generate()`` never calls
+        it, so the default contiguous mapping (and every existing numeric
+        result) is unchanged. It is the dots.ocr Tier-S2 seam; see
+        docs/development/tt_inference_server_integration.md §9.
+
+        DP layout: ``page_table`` is ``[batch, blocks_per_sequence]`` with
+        ``batch == config.batch_size`` (one row per mesh device). The row for
+        device ``d`` is sharded onto device ``d`` via the same
+        ``dp_batch_shard_tensor_mapper`` ``to_device`` uses.
+
+        Trace stability: the device page-table tensor is updated **in place**
+        (upload to a temp, then ``ttnn.copy`` into the pre-allocated
+        ``_tt_page_table`` buffer) so its buffer identity is preserved. A
+        captured decode trace references that buffer, so swapping block tables
+        between requests does NOT require re-capturing the trace. Call this
+        *outside* a trace boundary (at request setup / between decode traces).
+
+        Args:
+            page_table: int32 tensor ``[batch, blocks_per_sequence]`` mapping
+                logical block index -> physical block id.
+        """
+        if not self._is_on_device:
+            raise RuntimeError("KV cache not on device. Call to_device(device).")
+        if page_table.dim() != 2:
+            raise ValueError(
+                f"page_table must be 2D [batch, blocks_per_sequence], got shape {tuple(page_table.shape)}"
+            )
+        bs = self.config.batch_size
+        bps = self.config.blocks_per_sequence
+        if int(page_table.shape[0]) != bs:
+            raise ValueError(
+                f"page_table batch dim {int(page_table.shape[0])} != cache batch_size {bs} "
+                "(one row per DP stream is required)"
+            )
+        if int(page_table.shape[1]) > bps:
+            raise ValueError(
+                f"page_table has {int(page_table.shape[1])} blocks/seq > cache capacity {bps}"
+            )
+
+        # Build a full-width [bs, bps] host table so the in-place device copy is
+        # shape-stable (the preallocated _tt_page_table is [bs, bps]). Keep the
+        # existing mapping for any trailing columns vLLM did not provide; those
+        # columns are never read (the kernels index logical block = pos //
+        # block_size, bounded by the sequence length).
+        full = self.page_table.clone().to(torch.int32)
+        n_blocks = int(page_table.shape[1])
+        full[:, :n_blocks] = page_table.to(torch.int32)
+        self.page_table = full.contiguous()
+
+        mapper = self._page_table_mesh_mapper()
+        upload = ttnn.from_torch(
+            self.page_table,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self._device,
+            mesh_mapper=mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # In-place: preserve _tt_page_table's buffer identity for trace safety.
+        ttnn.copy(upload, self._tt_page_table)
+        ttnn.deallocate(upload)
+        return self
+
     def paged_fill_on_device(
         self,
         key_states: ttnn.Tensor,

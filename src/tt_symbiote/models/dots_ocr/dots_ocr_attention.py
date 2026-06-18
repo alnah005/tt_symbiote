@@ -220,6 +220,14 @@ class TTNNDotsOCRAttention(StatefulTTNNModule):
         # this is a reasoned decision). Were the KV write ever changed to an advancing append
         # (e.g. ttnn.update_cache, whose position advances per call), this MUST roll the write
         # position back to its pre-forward baseline here instead.
+        #
+        # vLLM page table (Tier S2): ``TTNNPagedAttentionKVCache.set_vllm_page_table`` updates the
+        # device page-table tensor IN PLACE (``ttnn.copy`` into the pre-allocated ``_tt_page_table``
+        # buffer), so its buffer identity is preserved across requests and the captured decode trace
+        # stays valid when vLLM swaps block tables. That install runs at request setup, OUTSIDE the
+        # trace boundary, so it does not interact with this hook either -- the no-op reasoning above
+        # is unaffected. (If set_vllm_page_table is ever changed to reallocate the buffer, the trace
+        # would have to be re-captured, not reset here.)
         return None
 
     @classmethod

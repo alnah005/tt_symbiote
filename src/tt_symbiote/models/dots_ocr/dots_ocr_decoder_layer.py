@@ -377,6 +377,46 @@ class TTNNDotsOCRLayerStack(TTNNLayerStack):
                     attn._decode_cur_pos = shared_buf
         self._shared_decode_cur_pos = shared_buf
 
+    def enable_per_stream_positions(self, batch_size: int, mapper) -> None:
+        """Activate per-DP-stream decode positions (Tier-S2 continuous batching).
+
+        Allocates a stable DP-sharded ``[batch]`` position buffer (one scalar
+        per mesh device) so each stream decodes at its own cache position.
+        ``_materialize_shared_cur_pos`` / ``pre_trace_execute`` then stop
+        collapsing the position vector to a single global scalar.
+
+        Single-device / non-DP (``mapper is None`` or ``batch_size <= 1``): there
+        is only one stream, so the default shared scalar is already correct and
+        this is a no-op.
+        """
+        if mapper is None or int(batch_size) <= 1:
+            self._per_stream_positions = False
+            return
+        self._per_stream_positions = True
+        if getattr(self, "_shared_decode_cur_pos_dp", None) is None:
+            # Build the host tensor 1-D [batch] so the DP batch-shard mapper
+            # (ShardTensor2dMesh dims=(0, None)) slices it into a [1] shard per
+            # device. That per-device [1] already matches the cur_pos shape the
+            # paged kernels and rotary consume, so NO reshape is needed -- a
+            # post-upload reshape to (batch,) would run per-shard (each shard is
+            # volume 1) and fail the volume check.
+            host = torch.zeros(int(batch_size), dtype=torch.int32)
+            self._shared_decode_cur_pos_dp = ttnn.from_torch(
+                host,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                mesh_mapper=mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+    def disable_per_stream_positions(self) -> None:
+        """Revert to the default single global replicated cache position.
+
+        The DP position buffer is kept allocated for reuse.
+        """
+        self._per_stream_positions = False
+
     @run_on_devices(DeviceArch.N300, DeviceArch.T3K, DeviceArch.P150x4)
     def forward(self, hidden_states, **kwargs):
         seq_len = hidden_states.shape[-2]
@@ -427,6 +467,13 @@ class TTNNDotsOCRLayerStack(TTNNLayerStack):
             for d in cp.shape:
                 total_elems *= d
             cp = ttnn.reshape(cp, (total_elems,))
+        if getattr(self, "_per_stream_positions", False) and getattr(self, "_shared_decode_cur_pos_dp", None) is not None:
+            # Per-DP-stream: keep every row (one position per device); do NOT
+            # collapse to element 0. ``cp`` is the DP-sharded [batch] position
+            # vector, so each device's own scalar is copied into the stable
+            # per-stream buffer (fixed identity for trace replay).
+            ttnn.copy(cp, self._shared_decode_cur_pos_dp)
+            return self._shared_decode_cur_pos_dp
         if cp.shape[0] > 1:
             cp = ttnn.slice(cp, [0], [1])
         ttnn.copy(cp, self._shared_decode_cur_pos)
@@ -446,6 +493,11 @@ class TTNNDotsOCRLayerStack(TTNNLayerStack):
             for d in cp.shape:
                 total *= d
             cp = ttnn.reshape(cp, (total,))
+
+        if getattr(self, "_per_stream_positions", False) and getattr(self, "_shared_decode_cur_pos_dp", None) is not None:
+            # Per-DP-stream: keep all per-device positions (no [0:1] collapse).
+            ttnn.copy(cp, self._shared_decode_cur_pos_dp)
+            return
 
         if cp.shape[0] > 1:
             cp = ttnn.slice(cp, [0], [1])
