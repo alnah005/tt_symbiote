@@ -218,6 +218,48 @@ class Pipeline(StatelessTTNNModule):
                 ttnn.synchronize_device(mesh)
         return self._out_last
 
+    @staticmethod
+    def _distinct_meshes(submeshes):
+        seen, order = set(), []
+        for m in submeshes:
+            if id(m) not in seen:
+                seen.add(id(m))
+                order.append(m)
+        return order
+
+    def capture_loop(self, submeshes, body_fn, n_steps):
+        meshes = self._distinct_meshes(submeshes)
+        tids = []
+        with trace_running():
+            for m in meshes:
+                tids.append((m, ttnn.begin_trace_capture(m, cq_id=0)))
+            for i in range(n_steps):
+                body_fn(i)
+            for m, tid in tids:
+                ttnn.end_trace_capture(m, tid)
+        return tids
+
+    @staticmethod
+    def replay_loop(loop_tids, *, drain="all", drain_mesh=None):
+        for m, tid in loop_tids:
+            ttnn.execute_trace(m, tid, cq_id=0, blocking=False)
+        if drain == "stage0":
+            ttnn.synchronize_device(drain_mesh if drain_mesh is not None else loop_tids[0][0])
+        else:
+            seen = set()
+            for m, _ in loop_tids:
+                if id(m) not in seen:
+                    seen.add(id(m))
+                    ttnn.synchronize_device(m)
+
+    @staticmethod
+    def release_loop(loop_tids):
+        for m, tid in loop_tids or ():
+            try:
+                ttnn.release_trace(m, tid)
+            except Exception:
+                pass
+
     def release_traces(self):
         if self._tids:
             for mesh, tid in self._tids:

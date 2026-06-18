@@ -1,0 +1,7 @@
+{
+  "tt_metal_commit": "7d1b555a394b7b5413444fc95e5c2d4a54ec197a",
+  "device_arch": "P150",
+  "pcc_threshold": 0.99,
+  "hf_model_id": "lerobot/pi05_base",
+  "hf_revision": "main"
+}

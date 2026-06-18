@@ -1,0 +1,23 @@
+{
+  "model_name": "pipelined_pi05",
+  "model_id": "lerobot/pi05_base",
+  "model_description": "4-submesh D2D-pipelined pi0.5 action-expert denoise (flow-matching velocity path) with streamed N-step Euler trace fusion. Builds on the pi05 base model components; forks the expert block (zero shared-gemma edits).",
+  "device_arch": "P150",
+  "device_note": "4x Blackhole P150 carved into 4 single-device submeshes (MeshShape(1,4)).",
+  "tt_metal_runtime_commit": "7d1b555a394b7b5413444fc95e5c2d4a54ec197a",
+  "tt_metal_runtime_branch": "pi05_openpi_upstream_bh_glx_trace",
+  "tt_metal_reference_commit": "b0703a56465989da179480c93a8992ec519e1cde",
+  "reference_path": "/home/ttuser/salnahari/pi0_5_ref/models/experimental/pi0_5",
+  "integration_path": "manual",
+  "python_env": "/home/ttuser/salnahari/tt-metal/python_env/bin/python",
+  "src_package": "src/tt_symbiote/models/pipelined_pi05",
+  "deliverables": [
+    "src/tt_symbiote/models/pipelined_pi05/denoise_pipeline.py",
+    "src/tt_symbiote/models/pipelined_pi05/denoise_block.py",
+    "src/tt_symbiote/models/pipelined_pi05/__init__.py",
+    "src/tt_symbiote/core/d2d_pipeline.py (additive capture_loop/replay_loop/release_loop)",
+    "tests/experimental/pipelined_pi05/Tier4/test_pipeline_denoise.py",
+    "tests/experimental/pipelined_pi05/profile_pipeline_denoise.py"
+  ],
+  "validation_summary": "NORMAL/TRACED PCC >= 0.99, transparency >= 0.999; single-eval equivalence 1.0; streamed N=5 trajectory PCC vs eager 1.0. Per-step traced wall ~4.47 ms/step at the galaxy production shape (ah=10, M=1, prefix_len=1024, N=5) on 4x P150."
+}
