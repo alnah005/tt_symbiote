@@ -33,6 +33,7 @@ from tt_symbiote.models.dots_ocr import TTNNDotsOCRPipeline
 
 from ..dots_ocr_helpers import (
     dots_ocr_device_params,
+    mesh_num_devices,
     pipeline_batch_size,
     resolve_mesh_device_shape,
     resolve_model_path,
@@ -111,5 +112,113 @@ def test_forward_logits_matches_token_path(mesh_device):
         "forward_logits_* greedy output diverges from the native token path at "
         f"index {div}: token={ref[div] if div is not None else '?'} "
         f"logits={cand[div] if div is not None else '?'}"
+    )
+    pipeline.release()
+
+
+# 8 distinct topics, one per DP stream. Distinguishing nouns are early in the
+# user turn so they survive truncation to a common length.
+_DISTINCT_PROMPTS = [
+    "What is optical character recognition?",
+    "Explain how rivers form and reach the sea.",
+    "Describe the planet Mars and its surface.",
+    "What causes thunderstorms to develop in summer?",
+    "How do honeybees make honey from nectar?",
+    "What is a black hole and how does it form?",
+    "Explain photosynthesis in green plants briefly.",
+    "What is the capital city of France called?",
+]
+
+
+def _stack_distinct_prompts(tok, n: int) -> tuple[torch.Tensor, int]:
+    """Tokenize ``n`` distinct prompts and truncate to a common length.
+
+    The dots.ocr prefill graph runs a single ``[B, S]`` tensor, so every DP
+    stream must share one sequence length. We truncate to the shortest prompt's
+    length (all real causal tokens, no padding) so each stream still holds a
+    valid, DISTINCT prefix.
+    """
+    encs = []
+    for p in _DISTINCT_PROMPTS[:n]:
+        ids = tok.apply_chat_template(
+            [{"role": "user", "content": p}],
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+        )["input_ids"]
+        encs.append(ids)
+    L = min(int(e.shape[-1]) for e in encs)
+    rows = [e[:, :L] for e in encs]
+    return torch.cat(rows, dim=0).contiguous(), L  # [n, L]
+
+
+@pytest.mark.parametrize("device_params", [dots_ocr_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [resolve_mesh_device_shape()], indirect=True)
+def test_forward_logits_distinct_streams(mesh_device):
+    """Continuous-batching isolation: N DISTINCT sequences decode independently.
+
+    Drives one different prompt per DP stream (one per mesh device) concurrently
+    through ``forward_logits_prefill`` + ``forward_logits_decode``, and asserts
+    each stream's greedy continuation matches that stream's native token-path
+    output token-for-token. This is the real continuous-batching guard: it proves
+    the per-stream page tables (TS-5) and per-row decode positions (TS-6) keep the
+    8 sequences ISOLATED -- no collapse to stream 0, no cross-stream KV bleed --
+    and that the logits path matches the token path per stream, not just in
+    aggregate.
+    """
+    batch = pipeline_batch_size()
+    if batch <= 1 or mesh_num_devices() <= 1:
+        pytest.skip("distinct-stream continuous batching requires a DP mesh (batch_size == num_devices > 1)")
+
+    torch.set_grad_enabled(False)
+    pipeline = TTNNDotsOCRPipeline.from_hf_model(
+        model_path=DOTS_OCR_LOCAL_PATH, device=mesh_device, batch_size=batch
+    )
+    tok = AutoTokenizer.from_pretrained(DOTS_OCR_LOCAL_PATH, trust_remote_code=True)
+
+    distinct_ids, prompt_len = _stack_distinct_prompts(tok, batch)
+    assert int(distinct_ids.shape[0]) == batch
+
+    # --- Reference: native token path over the SAME distinct streams ----------
+    # stop_on_eos=False so every stream emits exactly N_TOKENS (fixed depth,
+    # clean per-stream comparison).
+    pipeline.warmup(distinct_ids)
+    ref = pipeline.generate(distinct_ids, max_new_tokens=N_TOKENS, stop_on_eos=False)
+    ttnn.synchronize_device(mesh_device)
+    assert isinstance(ref, list) and len(ref) == batch and all(isinstance(r, list) for r in ref)
+    # The token path must itself keep the streams distinct (else the parity below
+    # could pass trivially with a collapsed reference).
+    assert len({tuple(r) for r in ref}) >= 2, f"reference streams collapsed (not distinct): {ref}"
+
+    # --- Candidate: logits path over the SAME distinct streams ----------------
+    pipeline.warmup(distinct_ids, return_logits=True)
+
+    prefill_logits = pipeline.forward_logits_prefill(distinct_ids)
+    assert prefill_logits.dim() == 2 and int(prefill_logits.shape[0]) == batch
+    firsts = [int(prefill_logits[i].argmax().item()) for i in range(batch)]
+    cand = [[firsts[i]] for i in range(batch)]
+    prev = list(firsts)
+    for step in range(N_TOKENS - 1):
+        # One absolute position per stream; here all advance together from the
+        # shared prefill length (streams admitted at the same step), exercising
+        # the per-row position buffer for every stream.
+        pos = [prompt_len + step] * batch
+        dec_logits = pipeline.forward_logits_decode(prev, pos)
+        assert int(dec_logits.shape[0]) == batch
+        nxt = [int(dec_logits[i].argmax().item()) for i in range(batch)]
+        for i in range(batch):
+            cand[i].append(nxt[i])
+        prev = nxt
+    ttnn.synchronize_device(mesh_device)
+
+    for i in range(batch):
+        print(f"[stream {i}] token={ref[i]}\n           logits={cand[i]}")
+
+    mism = [i for i in range(batch) if ref[i] != cand[i]]
+    assert not mism, (
+        f"forward_logits_decode diverges from the token path on streams {mism} "
+        f"(per-stream isolation broken). token={[ref[i] for i in mism]} "
+        f"logits={[cand[i] for i in mism]}"
     )
     pipeline.release()
