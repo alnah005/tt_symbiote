@@ -102,7 +102,13 @@ RUNTIME_PINS: dict[str, dict] = {
     "DotsOCRForCausalLM": {
         "tt_metal_commit": "c09f09c35a1a59a428f0e1b5cdaa8fe59fb1b195",
         "extras": ["vision", "qwen-vl"],
-        "serving_tier": "S0_GREEDY_ENGINE",
+        # S2_PAGED: vLLM continuous batching over the paged KV cache (W1 logits
+        # forward + TS-1/2/3 page-table hook + per-DP-stream positions). This is
+        # the throughput path (amortizes per-token host overhead across N
+        # streams). The validated S0 single-stream greedy bridge stays reachable
+        # without a code change via the env override:
+        #   TT_SYMBIOTE_SERVING_TIER=DotsOCRForCausalLM=S0_GREEDY_ENGINE
+        "serving_tier": "S2_PAGED",
     },
     # Ling-mini-2.0 — first S2 (paged, continuous-batching) model. Pins its OWN
     # tt-metal commit independently of dots_ocr above (see test_config.json).

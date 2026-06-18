@@ -240,6 +240,13 @@ class TTNNDotsOCRPrefillGraph(StatefulTTNNModule):
         self._image_token_id = int(image_token_id)
         self._hidden_size = int(hidden_size)
         self._scatter_uses_dp_batch_mapper = bool(scatter_uses_dp_batch_mapper)
+        # Tier-S2 logits mode (W1). Default False -> the graph returns the
+        # on-device argmax token (the native generate()/S0 path, byte-for-byte
+        # unchanged). When True (set on the dedicated *_logits graph instance the
+        # factory builds), forward returns the raw ``[B, 1, vocab]`` logits so
+        # vLLM can sample. The flag is fixed per instance, so the @trace_enabled
+        # cache key (keyed by unique_name) never aliases the token-mode trace.
+        self._return_logits = False
         # Additive batched-vision flag. Default False -> single-image path is
         # byte-for-byte unchanged. Set by the pipeline factory after construction
         # when batched_vision=True.
@@ -437,6 +444,8 @@ class TTNNDotsOCRPrefillGraph(StatefulTTNNModule):
             hd = int(h.shape[-1])
             h = ttnn.slice(h, [0, sl - 1, 0], [b, sl, hd])
         logits = self._p_lm.forward(h)
+        if self._return_logits:
+            return logits
         return _argmax_token_on_device(logits)
 
     def post_trace_execute(self, func_args, func_kwargs, result):
@@ -469,6 +478,11 @@ class TTNNDotsOCRDecodeGraph(StatefulTTNNModule):
         self._d_norm = final_norm
         self._d_lm = lm_head
         self._d_embedding = embedding
+        # Tier-S2 logits mode (W1): when True, return raw [B, 1, vocab] logits
+        # instead of the on-device argmax token. Fixed per instance (the factory
+        # builds a dedicated *_logits graph), so the captured trace never aliases
+        # the token-mode decode trace. Default False keeps generate()/S0 intact.
+        self._return_logits = False
 
     def reset_trace_state(self) -> None:
         # This decode graph is the @trace_enabled trace UNIT. Its own forward holds NO
@@ -497,6 +511,8 @@ class TTNNDotsOCRDecodeGraph(StatefulTTNNModule):
                 h = self._d_norm.forward(h)
             with _profile_graph_stage(dev, "decode.graph.lm_head"):
                 logits = self._d_lm.forward(h)
+            if self._return_logits:
+                return logits
             with _profile_graph_stage(dev, "decode.graph.argmax"):
                 return _argmax_token_on_device(logits)
 
@@ -505,6 +521,8 @@ class TTNNDotsOCRDecodeGraph(StatefulTTNNModule):
         h = self._d_stack.forward(hidden_states, past_key_value=past_key_value, cache_position=cache_position)
         h = self._d_norm.forward(h)
         logits = self._d_lm.forward(h)
+        if self._return_logits:
+            return logits
         return _argmax_token_on_device(logits)
 
     def post_trace_execute(self, func_args, func_kwargs, result):
@@ -623,6 +641,13 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         self.lm_head = lm_head
         self.graph_prefill = graph_prefill
         self.graph_decode = graph_decode
+        # Tier-S2 logits-mode graph instances (W1). Built by the factory with a
+        # distinct unique_name and ``_return_logits=True`` so their captured
+        # traces are independent of the token-mode graphs. ``None`` until the
+        # factory assigns them (hand-constructed pipelines / token-only callers
+        # never touch them).
+        self.graph_prefill_logits: Optional[TTNNDotsOCRPrefillGraph] = None
+        self.graph_decode_logits: Optional[TTNNDotsOCRDecodeGraph] = None
         self.paged_cache = paged_cache
         self._device = device
         self.config = config
@@ -770,6 +795,31 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         graph_decode = TTNNDotsOCRDecodeGraph(decoder_stack, final_norm, lm_head, embedding=embedding)
         graph_decode._unique_name = "dots_ocr_graph_decode"
 
+        # --- Tier-S2 logits-mode graphs (W1) --------------------------------
+        # Dedicated instances that share the SAME underlying modules (decoder
+        # stack, final norm, lm_head, embedding, vision tower) but return logits
+        # instead of the argmax token. Distinct ``_unique_name`` => the
+        # @trace_enabled cache keys never collide with the token-mode graphs, so
+        # both a token trace (generate()/S0) and a logits trace (vLLM S2) can
+        # coexist. Additive: the native path never references these.
+        graph_prefill_logits = TTNNDotsOCRPrefillGraph(
+            decoder_stack,
+            final_norm,
+            lm_head,
+            embedding=embedding,
+            vision_tower=vision_tower,
+            image_token_id=config.image_token_id,
+            hidden_size=config.hidden_size,
+            scatter_uses_dp_batch_mapper=_bim is not None,
+        )
+        graph_prefill_logits._unique_name = "dots_ocr_graph_prefill_logits"
+        graph_prefill_logits._batched_vision = bool(batched_vision)
+        graph_prefill_logits._return_logits = True
+
+        graph_decode_logits = TTNNDotsOCRDecodeGraph(decoder_stack, final_norm, lm_head, embedding=embedding)
+        graph_decode_logits._unique_name = "dots_ocr_graph_decode_logits"
+        graph_decode_logits._return_logits = True
+
         pipeline = cls(
             embedding=embedding,
             vision_tower=vision_tower,
@@ -784,6 +834,11 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
             batched_vision=batched_vision,
         )
         pipeline._unique_name = "dots_ocr_pipeline"
+        # Attach the S2 logits graphs BEFORE device setup so set_device binds
+        # them (they share already-collected child modules, so no extra weight
+        # preprocessing is needed).
+        pipeline.graph_prefill_logits = graph_prefill_logits
+        pipeline.graph_decode_logits = graph_decode_logits
 
         # Set device and preprocess weights
         pipeline._set_device_and_preprocess(device)
@@ -852,8 +907,11 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
             self.lm_head,
             self.graph_prefill,
             self.graph_decode,
+            self.graph_prefill_logits,
+            self.graph_decode_logits,
         ]:
-            _recurse(component)
+            if component is not None:
+                _recurse(component)
         return found
 
     def _mesh_dp_dual_stream(self) -> bool:
@@ -872,7 +930,8 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         input_ids: torch.Tensor,
         pixel_values: Optional[torch.Tensor] = None,
         image_grid_thw: Optional[torch.Tensor] = None,
-    ) -> Union[int, List[int]]:
+        return_logits: bool = False,
+    ) -> Union[int, List[int], torch.Tensor]:
         """Run prefill (first forward pass) and return the first generated token(s).
 
         Args:
@@ -881,11 +940,20 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
                 per independent stream; each device runs local batch 1.
             pixel_values: Optional vision input for multimodal prefill.
             image_grid_thw: Optional grid info for vision input.
+            return_logits: Tier-S2 path (W1). When True, drive the dedicated
+                ``graph_prefill_logits`` instance and return the last-position
+                logits as a host ``[B, vocab]`` torch tensor (no on-device
+                argmax) so vLLM can sample. Default False keeps the native
+                token-returning behavior byte-for-byte unchanged.
 
         Returns:
             First predicted token ID (int), or a list of ``B`` IDs when
-            ``_mesh_dp_dual_stream()`` is active.
+            ``_mesh_dp_dual_stream()`` is active; or a ``[B, vocab]`` host logits
+            tensor when ``return_logits=True``.
         """
+        if return_logits and self.graph_prefill_logits is None:
+            raise RuntimeError("return_logits=True requires the S2 logits graphs (built by from_hf_model)")
+        graph_prefill = self.graph_prefill_logits if return_logits else self.graph_prefill
         dual = self._mesh_dp_dual_stream()
         if dual and int(input_ids.shape[0]) != int(self.config.batch_size):
             raise ValueError(
@@ -1008,7 +1076,7 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
                 )
             # Per-image merged token count (single grid g).
             n_vis = self.vision_tower.merged_vision_sequence_length(g_single, None)
-            tt_idx, tt_mask = self.graph_prefill.get_or_build_scatter_tensors(input_ids, n_vis, id_mapper, num_devices)
+            tt_idx, tt_mask = graph_prefill.get_or_build_scatter_tensors(input_ids, n_vis, id_mapper, num_devices)
             # Single-image grid for the graph: each device runs the tower on ONE
             # image of grid g; RoPE / bucket derive from seq_per_img.
             mm_grid_thw = _normalize_image_grid_thw_torch(g_single)
@@ -1063,7 +1131,7 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
                     else None
                 )
             n_vis = self.vision_tower.merged_vision_sequence_length(image_grid_thw, pixel_values)
-            tt_idx, tt_mask = self.graph_prefill.get_or_build_scatter_tensors(input_ids, n_vis, id_mapper, num_devices)
+            tt_idx, tt_mask = graph_prefill.get_or_build_scatter_tensors(input_ids, n_vis, id_mapper, num_devices)
             grid_cpu = image_grid_thw.detach().cpu()
             if grid_cpu.dim() == 1:
                 grid_cpu = grid_cpu.unsqueeze(0)
@@ -1119,7 +1187,7 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
                 mm_args = (x_patch, tt_grid, tt_idx, tt_mask)
                 if vision_attention_mask is not None:
                     mm_args = (*mm_args, vision_attention_mask)
-                token_id_tt = self.graph_prefill(
+                graph_out_tt = graph_prefill(
                     hidden_states,
                     tt_cache_position,
                     *mm_args,
@@ -1127,9 +1195,24 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
                     mm_grid_thw=mm_grid_thw,
                 )
             else:
-                token_id_tt = self.graph_prefill(hidden_states, tt_cache_position, past_key_value=self.paged_cache)
+                graph_out_tt = graph_prefill(hidden_states, tt_cache_position, past_key_value=self.paged_cache)
 
-        # --- Read to host ---
+        # --- Tier-S2 logits path (W1): return host [B, vocab] logits ---------
+        if return_logits:
+            with _profile_stage(self.device, "prefill.logits_readback"):
+                logits_torch = ttnn.to_torch(
+                    graph_out_tt,
+                    mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
+                )
+            ttnn.deallocate(tt_cache_position)
+            _dots_ocr_signpost("dots_ocr.prefill_end")
+            # graph slices to the last position, so per device this is
+            # [1, 1, vocab]; the mesh concat stacks one row per DP stream ->
+            # [B, 1, vocab]. Collapse the singleton seq dim to [B, vocab].
+            return logits_torch.reshape(-1, int(logits_torch.shape[-1]))
+
+        # --- Read to host (native token path) ---
+        token_id_tt = graph_out_tt
         with _profile_stage(self.device, "prefill.first_token_readback"):
             token_id_torch = ttnn.to_torch(
                 token_id_tt,
@@ -1442,6 +1525,142 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         return flat_ids[0]
 
     # ------------------------------------------------------------------
+    # Tier-S2 logits forward (W1): vLLM-driven, returns logits not tokens
+    # ------------------------------------------------------------------
+
+    def forward_logits_prefill(
+        self,
+        input_ids: torch.Tensor,
+        pixel_values: Optional[torch.Tensor] = None,
+        image_grid_thw: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Tier-S2 prefill that returns last-position logits ``[B, vocab]``.
+
+        Thin wrapper over :meth:`prefill` in ``return_logits`` mode; the vLLM S2
+        adapter calls this (instead of the CPU-torch ``hf_model.forward``) so the
+        device prefill graph runs and vLLM samples the first token from the
+        returned logits.
+        """
+        return self.prefill(
+            input_ids,
+            pixel_values=pixel_values,
+            image_grid_thw=image_grid_thw,
+            return_logits=True,
+        )
+
+    def _write_logits_decode_inputs(self, prev_full: List[int], pos_full: List[int]) -> None:
+        """Copy per-stream prev-tokens and absolute cache positions in place.
+
+        Both ``_decode_token_buffer`` and ``_decode_cache_position`` keep a
+        stable buffer identity (``ttnn.copy`` into the pre-allocated buffers),
+        so the captured logits decode trace stays valid across vLLM steps even
+        as positions/tokens change every step.
+        """
+        bs = int(self.config.batch_size)
+        mapper = (
+            self._batch_input_mapper
+            if self._batch_input_mapper is not None
+            else ttnn.ReplicateTensorToMesh(self.device)
+        )
+        tok_host = torch.tensor(prev_full, dtype=torch.int32).reshape(bs, 1)
+        tok_up = ttnn.from_torch(
+            tok_host,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            mesh_mapper=mapper,
+        )
+        ttnn.copy(tok_up, self._decode_token_buffer)
+        ttnn.deallocate(tok_up)
+
+        # 1-D [bs] so the DP shard mapper yields a [1] position per device.
+        pos_host = torch.tensor(pos_full, dtype=torch.int32)
+        pos_up = ttnn.from_torch(
+            pos_host,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            mesh_mapper=mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.copy(pos_up, self._decode_cache_position)
+        ttnn.deallocate(pos_up)
+        self._decode_token_host = tok_host
+        self._decode_cache_pos_host = pos_host
+
+    def forward_logits_decode(
+        self,
+        prev_token_id: Union[int, List[int]],
+        cache_position: Union[int, List[int], torch.Tensor],
+    ) -> torch.Tensor:
+        """One Tier-S2 decode step; returns logits ``[N, vocab]`` for the inputs.
+
+        ``cache_position`` is vLLM's absolute per-sequence position(s) (``start_pos``)
+        for this step -- one per active row. Each mesh device serves one stream,
+        so up to ``config.batch_size`` rows; fewer-than-full batches are padded
+        to ``batch_size`` (sentinel position 0, output discarded) and the
+        returned tensor is sliced back to the caller's ``N`` active rows.
+
+        Per-stream positions (TS-3) are seeded into a stable device buffer and
+        updated in place each step, and the dedicated ``graph_decode_logits``
+        trace returns logits instead of an argmax token.
+        """
+        if self.graph_decode_logits is None:
+            raise RuntimeError("forward_logits_decode requires the S2 logits graphs (built by from_hf_model)")
+        bs = int(self.config.batch_size)
+
+        prev_list = [int(prev_token_id)] if isinstance(prev_token_id, int) else [int(x) for x in prev_token_id]
+        if torch.is_tensor(cache_position):
+            pos_list = [int(x) for x in cache_position.reshape(-1).tolist()]
+        elif isinstance(cache_position, int):
+            pos_list = [int(cache_position)]
+        else:
+            pos_list = [int(x) for x in cache_position]
+        n_in = len(prev_list)
+        if n_in == 0 or n_in > bs or len(pos_list) != n_in:
+            raise ValueError(
+                f"forward_logits_decode expects 1..{bs} matching prev_token/cache_position "
+                f"entries; got {n_in} tokens and {len(pos_list)} positions"
+            )
+
+        # Pad to the fixed device batch (inactive rows: token 0, position 0).
+        prev_full = prev_list + [0] * (bs - n_in)
+        pos_full = [max(0, p) for p in pos_list] + [0] * (bs - n_in)
+
+        # Fresh request (buffers cleared by the preceding prefill) -> build the
+        # stable per-stream buffers once via the existing TS-3 path; thereafter
+        # update them in place.
+        if self._decode_cache_position is None or self._decode_token_buffer is None:
+            if self._batch_input_mapper is not None:
+                enable = getattr(self.decoder_stack, "enable_per_stream_positions", None)
+                if callable(enable):
+                    enable(bs, self._batch_input_mapper)
+            self._external_decode_positions = list(pos_full)
+            self._init_decode_buffers(prev_full)
+        else:
+            self._write_logits_decode_inputs(prev_full, pos_full)
+
+        trace_decode_tokens = getattr(self.graph_decode_logits, "_d_embedding", None) is not None
+        if trace_decode_tokens:
+            decode_input = self._decode_token_buffer
+        else:
+            decode_input = self.embedding(self._decode_token_buffer)
+            if self._mesh_dp_dual_stream() and self._batch_input_mapper is not None:
+                decode_input = self._dp_repack_batch_sharded_hidden(decode_input)
+
+        with _profile_stage(self.device, "decode.graph_decode_logits_sync"):
+            logits_tt = self.graph_decode_logits(
+                decode_input, self._decode_cache_position, past_key_value=self.paged_cache
+            )
+        with _profile_stage(self.device, "decode.logits_readback"):
+            logits_torch = ttnn.to_torch(
+                logits_tt,
+                mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
+            )
+        logits_full = logits_torch.reshape(-1, int(logits_torch.shape[-1]))  # [bs, vocab]
+        return logits_full[:n_in]
+
+    # ------------------------------------------------------------------
     # Generate
     # ------------------------------------------------------------------
 
@@ -1706,6 +1925,7 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         input_ids: torch.Tensor,
         pixel_values: Optional[torch.Tensor] = None,
         image_grid_thw: Optional[torch.Tensor] = None,
+        return_logits: bool = False,
     ) -> None:
         """Run warmup passes to prime JIT and capture traces.
 
@@ -1714,7 +1934,16 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
           2. TracedRun.release_all(): release any traces from warmup.
           3. Trace capture run: captures decode trace.
           4. Reset: clear KV cache, reset positions.
+
+        ``return_logits`` (Tier-S2 / W1): prime and capture the dedicated
+        LOGITS-mode prefill/decode graphs (``forward_logits_*``) instead of the
+        token-mode ``generate`` loop, so the first real vLLM request replays a
+        captured logits decode trace rather than paying a cold capture.
         """
+        if return_logits:
+            self._warmup_logits(input_ids, pixel_values, image_grid_thw)
+            return
+
         # Pass 1: Warmup (TracedRun phase 1 -- no trace capture)
         self.generate(input_ids, pixel_values, image_grid_thw, max_new_tokens=2)
         self.paged_cache.reset()
@@ -1727,6 +1956,41 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         self.generate(input_ids, pixel_values, image_grid_thw, max_new_tokens=4)
         self.paged_cache.reset()
         self._reset_decode_loop_state()
+
+    def _warmup_logits(
+        self,
+        input_ids: torch.Tensor,
+        pixel_values: Optional[torch.Tensor],
+        image_grid_thw: Optional[torch.Tensor],
+    ) -> None:
+        """Two-pass warm + capture of the Tier-S2 logits graphs.
+
+        Mirrors the token warmup's two-pass structure (warm, release, capture)
+        but drives ``forward_logits_prefill`` / ``forward_logits_decode`` so the
+        ``*_logits`` traces are the ones primed/captured. The greedy argmax of
+        each step feeds the next, with absolute cache positions advancing one per
+        step (the contiguous decode pattern vLLM drives for a single sequence).
+        """
+        prompt_len = int(input_ids.shape[-1])
+
+        def _one_pass(decode_steps: int) -> None:
+            logits = self.forward_logits_prefill(
+                input_ids, pixel_values=pixel_values, image_grid_thw=image_grid_thw
+            )
+            n_rows = int(logits.shape[0])
+            for step in range(decode_steps):
+                prev = [int(logits[r].argmax().item()) for r in range(n_rows)]
+                pos = [prompt_len + step] * n_rows
+                logits = self.forward_logits_decode(prev, pos)
+            self.paged_cache.reset()
+            self._reset_decode_loop_state()
+
+        # Pass 1: warm (TracedRun phase 1)
+        _one_pass(decode_steps=1)
+        # Release so pass 2 captures cleanly (matches token warmup).
+        TracedRun.release_all()
+        # Pass 2: capture (TracedRun phase 2 -> decode trace recorded)
+        _one_pass(decode_steps=3)
 
     def release(self) -> None:
         """Release all traced runs and deallocate pre-allocated buffers."""
