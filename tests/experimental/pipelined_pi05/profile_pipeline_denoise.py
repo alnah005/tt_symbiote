@@ -23,7 +23,7 @@ from tt_symbiote.models.pipelined_pi05.denoise_pipeline import (
 )
 
 SEED = 42
-_PREFIX_LEN = 256
+_PREFIX_LEN = int(os.environ.get("PI05_PREFIX_LEN", "256"))
 _ACTION_DIM = 32
 
 
@@ -98,8 +98,12 @@ def _build_inputs(config, ah, suffix_len):
 
 def _open_parent():
     ttnn.set_fabric_config(
-        ttnn.FabricConfig.FABRIC_1D, ttnn.FabricReliabilityMode.STRICT_INIT, None,
-        ttnn.FabricTensixConfig.DISABLED, ttnn.FabricUDMMode.DISABLED, ttnn.FabricManagerMode.DEFAULT,
+        ttnn.FabricConfig.FABRIC_1D,
+        ttnn.FabricReliabilityMode.STRICT_INIT,
+        None,
+        ttnn.FabricTensixConfig.DISABLED,
+        ttnn.FabricUDMMode.DISABLED,
+        ttnn.FabricManagerMode.DEFAULT,
     )
     return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 4), l1_small_size=24576, trace_region_size=134_217_728)
 
@@ -126,10 +130,22 @@ def main():
         if mode == "per_step":
             os.environ.setdefault("TT_SYMBIOTE_RUN_MODE", "NORMAL")
             pipe = obj = build_denoise_pipeline(
-                ref_blocks, fmw, fmb, ref_suffix, config, suffix_config, parent,
-                adarms_cond_torch=adarms_cond, prefix_kv_cache=prefix_kv, prefix_len=_PREFIX_LEN,
-                suffix_len=suffix_len, attention_mask_torch=mask, position_offset=_PREFIX_LEN,
-                splits=(5, 5, 4, 4), block_cls=TTNNPi05DenoiseExpertBlock, use_concat_kv=True,
+                ref_blocks,
+                fmw,
+                fmb,
+                ref_suffix,
+                config,
+                suffix_config,
+                parent,
+                adarms_cond_torch=adarms_cond,
+                prefix_kv_cache=prefix_kv,
+                prefix_len=_PREFIX_LEN,
+                suffix_len=suffix_len,
+                attention_mask_torch=mask,
+                position_offset=_PREFIX_LEN,
+                splits=(5, 5, 4, 4),
+                block_cls=TTNNPi05DenoiseExpertBlock,
+                use_concat_kv=True,
             )
             x_dev = ttnn.from_torch(x_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=pipe.meshes[0])
             pipe(x_dev)
@@ -144,11 +160,25 @@ def main():
             timesteps, _ = euler_schedule(n_steps)
             conds = [ref_suffix.embed_timestep_adarms(torch.tensor([timesteps[i]])) for i in range(n_steps)]
             drv = obj = build_denoise_loop_pipeline(
-                ref_blocks, fmw, fmb, ref_suffix, config, suffix_config, parent,
-                adarms_cond_per_step=conds, prefix_kv_cache=prefix_kv, prefix_len=_PREFIX_LEN,
-                suffix_len=suffix_len, attention_mask_torch=mask, position_offset=_PREFIX_LEN,
-                num_steps=n_steps, action_horizon=ah, splits=(5, 5, 4, 4),
-                block_cls=TTNNPi05DenoiseExpertBlock, use_concat_kv=True, drain="all",
+                ref_blocks,
+                fmw,
+                fmb,
+                ref_suffix,
+                config,
+                suffix_config,
+                parent,
+                adarms_cond_per_step=conds,
+                prefix_kv_cache=prefix_kv,
+                prefix_len=_PREFIX_LEN,
+                suffix_len=suffix_len,
+                attention_mask_torch=mask,
+                position_offset=_PREFIX_LEN,
+                num_steps=n_steps,
+                action_horizon=ah,
+                splits=(5, 5, 4, 4),
+                block_cls=TTNNPi05DenoiseExpertBlock,
+                use_concat_kv=True,
+                drain="all",
             )
             drv.stream_euler(x_t, capture=True)
             signpost(header=f"denoise_streamed_N{n_steps}_ah{ah}")

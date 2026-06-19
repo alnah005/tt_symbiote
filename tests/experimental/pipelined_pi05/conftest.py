@@ -30,6 +30,11 @@ def _tracy_signpost(request):
 
 
 def _open_parent_mesh():
+    # MESH_DEVICE=P150 is the per-op arch: the pipeline carves the parent into four 1x1
+    # submeshes and each stage runs on a single P150, matching the @run_on_devices(P150)
+    # guards. The 4-device (P150x4) requirement is a hardware-count check below -- enforcing
+    # it via MESH_DEVICE=P150x4 would resolve every op's arch to P150x4 and fall them all
+    # back to torch.
     assert os.environ.get("MESH_DEVICE") == "P150", "pipelined denoise tests require MESH_DEVICE=P150"
     ttnn.set_fabric_config(
         ttnn.FabricConfig.FABRIC_1D,
@@ -39,10 +44,29 @@ def _open_parent_mesh():
         ttnn.FabricUDMMode.DISABLED,
         ttnn.FabricManagerMode.DEFAULT,
     )
-    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 4), l1_small_size=24576, trace_region_size=134_217_728)
+    parent = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 4), l1_small_size=24576, trace_region_size=134_217_728)
+    n = parent.get_num_devices()
+    if n != 4:
+        ttnn.close_mesh_device(parent)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        raise AssertionError(f"pipelined denoise requires a 4-device P150x4 system; found {n} device(s)")
+    return parent
 
 
 def _close_parent_mesh(parent):
+    # Release ALL tracked traces + socket transports BEFORE closing the mesh (release_trace /
+    # transport.close need a live device). TracedRun.release_all() drains the module-trace cache
+    # (+ clears warm-up bookkeeping, else replay corrupts across back-to-back traced tests);
+    # Pipeline.release_all() drains the pipeline loop/forward traces and the hop+wrap sockets.
+    # Both are catch-alls even if a test skipped its own drv.close().
+    for _release_all in ("tt_symbiote.core.run_config:TracedRun", "tt_symbiote.core.d2d_pipeline:Pipeline"):
+        mod, cls = _release_all.split(":")
+        try:
+            import importlib
+
+            getattr(importlib.import_module(mod), cls).release_all()
+        except Exception:
+            pass
     for submesh in parent.get_submeshes():
         ttnn.close_mesh_device(submesh)
     ttnn.close_mesh_device(parent)

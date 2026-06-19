@@ -184,11 +184,27 @@ def _build_reference_ah(action_horizon):
         prefix_kv.append((k_roped, v))
 
     return dict(
-        cfg=cfg, suffix_config=cfg.suffix_config, ref_blocks=ref_blocks, ref_suffix=ref_suffix,
-        final_mod_w=final_mod_w, final_mod_b=final_mod_b, x_t=x_t, adarms_cond=adarms_cond,
-        prefix_kv=prefix_kv, mask=mask, cos=cos, sin=sin, pid_suf=pid_suf, W=W, eps=eps,
-        head_dim=head_dim, num_kv_heads=num_kv_heads, rope_base=rope_base,
-        apply_rotary_emb=apply_rotary_emb, action_horizon=action_horizon, suffix_len=suffix_len,
+        cfg=cfg,
+        suffix_config=cfg.suffix_config,
+        ref_blocks=ref_blocks,
+        ref_suffix=ref_suffix,
+        final_mod_w=final_mod_w,
+        final_mod_b=final_mod_b,
+        x_t=x_t,
+        adarms_cond=adarms_cond,
+        prefix_kv=prefix_kv,
+        mask=mask,
+        cos=cos,
+        sin=sin,
+        pid_suf=pid_suf,
+        W=W,
+        eps=eps,
+        head_dim=head_dim,
+        num_kv_heads=num_kv_heads,
+        rope_base=rope_base,
+        apply_rotary_emb=apply_rotary_emb,
+        action_horizon=action_horizon,
+        suffix_len=suffix_len,
     )
 
 
@@ -199,8 +215,14 @@ def _torch_golden_ah(R):
     h = R["ref_suffix"].embed_actions(R["x_t"])
     for i, blk in enumerate(R["ref_blocks"]):
         h, _ = blk.forward(
-            h, R["cos"], R["sin"], R["adarms_cond"], attention_mask=R["mask"],
-            position_ids=R["pid_suf"], past_key_value=R["prefix_kv"][i], use_cache=False,
+            h,
+            R["cos"],
+            R["sin"],
+            R["adarms_cond"],
+            attention_mask=R["mask"],
+            position_ids=R["pid_suf"],
+            past_key_value=R["prefix_kv"][i],
+            use_cache=False,
         )
     h = ada_rms_norm_no_gate(h, R["adarms_cond"], R["final_mod_w"], R["final_mod_b"], R["eps"])
     gold = R["ref_suffix"].project_output(h)
@@ -219,8 +241,14 @@ def _torch_golden_euler(R, num_steps):
         h = R["ref_suffix"].embed_actions(x_t)
         for j, blk in enumerate(R["ref_blocks"]):
             h, _ = blk.forward(
-                h, R["cos"], R["sin"], cond, attention_mask=R["mask"],
-                position_ids=R["pid_suf"], past_key_value=R["prefix_kv"][j], use_cache=False,
+                h,
+                R["cos"],
+                R["sin"],
+                cond,
+                attention_mask=R["mask"],
+                position_ids=R["pid_suf"],
+                past_key_value=R["prefix_kv"][j],
+                use_cache=False,
             )
         h = ada_rms_norm_no_gate(h, cond, R["final_mod_w"], R["final_mod_b"], R["eps"])
         v = R["ref_suffix"].project_output(h)
@@ -560,12 +588,23 @@ def test_fill_cache_shim_survives_repin(dev):
 
 def _build_perf_pipeline(R, parent_mesh, *, submeshes=None):
     return build_denoise_pipeline(
-        R["ref_blocks"], R["final_mod_w"], R["final_mod_b"], R["ref_suffix"],
-        R["cfg"], R["suffix_config"], parent_mesh,
-        adarms_cond_torch=R["adarms_cond"], prefix_kv_cache=R["prefix_kv"],
-        prefix_len=_PREFIX_LEN, suffix_len=R["suffix_len"], attention_mask_torch=R["mask"],
-        position_offset=_PREFIX_LEN, splits=(5, 5, 4, 4), submeshes=submeshes,
-        block_cls=TTNNPi05DenoiseExpertBlock, use_concat_kv=True,
+        R["ref_blocks"],
+        R["final_mod_w"],
+        R["final_mod_b"],
+        R["ref_suffix"],
+        R["cfg"],
+        R["suffix_config"],
+        parent_mesh,
+        adarms_cond_torch=R["adarms_cond"],
+        prefix_kv_cache=R["prefix_kv"],
+        prefix_len=_PREFIX_LEN,
+        suffix_len=R["suffix_len"],
+        attention_mask_torch=R["mask"],
+        position_offset=_PREFIX_LEN,
+        splits=(5, 5, 4, 4),
+        submeshes=submeshes,
+        block_cls=TTNNPi05DenoiseExpertBlock,
+        use_concat_kv=True,
     )
 
 
@@ -620,13 +659,26 @@ def test_denoise_perf_per_step_gate(denoise_parent_mesh):
 
 def _build_streamed(R, parent_mesh, num_steps, *, submeshes=None, drain="all"):
     return build_denoise_loop_pipeline(
-        R["ref_blocks"], R["final_mod_w"], R["final_mod_b"], R["ref_suffix"],
-        R["cfg"], R["suffix_config"], parent_mesh,
-        adarms_cond_per_step=_per_step_conds(R, num_steps), prefix_kv_cache=R["prefix_kv"],
-        prefix_len=_PREFIX_LEN, suffix_len=R["suffix_len"], attention_mask_torch=R["mask"],
-        position_offset=_PREFIX_LEN, num_steps=num_steps, action_horizon=R["action_horizon"],
-        splits=(5, 5, 4, 4), submeshes=submeshes, block_cls=TTNNPi05DenoiseExpertBlock,
-        use_concat_kv=True, drain=drain,
+        R["ref_blocks"],
+        R["final_mod_w"],
+        R["final_mod_b"],
+        R["ref_suffix"],
+        R["cfg"],
+        R["suffix_config"],
+        parent_mesh,
+        adarms_cond_per_step=_per_step_conds(R, num_steps),
+        prefix_kv_cache=R["prefix_kv"],
+        prefix_len=_PREFIX_LEN,
+        suffix_len=R["suffix_len"],
+        attention_mask_torch=R["mask"],
+        position_offset=_PREFIX_LEN,
+        num_steps=num_steps,
+        action_horizon=R["action_horizon"],
+        splits=(5, 5, 4, 4),
+        submeshes=submeshes,
+        block_cls=TTNNPi05DenoiseExpertBlock,
+        use_concat_kv=True,
+        drain=drain,
     )
 
 

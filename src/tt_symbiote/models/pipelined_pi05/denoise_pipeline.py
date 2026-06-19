@@ -27,6 +27,8 @@ def perf_action_horizon(default: int = 10) -> int:
 
 def perf_suffix_len(action_horizon: int) -> int:
     return ((action_horizon + 31) // 32) * 32
+
+
 _L1 = ttnn.L1_MEMORY_CONFIG
 _DRAM = ttnn.DRAM_MEMORY_CONFIG
 
@@ -44,9 +46,7 @@ def carve_four_submeshes(parent):
             f"carve_four_submeshes: unsupported parent mesh shape {shape}; "
             f"expected a 4-device mesh (1x4 / 4x1 / 2x2)."
         )
-    return tuple(
-        parent.create_submesh(ttnn.MeshShape(1, 1), ttnn.MeshCoordinate(r, c)) for (r, c) in coords
-    )
+    return tuple(parent.create_submesh(ttnn.MeshShape(1, 1), ttnn.MeshCoordinate(r, c)) for (r, c) in coords)
 
 
 _FILL_CACHE_SHIM_ATTR = "_pi05_denoise_fill_cache_shim"
@@ -110,7 +110,6 @@ def _slice_rope(cos, sin, seq_len, offset):
 
 @trace_enabled
 class TTNNPi05DenoisePipelineStage(StatelessTTNNModule):
-
     def __init__(
         self,
         *,
@@ -159,9 +158,7 @@ class TTNNPi05DenoisePipelineStage(StatelessTTNNModule):
 
     def preprocess_weights_impl(self):
         if self._is_last and self._raw_final_norm_mod_w is not None:
-            self._tt_final_mod_w = _linear_weight_to_tt(
-                self._raw_final_norm_mod_w, dtype=ttnn.bfloat16
-            )
+            self._tt_final_mod_w = _linear_weight_to_tt(self._raw_final_norm_mod_w, dtype=ttnn.bfloat16)
             self._tt_final_mod_b = (
                 ttnn.from_torch(
                     self._raw_final_norm_mod_b.reshape(1, -1).contiguous(),
@@ -471,8 +468,9 @@ def euler_schedule(num_steps):
 
 
 class TTNNPi05DenoiseStreamedPipeline:
-
-    def __init__(self, pipeline, *, num_steps, action_horizon, per_step_block_mods, per_step_final_mod, dts, drain="all"):
+    def __init__(
+        self, pipeline, *, num_steps, action_horizon, per_step_block_mods, per_step_final_mod, dts, drain="all"
+    ):
         self._pipe = pipeline
         self._stages = pipeline.stages
         self._meshes = pipeline.meshes
@@ -486,6 +484,7 @@ class TTNNPi05DenoiseStreamedPipeline:
         self._stage0_mesh = self._meshes[0]
         self._last_mesh = self._meshes[-1]
         self._wrap_tp = SocketTransport()
+        Pipeline._track_transport(self._wrap_tp)  # central release (mirrors the hop transports)
         self._wrap_tag = "velocity_wrap"
         self._x_t = None
         self._hop_sock = None
@@ -523,7 +522,9 @@ class TTNNPi05DenoiseStreamedPipeline:
         ttnn.deallocate(v_scaled)
 
     def _warmup_caches(self, x_t_init):
-        self._x_t = ttnn.from_torch(x_t_init, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self._stage0_mesh, memory_config=_L1)
+        self._x_t = ttnn.from_torch(
+            x_t_init, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self._stage0_mesh, memory_config=_L1
+        )
         self._hop_sock = [None]
         x_bf16 = ttnn.typecast(self._x_t, ttnn.bfloat16, memory_config=_L1)
         out = self._stages[0].forward(x_bf16)
@@ -553,7 +554,9 @@ class TTNNPi05DenoiseStreamedPipeline:
     def stream_euler(self, x_t_init, *, capture=True):
         self._warmup_caches(x_t_init)
         ttnn.copy(
-            ttnn.from_torch(x_t_init, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self._stage0_mesh, memory_config=_L1),
+            ttnn.from_torch(
+                x_t_init, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self._stage0_mesh, memory_config=_L1
+            ),
             self._x_t,
         )
         if not capture:
@@ -657,7 +660,9 @@ def build_denoise_loop_pipeline(
         step_block = []
         step_final = None
         for k, st in enumerate(stages):
-            cond_dev = ttnn.from_torch(adarms_cond_per_step[i], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=meshes[k])
+            cond_dev = ttnn.from_torch(
+                adarms_cond_per_step[i], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=meshes[k]
+            )
             step_block.append([_to_dram(blk.precompute_mods(cond_dev)) for blk in st.blocks])
             if st._is_last:
                 step_final = st._precompute_final_mod(cond_dev)

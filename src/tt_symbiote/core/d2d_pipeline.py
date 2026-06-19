@@ -30,6 +30,49 @@ TT_METAL_COMMIT = "2475f8f0cab858663cebccfad11a1728604c3ece"
 class Pipeline(StatelessTTNNModule):
     """Chain of stages whose dependencies are encoded as D2DBridge edges (see module docstring)."""
 
+    # Central registries (mirror TracedRun._trace_cache): every captured trace and every socket
+    # transport is tracked here so release_all() frees them in one shot, independent of per-instance
+    # close(). release_trace()/transport.close() need a live device -> call release_all() BEFORE the
+    # mesh is closed (e.g. in the test fixture teardown, alongside TracedRun.release_all()).
+    _live_traces: list = []
+    _live_transports: list = []
+
+    @classmethod
+    def _track_traces(cls, tids):
+        cls._live_traces.extend(tids or ())
+
+    @classmethod
+    def _track_transport(cls, transport):
+        if transport is not None and all(transport is not t for t in cls._live_transports):
+            cls._live_transports.append(transport)
+
+    @classmethod
+    def _untrack_traces(cls, tids):
+        drop = {id(e) for e in (tids or ())}
+        cls._live_traces = [e for e in cls._live_traces if id(e) not in drop]
+
+    @classmethod
+    def release_all(cls):
+        """Release every tracked trace and close every tracked socket transport (mirrors
+        TracedRun.release_all). The catch-all for resources a test/process did not release
+        explicitly; idempotent with the per-instance release_loop()/close() paths."""
+        for m, tid in cls._live_traces:
+            try:
+                ttnn.release_trace(m, tid)
+            except Exception:
+                pass
+        cls._live_traces = []
+        seen = set()
+        for t in cls._live_transports:
+            if id(t) in seen:
+                continue
+            seen.add(id(t))
+            try:
+                t.close()
+            except Exception:
+                pass
+        cls._live_transports = []
+
     def __init__(self, bridges, *, sync_on_return=False):
         super().__init__()
         bridges = list(bridges)
@@ -94,6 +137,9 @@ class Pipeline(StatelessTTNNModule):
         self._hop_sock = None
         self._tids = None
         self._out_last = None
+        for b in self._hop_in:  # track each hop's socket transport for central release
+            if b is not None:
+                Pipeline._track_transport(b.transport)
 
     @property
     def stages(self):
@@ -207,6 +253,7 @@ class Pipeline(StatelessTTNNModule):
                 ttnn.end_trace_capture(mesh, tid)
                 tids.append((mesh, tid))
         self._tids = tids
+        Pipeline._track_traces(tids)
 
     def _replay(self, x):
         if x is not self._x_dev:
@@ -237,6 +284,7 @@ class Pipeline(StatelessTTNNModule):
                 body_fn(i)
             for m, tid in tids:
                 ttnn.end_trace_capture(m, tid)
+        Pipeline._track_traces(tids)
         return tids
 
     @staticmethod
@@ -252,13 +300,14 @@ class Pipeline(StatelessTTNNModule):
                     seen.add(id(m))
                     ttnn.synchronize_device(m)
 
-    @staticmethod
-    def release_loop(loop_tids):
+    @classmethod
+    def release_loop(cls, loop_tids):
         for m, tid in loop_tids or ():
             try:
                 ttnn.release_trace(m, tid)
             except Exception:
                 pass
+        cls._untrack_traces(loop_tids)
 
     def release_traces(self):
         if self._tids:
@@ -267,6 +316,7 @@ class Pipeline(StatelessTTNNModule):
                     ttnn.release_trace(mesh, tid)
                 except Exception:
                     pass
+            Pipeline._untrack_traces(self._tids)
         self._tids = None
         self._warmed = set()
 
