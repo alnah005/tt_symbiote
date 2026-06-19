@@ -270,13 +270,24 @@ class TTNNPagedAttentionKVCache(Cache):
         value_states: ttnn.Tensor,
         layer_idx: int,
         batch_idx: int = 0,
+        page_table: Optional[ttnn.Tensor] = None,
     ):
+        """Fill the paged KV cache with a (chunk of) prefill K/V.
+
+        ``page_table`` overrides the installed full page table. TS-7 chunked
+        prefill passes a *chunk* page table (the slice of physical blocks for the
+        chunk, see :meth:`build_chunk_page_table`) so the ``paged_fill_cache``
+        kernel -- which always writes from virtual position 0 -- lands the chunk's
+        K/V at its true absolute blocks. The default (``None``) uses the full
+        page table and writes from offset 0 (single-shot prefill, unchanged).
+        """
         if not self._is_on_device:
             raise RuntimeError("KV cache not on device. Call to_device(device).")
 
         k_cache = self._tt_key_cache[layer_idx]
         v_cache = self._tt_value_cache[layer_idx]
-        page_table = self._tt_page_table
+        if page_table is None:
+            page_table = self._tt_page_table
 
         max_len = self.config.blocks_per_sequence * self.config.block_size
         seq_len = key_states.shape[2]
@@ -296,6 +307,90 @@ class TTNNPagedAttentionKVCache(Cache):
             self._seq_lengths[layer_idx] += seq_len
             if layer_idx == 0:
                 self._seen_tokens += seq_len
+
+    def build_chunk_page_table(self, chunk_start: int, chunk_end: int) -> ttnn.Tensor:
+        """Upload the page-table slice covering absolute positions [chunk_start, chunk_end).
+
+        Returns a fresh device tensor ``[batch, n_blocks_chunk]`` mapping the
+        chunk's virtual block 0..k-1 onto the physical blocks that hold positions
+        ``[chunk_start, chunk_end)``. ``paged_fill_cache`` writes from virtual
+        position 0, so handing it this slice lands the chunk K/V at its true
+        blocks (TS-7). The caller owns the returned tensor (deallocate it).
+
+        Both ``chunk_start`` and ``chunk_end`` should be block-aligned except for
+        the final chunk, whose ``chunk_end`` may be the (unaligned) sequence end;
+        we round the end block up so the partial trailing block is included.
+        """
+        if not self._is_on_device:
+            raise RuntimeError("KV cache not on device. Call to_device(device).")
+        block = self.config.block_size
+        start_block = chunk_start // block
+        end_block = (chunk_end + block - 1) // block
+        chunk_pt = self.page_table[:, start_block:end_block].contiguous().to(torch.int32)
+        return ttnn.from_torch(
+            chunk_pt,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self._device,
+            mesh_mapper=self._page_table_mesh_mapper(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    @staticmethod
+    def _chunk_prefill_program_config(seq_len: int, chunk_start_idx: int):
+        """Per-chunk SDPA program config (mirrors tt_transformers).
+
+        ``q_chunk_size`` must divide ``chunk_start_idx`` (tt-metal constraint);
+        ``(x & -x)`` is the largest power of two dividing x.
+        """
+        base = 256 if seq_len >= 2048 else 64
+        if not chunk_start_idx:
+            q_chunk = base
+        else:
+            q_chunk = min(base, chunk_start_idx & -chunk_start_idx)
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            exp_approx_mode=False,
+            q_chunk_size=q_chunk,
+            k_chunk_size=q_chunk,
+        )
+
+    def chunked_sdpa_prefill(
+        self,
+        query: ttnn.Tensor,
+        layer_idx: int,
+        chunk_start_idx: int,
+        seq_len: int,
+    ) -> ttnn.Tensor:
+        """Chunked prefill SDPA: a Q chunk attends over the cached prefix.
+
+        Reads K/V from the paged cache via the full page table and uses the host
+        ``chunk_start_idx`` to apply the correct causal mask for the chunk's
+        absolute position. Requires the chunk's K/V to have already been written
+        (via :meth:`paged_fill_on_device` with the chunk page table). Mirrors
+        tt_transformers' chunked-prefill attention (eager; the host int variant
+        of ``chunk_start_idx``).
+
+        ``scale`` is intentionally NOT passed: the installed kernel binding marks
+        ``scale`` as ``.noconvert()`` and rejects a Python float for it on
+        multi-device tensors. The kernel default is ``1/sqrt(head_dim)``, which
+        equals dots.ocr's ``self.scaling`` (head_dim**-0.5), so the numerics are
+        identical. (The legacy int ``chunk_start_idx`` overload also does not
+        accept ``compute_kernel_config``.)
+        """
+        if not self._is_on_device:
+            raise RuntimeError("KV cache not on device. Call to_device(device).")
+        k_cache = self._tt_key_cache[layer_idx]
+        v_cache = self._tt_value_cache[layer_idx]
+        program_config = self._chunk_prefill_program_config(seq_len, chunk_start_idx)
+        return ttnn.transformer.chunked_scaled_dot_product_attention(
+            input_tensor_q=query,
+            input_tensor_k=k_cache,
+            input_tensor_v=v_cache,
+            page_table_tensor=self._tt_page_table,
+            chunk_start_idx=int(chunk_start_idx),
+            program_config=program_config,
+        )
 
     def paged_update_on_device(
         self,
@@ -423,7 +518,7 @@ class TTNNPagedAttentionKVCache(Cache):
     def get_max_cache_shape(self) -> Optional[int]:
         return self.config.max_seq_length
 
-    def reset(self) -> None:
+    def reset(self, clear_seq: bool = True) -> None:
         """Reset KV cache tracking for a new generation turn.
 
         Resets Python-side sequence tracking. Device buffer addresses are
@@ -431,9 +526,26 @@ class TTNNPagedAttentionKVCache(Cache):
         values in the cache are harmless: prefill overwrites positions
         0..seq_len-1, and paged_sdpa_decode uses cur_pos_tensor to limit
         attention to valid positions.
+
+        ``clear_seq=False`` (TS-8 prefix caching) keeps the per-layer sequence
+        counters so a follow-up prefill computes only the uncached suffix on top
+        of an already-populated prefix; the caller is then responsible for the
+        counters via :meth:`seed_seq_length` / :meth:`update_seq_length`.
         """
-        self._seq_lengths = [0] * self.num_layers
-        self._seen_tokens = 0
+        if clear_seq:
+            self._seq_lengths = [0] * self.num_layers
+            self._seen_tokens = 0
+
+    def seed_seq_length(self, prefix_len: int) -> None:
+        """Seed per-layer counters to ``prefix_len`` (TS-8 prefix caching).
+
+        Used when the first ``prefix_len`` tokens are already resident in the
+        paged cache (a vLLM prefix-cache hit), so the next prefill chunk starts
+        at absolute position ``prefix_len``. Enables external seq tracking.
+        """
+        self._external_seq_tracking = True
+        self._seq_lengths = [int(prefix_len)] * self.num_layers
+        self._seen_tokens = int(prefix_len)
 
 
 class TorchSDPAAttention(torch.nn.Module):

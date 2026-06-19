@@ -222,3 +222,256 @@ def test_forward_logits_distinct_streams(mesh_device):
         f"logits={[cand[i] for i in mism]}"
     )
     pipeline.release()
+
+
+def _long_prompt_ids(tok, min_len: int) -> torch.Tensor:
+    """Build a chat-templated prompt with at least ``min_len`` tokens."""
+    sentence = "Optical character recognition converts images of text into machine readable characters. "
+    content = sentence
+    ids = None
+    for _ in range(64):
+        ids = tok.apply_chat_template(
+            [{"role": "user", "content": content}],
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+        )["input_ids"]
+        if int(ids.shape[-1]) >= min_len:
+            break
+        content += sentence
+    return ids
+
+
+@pytest.mark.parametrize("device_params", [dots_ocr_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [resolve_mesh_device_shape()], indirect=True)
+def test_chunked_prefill_matches_single_shot(mesh_device):
+    """TS-7: chunked prefill reproduces single-shot prefill token-for-token.
+
+    A prompt long enough to span multiple 256-token chunks is prefilled twice:
+    once single-shot (the validated traced path) and once via the eager chunked
+    path (offset RoPE + chunk-page-table fill + chunked SDPA over the paged KV).
+    The greedy first token of every DP stream must match, proving the chunked
+    decoder writes the same paged KV and attends over the prefix correctly.
+    """
+    torch.set_grad_enabled(False)
+    batch = pipeline_batch_size()
+    pipeline = TTNNDotsOCRPipeline.from_hf_model(
+        model_path=DOTS_OCR_LOCAL_PATH, device=mesh_device, batch_size=batch
+    )
+    assert pipeline.graph_prefill_logits is not None
+
+    tok = AutoTokenizer.from_pretrained(DOTS_OCR_LOCAL_PATH, trust_remote_code=True)
+    # >256 tokens => at least two chunks (256 + remainder), exercising the
+    # absolute-offset RoPE and the chunk page table for chunk_start>0.
+    ids = _long_prompt_ids(tok, min_len=320)
+    ids = stack_input_ids_for_dp(ids)
+    seq_len = int(ids.shape[-1])
+    assert seq_len > 256, f"need a multi-chunk prompt, got seq_len={seq_len}"
+
+    # --- Reference: single-shot prefill logits (traced) ----------------------
+    pipeline.warmup(ids, return_logits=True)
+    single = pipeline.forward_logits_prefill(ids)
+    ttnn.synchronize_device(mesh_device)
+    assert single.dim() == 2 and int(single.shape[0]) == batch
+
+    # --- Candidate: chunked prefill logits (eager) ---------------------------
+    chunked = pipeline.forward_logits_prefill(ids, chunk_size=256)
+    ttnn.synchronize_device(mesh_device)
+    assert chunked.shape == single.shape
+
+    single_tok = [int(single[i].argmax().item()) for i in range(batch)]
+    chunk_tok = [int(chunked[i].argmax().item()) for i in range(batch)]
+    print(f"\n[single-shot] {single_tok}\n[chunked    ] {chunk_tok}\n")
+
+    mism = [i for i in range(batch) if single_tok[i] != chunk_tok[i]]
+    assert not mism, (
+        f"chunked prefill diverges from single-shot on streams {mism}: "
+        f"single={[single_tok[i] for i in mism]} chunked={[chunk_tok[i] for i in mism]}"
+    )
+
+    # Secondary check: logits stay numerically close. Token parity above is the
+    # primary correctness gate; the residual is cross-kernel bf16 noise -- the
+    # chunked path uses the paged chunked-SDPA kernel while single-shot uses the
+    # in-memory full-causal SDPA, so accumulation order differs over the
+    # 152K-wide logits. Greedy argmax matching on every stream bounds the impact.
+    cos = torch.nn.functional.cosine_similarity(
+        single.float().flatten(), chunked.float().flatten(), dim=0
+    ).item()
+    print(f"[chunked-vs-single logits cosine] {cos:.5f}")
+    assert cos > 0.98, f"chunked prefill logits cosine too low: {cos}"
+
+    # --- Determinism across chunk counts -------------------------------------
+    # chunk_size must be a multiple of 256 (SDPA q_chunk constraint). With a
+    # ~320-token prompt, chunk_size=512 collapses to a single eager chunk while
+    # chunk_size=256 takes two; matching tokens prove the result is independent
+    # of how the prefill is segmented.
+    chunked512 = pipeline.forward_logits_prefill(ids, chunk_size=512)
+    ttnn.synchronize_device(mesh_device)
+    chunk512_tok = [int(chunked512[i].argmax().item()) for i in range(batch)]
+    print(f"[chunked-512 ] {chunk512_tok}")
+    mism512 = [i for i in range(batch) if single_tok[i] != chunk512_tok[i]]
+    assert not mism512, (
+        f"chunk_size=512 diverges from single-shot on streams {mism512}: "
+        f"single={[single_tok[i] for i in mism512]} chunk512={[chunk512_tok[i] for i in mism512]}"
+    )
+    assert chunk512_tok == chunk_tok, (
+        "chunked prefill is not deterministic across chunk counts: "
+        f"chunk256={chunk_tok} chunk512={chunk512_tok}"
+    )
+    pipeline.release()
+
+
+@pytest.mark.parametrize("device_params", [dots_ocr_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [resolve_mesh_device_shape()], indirect=True)
+def test_prefix_cache_suffix_matches_full_prefill(mesh_device):
+    """TS-8: prefix-cache-aware prefill computes only the uncached suffix.
+
+    A full chunked prefill populates the paged KV for the whole prompt. A second
+    prefill of the SAME prompt with ``prefix_len`` > 0 keeps that KV (conditional
+    reset + seed_seq_length at the prefix), recomputes only the suffix, and
+    attends over the resident prefix via the chunked SDPA. The last-position
+    result must match the full prefill token-for-token -- i.e. skipping the
+    cached prefix is correct, not just cheaper.
+    """
+    torch.set_grad_enabled(False)
+    batch = pipeline_batch_size()
+    pipeline = TTNNDotsOCRPipeline.from_hf_model(
+        model_path=DOTS_OCR_LOCAL_PATH, device=mesh_device, batch_size=batch
+    )
+    assert pipeline.graph_prefill_logits is not None
+
+    tok = AutoTokenizer.from_pretrained(DOTS_OCR_LOCAL_PATH, trust_remote_code=True)
+    ids = _long_prompt_ids(tok, min_len=320)
+    ids = stack_input_ids_for_dp(ids)
+    seq_len = int(ids.shape[-1])
+    # prefix_len must be block-aligned (block_size=64) and a 256-multiple chunk
+    # boundary, with a non-empty suffix to compute.
+    prefix_len = 256
+    assert seq_len > prefix_len, f"need seq_len>{prefix_len}, got {seq_len}"
+
+    # --- Reference: full chunked prefill populates KV for [0, S) -------------
+    full = pipeline.forward_logits_prefill(ids, chunk_size=256)
+    ttnn.synchronize_device(mesh_device)
+    full_tok = [int(full[i].argmax().item()) for i in range(batch)]
+
+    # --- Candidate: reuse the resident prefix [0, prefix_len), compute [P, S) -
+    suffix = pipeline.forward_logits_prefill(
+        ids, chunk_size=256, prefix_len=prefix_len
+    )
+    ttnn.synchronize_device(mesh_device)
+    suffix_tok = [int(suffix[i].argmax().item()) for i in range(batch)]
+    print(f"\n[full-prefill ] {full_tok}\n[suffix-only  ] {suffix_tok}\n")
+
+    mism = [i for i in range(batch) if full_tok[i] != suffix_tok[i]]
+    assert not mism, (
+        f"prefix-cache suffix prefill diverges from full prefill on streams "
+        f"{mism}: full={[full_tok[i] for i in mism]} "
+        f"suffix={[suffix_tok[i] for i in mism]}"
+    )
+    cos = torch.nn.functional.cosine_similarity(
+        full.float().flatten(), suffix.float().flatten(), dim=0
+    ).item()
+    print(f"[suffix-vs-full logits cosine] {cos:.5f}")
+    assert cos > 0.98, f"prefix-cache suffix logits cosine too low: {cos}"
+    pipeline.release()
+
+
+@pytest.mark.parametrize("device_params", [dots_ocr_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [resolve_mesh_device_shape()], indirect=True)
+def test_multigrid_vision_per_stream_matches_single(mesh_device):
+    """TS-9: per-request multi-grid vision -> each stream OCRs its own grid.
+
+    Two images with TRANSPOSED grids (e.g. 16x32 vs 32x16 patches) carry the
+    same patch/merged-token count but different spatial RoPE, so a batched
+    prefill that mixes them per stream must reproduce, for each stream, the
+    result that image would get on its own. Equal token counts keep one shared
+    prompt length so the last-position logits line up across streams.
+
+    Reference: two same-grid batched prefills (all-A, all-B) via the validated
+    ``forward_logits_prefill``; candidate: one mixed prefill via
+    ``forward_logits_prefill_multigrid``. Stream b (image A if even else B) must
+    match the corresponding reference token.
+    """
+    pytest.importorskip("PIL")
+    import numpy as np
+    from PIL import Image
+    from transformers import AutoImageProcessor
+
+    torch.set_grad_enabled(False)
+    batch = pipeline_batch_size()
+    if batch < 2 or mesh_num_devices() < 2:
+        pytest.skip("multi-grid needs a DP batch >= 2 (DOTS_OCR_PARALLELISM=DP on T3K)")
+
+    image_processor = AutoImageProcessor.from_pretrained(DOTS_OCR_LOCAL_PATH)
+    tokenizer = AutoTokenizer.from_pretrained(DOTS_OCR_LOCAL_PATH, trust_remote_code=True)
+
+    def _proc(img):
+        p = image_processor(images=[img], return_tensors="pt")
+        return p["pixel_values"].to(torch.bfloat16), p["image_grid_thw"]
+
+    def _img(w, h):
+        arr = np.random.default_rng(w * 7919 + h).integers(0, 255, size=(h, w, 3), dtype=np.uint8)
+        return Image.fromarray(arr, mode="RGB")
+
+    # 14px patches, merge 2 => use multiples of 28. Transposed sizes => same
+    # patch count, different grid (h,w).
+    pvA, gA = _proc(_img(32 * 14, 16 * 14))  # ~ (1, 16, 32)
+    pvB, gB = _proc(_img(16 * 14, 32 * 14))  # ~ (1, 32, 16)
+    if int(gA.prod()) != int(gB.prod()):
+        pytest.skip(f"processor resized to unequal patch counts gA={gA.tolist()} gB={gB.tolist()}")
+    if bool(torch.equal(gA, gB)):
+        pytest.skip("processor collapsed both images to one grid; cannot test multi-grid")
+
+    pipeline = TTNNDotsOCRPipeline.from_hf_model(
+        model_path=DOTS_OCR_LOCAL_PATH, device=mesh_device, batch_size=batch,
+        batched_vision=True,
+    )
+    assert pipeline.graph_prefill_logits is not None
+    img_tok = int(pipeline.graph_prefill._image_token_id)
+    sms = int(pipeline.vision_tower.spatial_merge_size)
+    n_merged = int(gA.prod()) // (sms * sms)
+
+    # Shared-length prompt: text prefix + n_merged image tokens + text suffix.
+    prefix = tokenizer("Read the image:", add_special_tokens=False)["input_ids"]
+    suffix = tokenizer("\nAnswer:", add_special_tokens=False)["input_ids"]
+    prompt = prefix + [img_tok] * n_merged + suffix
+    base_ids = torch.tensor(prompt, dtype=torch.int64).unsqueeze(0)
+    ids = base_ids.repeat(batch, 1)
+
+    def _ref(pv_one, g_one):
+        pv_all = torch.cat([pv_one] * batch, dim=0)
+        g_all = g_one.repeat(batch, 1)
+        out = pipeline.forward_logits_prefill(
+            ids, pixel_values=pv_all, image_grid_thw=g_all
+        )
+        ttnn.synchronize_device(mesh_device)
+        return out
+
+    refA = _ref(pvA, gA)
+    refB = _ref(pvB, gB)
+    refA_tok = [int(refA[i].argmax().item()) for i in range(batch)]
+    refB_tok = [int(refB[i].argmax().item()) for i in range(batch)]
+    # Same image on every stream => every row identical.
+    assert len(set(refA_tok)) == 1, f"all-A reference not uniform: {refA_tok}"
+    assert len(set(refB_tok)) == 1, f"all-B reference not uniform: {refB_tok}"
+    tokA, tokB = refA_tok[0], refB_tok[0]
+    # The two grids must actually drive different OCR tokens, else the test is
+    # vacuous (RoPE/grid had no effect).
+    assert tokA != tokB, f"transposed grids produced identical token {tokA}; test is vacuous"
+
+    # Mixed batch: even streams -> image A, odd streams -> image B.
+    pv_mixed = torch.cat([pvA if (b % 2 == 0) else pvB for b in range(batch)], dim=0)
+    g_mixed = torch.cat([gA if (b % 2 == 0) else gB for b in range(batch)], dim=0)
+    mixed = pipeline.forward_logits_prefill_multigrid(ids, pv_mixed, g_mixed)
+    ttnn.synchronize_device(mesh_device)
+    mixed_tok = [int(mixed[i].argmax().item()) for i in range(batch)]
+    expected = [tokA if (b % 2 == 0) else tokB for b in range(batch)]
+    print(f"\n[refA={tokA} refB={tokB}]\n[expected ] {expected}\n[multigrid] {mixed_tok}\n")
+
+    mism = [b for b in range(batch) if mixed_tok[b] != expected[b]]
+    assert not mism, (
+        f"multi-grid streams {mism} diverge: expected={[expected[b] for b in mism]} "
+        f"got={[mixed_tok[b] for b in mism]}"
+    )
+    pipeline.release()

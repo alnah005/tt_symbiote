@@ -228,16 +228,26 @@ class BailingRotarySetup:
     def get_cos_sin_for_prefill(
         self,
         seq_len: int,
+        start: int = 0,
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Get cos/sin sliced to seq_len for prefill. Returns [1, 1, seq_len, head_dim]."""
-        if seq_len > self.max_seq_len:
+        """Get cos/sin for prefill, optionally at an absolute offset.
+
+        Returns ``[1, 1, seq_len, head_dim]`` covering absolute positions
+        ``[start, start + seq_len)``. ``start > 0`` is used by TS-7 chunked
+        prefill so each chunk's tokens get RoPE for their true absolute
+        positions (not 0..seq_len-1). The default ``start=0`` reproduces the
+        original single-shot slice exactly.
+        """
+        end = start + seq_len
+        if end > self.max_seq_len:
             raise ValueError(
-                f"Requested seq_len {seq_len} exceeds max_seq_len {self.max_seq_len}. "
-                f"Reinitialize BailingRotarySetup with larger max_seq_len."
+                f"Requested prefill positions [{start}, {end}) exceed max_seq_len "
+                f"{self.max_seq_len}. Reinitialize BailingRotarySetup with larger "
+                f"max_seq_len."
             )
 
-        cos = self.cos_cache[:, :, :seq_len, :]
-        sin = self.sin_cache[:, :, :seq_len, :]
+        cos = self.cos_cache[:, :, start:end, :]
+        sin = self.sin_cache[:, :, start:end, :]
 
         return cos, sin
 

@@ -304,6 +304,9 @@ class TTNNDotsOCRDecoderLayer(StatefulTTNNModule):
             cache_position=kwargs.get("cache_position"),
             decode_cur_pos_tt=kwargs.get("decode_cur_pos_tt"),
             decode_cos_sin=kwargs.get("decode_cos_sin"),
+            # TS-7 chunked prefill (threaded through; None on the default path).
+            chunk_start_idx=kwargs.get("chunk_start_idx", 0),
+            chunk_page_table_tt=kwargs.get("chunk_page_table_tt"),
         )
 
         # Prefill block-sharded region (ops 14-16): the o_proj returns its

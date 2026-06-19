@@ -275,18 +275,32 @@ class TTNNDotsOCRPrefillGraph(StatefulTTNNModule):
     def get_or_build_scatter_tensors(
         self,
         input_ids: torch.Tensor,
-        n_vision: int,
+        n_vision,
         idx_mapper,
         num_devices: int,
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         device = self.device
+        B = int(input_ids.shape[0])
         S = int(input_ids.shape[-1])
         H = self._hidden_size
         H_per_device = H // num_devices if num_devices > 1 else H
+        # TS-9: ``n_vision`` may be a single int (shared grid) or a per-row
+        # sequence (multi-grid: stream b has its own merged vision token count).
+        # Each device indexes vision rows 1..n_vis[b]; padding rows are never
+        # referenced, so a per-device count just shortens the indexed prefix.
+        if isinstance(n_vision, (list, tuple)):
+            n_vis_list = [int(x) for x in n_vision]
+            if len(n_vis_list) == 1:
+                n_vis_list = n_vis_list * B
+            assert len(n_vis_list) == B, (
+                f"per-row n_vision length {len(n_vis_list)} != batch {B}"
+            )
+        else:
+            n_vis_list = [int(n_vision)] * B
         cache_key = (
-            int(input_ids.shape[0]),
+            B,
             S,
-            int(n_vision),
+            tuple(n_vis_list),
             int(H_per_device),
             self._scatter_uses_dp_batch_mapper,
         )
@@ -300,11 +314,11 @@ class TTNNDotsOCRPrefillGraph(StatefulTTNNModule):
         if cache_hit:
             return self._scatter_cache_idx, self._scatter_cache_mask
 
-        gather_idx = torch.zeros(int(input_ids.shape[0]), S, dtype=torch.int32)
-        for b in range(int(input_ids.shape[0])):
+        gather_idx = torch.zeros(B, S, dtype=torch.int32)
+        for b in range(B):
             img_mask_b = input_ids[b] == self._image_token_id
             img_positions = img_mask_b.nonzero(as_tuple=True)[0]
-            n_img = min(len(img_positions), int(n_vision))
+            n_img = min(len(img_positions), n_vis_list[b])
             gather_idx[b, img_positions[:n_img]] = torch.arange(1, n_img + 1, dtype=torch.int32)
 
         tt_idx = ttnn.from_torch(
@@ -462,6 +476,125 @@ class TTNNDotsOCRPrefillGraph(StatefulTTNNModule):
             seq_len = int(hid.shape[-2])
         for layer in self._p_stack.layers:
             past_key_value.update_seq_length(layer_idx=layer.self_attn.layer_idx, seq_len=seq_len)
+
+    def _embed_and_fuse(self, hidden_states, *mm_args, mm_grid_thw: Optional[torch.Tensor] = None):
+        """Token embedding + (optional) vision scatter-fuse -> fused ``[B, S, H]``.
+
+        Extracted from ``forward`` so the TS-7 chunked path can build the full
+        fused embedding ONCE (the vision tower is not chunked) before chunking
+        the decoder. Kept byte-equivalent to the inline logic in ``forward``.
+        """
+        h0 = hidden_states
+        if (
+            self._p_embedding is not None
+            and isinstance(h0, ttnn.Tensor)
+            and h0.dtype in (ttnn.uint32, ttnn.int32)
+        ):
+            text_e = self._p_embedding.forward(h0)
+        else:
+            text_e = h0
+
+        if len(mm_args) in (4, 5):
+            tt_px, tt_grid, tt_idx, tt_mask = mm_args[:4]
+            vision_attention_mask = mm_args[4] if len(mm_args) == 5 else None
+            if self._p_vision is None:
+                raise RuntimeError("Vision tensors passed to prefill graph but vision_tower is not set")
+            x_patch = tt_px
+            if isinstance(x_patch, torch.Tensor):
+                raise TypeError("patch tokens must be a ttnn.Tensor for traced multimodal prefill")
+            grid_torch = mm_grid_thw
+            if grid_torch is None:
+                if hasattr(self.device, "get_num_devices") and int(self.device.get_num_devices()) > 1:
+                    grid_torch = ttnn.to_torch(tt_grid, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+                else:
+                    grid_torch = ttnn.to_torch(tt_grid)
+                grid_torch = _normalize_image_grid_thw_torch(grid_torch)
+            vision_tt = self._p_vision.forward_post_patch_embed(
+                x_patch,
+                grid_torch,
+                attention_mask=vision_attention_mask,
+            )
+            text_e = self._scatter_fuse_text_and_vision(text_e, vision_tt, tt_idx, tt_mask)
+        return text_e
+
+    def forward_chunked(
+        self,
+        hidden_states,
+        *mm_args,
+        past_key_value=None,
+        mm_grid_thw: Optional[torch.Tensor] = None,
+        chunk_size: int = 256,
+        prefix_len: int = 0,
+    ):
+        """TS-7 chunked prefill (eager): segment the fused stream -> paged KV.
+
+        Runs token-embed + vision-fuse once, then drives the decoder stack one
+        chunk at a time. Each chunk's K/V is written at its absolute blocks (via
+        the chunk page table) and attends over the cached prefix through the
+        chunked SDPA kernel. Only the final chunk runs the norm + LM head and
+        returns the last-position result (logits or argmax token, per
+        ``_return_logits``).
+
+        ``prefix_len`` > 0 (TS-8 prefix caching) starts the chunk loop after an
+        already-resident prefix, so only the uncached suffix is computed.
+
+        This path is EAGER (not trace-captured); it is the opt-in long-context /
+        prefix-cache path. The single-shot traced ``forward`` is unchanged.
+        """
+        device = self.device
+        fused = self._embed_and_fuse(hidden_states, *mm_args, mm_grid_thw=mm_grid_thw)
+        if fused.layout != ttnn.TILE_LAYOUT:
+            fused = ttnn.to_layout(fused, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # Normalize to [B, S, H].
+        if len(fused.shape) == 4:
+            fused = ttnn.squeeze(fused, 1)
+        B = int(fused.shape[0])
+        S = int(fused.shape[-2])
+        H = int(fused.shape[-1])
+
+        if chunk_size % 256 != 0:
+            raise ValueError(f"chunk_size must be a multiple of 256 (SDPA constraint), got {chunk_size}")
+
+        starts = list(range(int(prefix_len), S, chunk_size))
+        if not starts:
+            starts = [int(prefix_len)]
+        # Avoid a length-1 trailing chunk (the stack would mis-route it to the
+        # seq_len==1 decode path); fold it into the previous chunk.
+        if len(starts) >= 2 and (S - starts[-1]) == 1:
+            starts.pop()
+
+        last_out = None
+        for i, cs in enumerate(starts):
+            ce = starts[i + 1] if i + 1 < len(starts) else S
+            chunk_len = ce - cs
+            chunk = ttnn.slice(fused, [0, cs, 0], [B, ce, H])
+            chunk_pt = past_key_value.build_chunk_page_table(cs, ce)
+            h = self._p_stack.forward(
+                chunk,
+                past_key_value=past_key_value,
+                cache_position=None,
+                chunk_start_idx=cs,
+                chunk_page_table_tt=chunk_pt,
+            )
+            for layer in self._p_stack.layers:
+                past_key_value.update_seq_length(layer_idx=layer.self_attn.layer_idx, seq_len=chunk_len)
+
+            if ce == S:
+                h = self._p_norm.forward(h)
+                sl = int(h.shape[-2])
+                if sl > 1:
+                    b = int(h.shape[0])
+                    hd = int(h.shape[-1])
+                    h = ttnn.slice(h, [0, sl - 1, 0], [b, sl, hd])
+                logits = self._p_lm.forward(h)
+                last_out = logits if self._return_logits else _argmax_token_on_device(logits)
+            else:
+                ttnn.deallocate(h)
+            ttnn.deallocate(chunk)
+            ttnn.deallocate(chunk_pt)
+        ttnn.deallocate(fused)
+        return last_out
 
 
 @trace_enabled
@@ -931,6 +1064,8 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         pixel_values: Optional[torch.Tensor] = None,
         image_grid_thw: Optional[torch.Tensor] = None,
         return_logits: bool = False,
+        chunk_size: Optional[int] = None,
+        prefix_len: int = 0,
     ) -> Union[int, List[int], torch.Tensor]:
         """Run prefill (first forward pass) and return the first generated token(s).
 
@@ -954,6 +1089,10 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         if return_logits and self.graph_prefill_logits is None:
             raise RuntimeError("return_logits=True requires the S2 logits graphs (built by from_hf_model)")
         graph_prefill = self.graph_prefill_logits if return_logits else self.graph_prefill
+        # TS-7/TS-8: chunked prefill drives the decoder one chunk at a time over
+        # the paged KV (long context) and can resume after a cached prefix
+        # (prefix_len>0). Opt-in: chunk_size=None keeps the single-shot path.
+        chunked = chunk_size is not None
         dual = self._mesh_dp_dual_stream()
         if dual and int(input_ids.shape[0]) != int(self.config.batch_size):
             raise ValueError(
@@ -971,7 +1110,14 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         # causal masking on the next request and makes the model emit EOS after
         # only 1-2 tokens. Resetting here is idempotent with generate()'s
         # pre-prefill reset.
-        self.paged_cache.reset()
+        # TS-8 prefix caching: when resuming on top of an already-resident prefix
+        # (prefix_len>0), keep the KV and seq counters so only the suffix is
+        # computed. Otherwise this is a fresh sequence -> full reset.
+        if chunked and prefix_len > 0:
+            self.paged_cache.reset(clear_seq=False)
+            self.paged_cache.seed_seq_length(prefix_len)
+        else:
+            self.paged_cache.reset()
         self._reset_decode_loop_state()
 
         # --- Embedding ---
@@ -1182,17 +1328,32 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
             )
 
         # Traced prefill graph (text-only: ids+embed inside graph; multimodal: +vision trunk + scatter fuse).
+        # TS-7/TS-8: chunked prefill uses the eager forward_chunked path (segment
+        # the fused stream -> paged KV); the default single-shot path is traced.
         with _profile_stage(self.device, "prefill.graph_prefill_sync"):
+            mm_args: tuple = ()
+            mm_grid_thw_arg = None
             if pixel_values is not None:
                 mm_args = (x_patch, tt_grid, tt_idx, tt_mask)
                 if vision_attention_mask is not None:
                     mm_args = (*mm_args, vision_attention_mask)
+                mm_grid_thw_arg = mm_grid_thw
+            if chunked:
+                graph_out_tt = graph_prefill.forward_chunked(
+                    hidden_states,
+                    *mm_args,
+                    past_key_value=self.paged_cache,
+                    mm_grid_thw=mm_grid_thw_arg,
+                    chunk_size=int(chunk_size),
+                    prefix_len=int(prefix_len),
+                )
+            elif pixel_values is not None:
                 graph_out_tt = graph_prefill(
                     hidden_states,
                     tt_cache_position,
                     *mm_args,
                     past_key_value=self.paged_cache,
-                    mm_grid_thw=mm_grid_thw,
+                    mm_grid_thw=mm_grid_thw_arg,
                 )
             else:
                 graph_out_tt = graph_prefill(hidden_states, tt_cache_position, past_key_value=self.paged_cache)
@@ -1545,6 +1706,8 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         input_ids: torch.Tensor,
         pixel_values: Optional[torch.Tensor] = None,
         image_grid_thw: Optional[torch.Tensor] = None,
+        chunk_size: Optional[int] = None,
+        prefix_len: int = 0,
     ) -> torch.Tensor:
         """Tier-S2 prefill that returns last-position logits ``[B, vocab]``.
 
@@ -1552,13 +1715,193 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         adapter calls this (instead of the CPU-torch ``hf_model.forward``) so the
         device prefill graph runs and vLLM samples the first token from the
         returned logits.
+
+        ``chunk_size`` (TS-7) drives chunked prefill over the paged KV;
+        ``prefix_len`` (TS-8) resumes after an already-resident cached prefix.
+        Both default to the single-shot path.
         """
         return self.prefill(
             input_ids,
             pixel_values=pixel_values,
             image_grid_thw=image_grid_thw,
             return_logits=True,
+            chunk_size=chunk_size,
+            prefix_len=prefix_len,
         )
+
+    def _assemble_multigrid_vision(self, pixel_values, image_grid_thw):
+        """TS-9: per-image vision passes -> batch-sharded ``[B, 1, N, H]`` tensor.
+
+        Runs the VALIDATED single-image vision trunk once per image (each with its
+        own ``grid_thw``), mirroring the batched-vision prefill preprocessing
+        exactly: ``patch_embed`` on device, one replica pulled to host and
+        re-uploaded as BF16 (the dtype the trunk consumes in the batched path),
+        then ``forward_post_patch_embed`` for that grid. Each image's merged
+        tokens are pulled to host, padded to the longest stream, stacked
+        ``[B, 1, max_nvis, H]`` and re-uploaded BATCH-SHARDED so device ``b`` holds
+        image ``b``'s vision. Returns ``(vision_tt, n_vis_list)`` where
+        ``n_vis_list[b]`` is stream ``b``'s real (unpadded) merged token count for
+        the per-row scatter. This reuses the proven vision trunk instead of a
+        batched multi-grid mesh op, trading B sequential passes for correctness.
+        """
+        vt = self.vision_tower
+        if vt is None:
+            raise RuntimeError("multi-grid vision requires a vision tower")
+        grids = image_grid_thw.detach().cpu()
+        if grids.dim() == 1:
+            grids = grids.unsqueeze(0)
+        B = int(grids.shape[0])
+        counts = [int(t) * int(h) * int(w) for t, h, w in grids.tolist()]
+        pv = pixel_values if torch.is_tensor(pixel_values) else torch.as_tensor(pixel_values)
+        total = int(pv.shape[0])
+        if sum(counts) != total:
+            raise ValueError(
+                f"multi-grid vision: pixel_values rows {total} != sum(grid patches) {sum(counts)}"
+            )
+        num_devices = int(self.device.get_num_devices()) if hasattr(self.device, "get_num_devices") else 1
+        H = int(self.config.hidden_size)
+
+        per_img: List[torch.Tensor] = []
+        n_vis_list: List[int] = []
+        off = 0
+        for b in range(B):
+            pv_b = pv[off : off + counts[b]]
+            off += counts[b]
+            grid_b = grids[b : b + 1].to(torch.int64)
+            # Mirror the batched-vision prefill preprocessing EXACTLY: patch_embed
+            # on device, pull one replica to host, re-upload as BF16 TILE
+            # (replicated) so the vision trunk sees BF16 patch tokens -- the same
+            # dtype path the validated single-grid batched prefill uses. Feeding
+            # patch_embed's native BFP8 output straight into the trunk diverges
+            # enough to flip OCR tokens.
+            xp = vt.patch_embed(pv_b, grid_b)
+            if isinstance(xp, ttnn.Tensor):
+                if num_devices > 1:
+                    xp_host = ttnn.to_torch(ttnn.get_device_tensors(xp)[0])
+                else:
+                    xp_host = ttnn.to_torch(xp)
+                ttnn.deallocate(xp)
+            else:
+                xp_host = xp
+            xp_host = xp_host.reshape(-1, int(xp_host.shape[-1])).to(torch.bfloat16)
+            xp_host = xp_host.reshape(1, 1, int(xp_host.shape[0]), int(xp_host.shape[1]))
+            x_bf16 = ttnn.from_torch(
+                xp_host,
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if num_devices > 1 else None,
+            )
+            v = vt.forward_post_patch_embed(x_bf16, grid_b)
+            ttnn.deallocate(x_bf16)
+            if num_devices > 1:
+                v_host = ttnn.to_torch(ttnn.get_device_tensors(v)[0])
+            else:
+                v_host = ttnn.to_torch(v)
+            ttnn.deallocate(v)
+            v_host = v_host.reshape(-1, int(v_host.shape[-1])).to(torch.bfloat16)
+            n_vis_list.append(int(v_host.shape[0]))
+            per_img.append(v_host)
+
+        max_nvis = max(n_vis_list)
+        stacked = torch.zeros(B, 1, max_nvis, H, dtype=torch.bfloat16)
+        for b in range(B):
+            stacked[b, 0, : n_vis_list[b]] = per_img[b]
+        mapper = (
+            self._batch_input_mapper
+            if self._batch_input_mapper is not None
+            else ttnn.ReplicateTensorToMesh(self.device)
+        )
+        vision_tt = ttnn.from_torch(
+            stacked,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            mesh_mapper=mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return vision_tt, n_vis_list
+
+    def forward_logits_prefill_multigrid(
+        self,
+        input_ids: torch.Tensor,
+        pixel_values: torch.Tensor,
+        image_grid_thw: torch.Tensor,
+    ) -> torch.Tensor:
+        """TS-9: per-request multi-grid vision prefill -> logits ``[B, vocab]``.
+
+        Each DP stream's image may have its OWN ``grid_thw`` (lifts the M1
+        same-grid constraint). Vision is assembled per image
+        (:meth:`_assemble_multigrid_vision`) and fused per stream via the per-row
+        scatter EAGERLY (each DP device fuses its own image), then the resulting
+        ``[B, S, H]`` fused embedding is driven through the VALIDATED traced
+        decoder graph in text-only mode (no in-graph vision trunk). This keeps the
+        numerically-proven decoder/KV path while only the vision assembly differs.
+        The single-grid traced path (:meth:`forward_logits_prefill`) is unchanged.
+        """
+        if self.graph_prefill_logits is None:
+            raise RuntimeError("multi-grid prefill requires the S2 logits graphs (from_hf_model)")
+        graph_prefill = self.graph_prefill_logits
+        dual = self._mesh_dp_dual_stream()
+        if dual and int(input_ids.shape[0]) != int(self.config.batch_size):
+            raise ValueError(
+                f"DP multi-grid prefill expects input_ids batch {self.config.batch_size}, "
+                f"got {input_ids.shape[0]}"
+            )
+        seq_len = int(input_ids.shape[-1])
+        num_devices = int(self.device.get_num_devices()) if hasattr(self.device, "get_num_devices") else 1
+
+        self.paged_cache.reset()
+        self._reset_decode_loop_state()
+
+        id_mapper = (
+            self._batch_input_mapper
+            if self._batch_input_mapper is not None
+            else ttnn.ReplicateTensorToMesh(self.device)
+        )
+        tt_input_ids = ttnn.from_torch(
+            input_ids.to(torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            mesh_mapper=id_mapper,
+        )
+
+        vision_tt, n_vis_list = self._assemble_multigrid_vision(pixel_values, image_grid_thw)
+        tt_idx, tt_mask = graph_prefill.get_or_build_scatter_tensors(
+            input_ids, n_vis_list, id_mapper, num_devices
+        )
+
+        # EAGER scatter-fuse outside the trace: device b fuses its own image's
+        # vision into its text stream. The fused [B, S, H] hidden then feeds the
+        # traced decoder text-only (so the decoder/KV path is the validated one).
+        text_e = self.embedding(tt_input_ids)
+        fused = graph_prefill._scatter_fuse_text_and_vision(text_e, vision_tt, tt_idx, tt_mask)
+        if fused.layout != ttnn.TILE_LAYOUT:
+            fused = ttnn.to_layout(fused, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if len(fused.shape) == 4:
+            fused = ttnn.squeeze(fused, 1)
+
+        cache_position = torch.arange(0, seq_len, dtype=torch.int32)
+        tt_cache_position = ttnn.from_torch(
+            cache_position,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Text-only traced decoder over the pre-fused hidden (no mm_args -> the
+        # graph skips its vision trunk and runs embed-passthrough + decoder).
+        out = graph_prefill(fused, tt_cache_position, past_key_value=self.paged_cache)
+
+        logits_torch = ttnn.to_torch(
+            out, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0)
+        )
+        ttnn.deallocate(tt_cache_position)
+        return logits_torch.reshape(-1, int(logits_torch.shape[-1]))
 
     def _write_logits_decode_inputs(self, prev_full: List[int], pos_full: List[int]) -> None:
         """Copy per-stream prev-tokens and absolute cache positions in place.
