@@ -59,6 +59,31 @@ class PagedAttentionConfig:
 
 
 class TTNNPagedAttentionKVCache(Cache):
+    """dots.ocr's forked paged KV cache.
+
+    TS-5 contract -- page-table ownership and the per-device write index:
+
+      * **Default page table** is the contiguous identity ``arange`` (one
+        sequence laid out in contiguous blocks). dots.ocr is DATA-PARALLEL: the
+        table is ``[batch_size, blocks_per_sequence]`` and DP-sharded so device
+        ``d`` holds row ``d`` (its own sequence). The identity default is correct
+        and required for the standalone / HF ``generate()`` path, which does not
+        page.
+      * **Serving (vLLM Tier-S2)** overrides the identity table via
+        :meth:`set_vllm_page_table`, which installs the block-manager-assigned
+        physical block ids (one row per DP stream) IN PLACE (trace-stable).
+      * **``batch_idx=0`` on ``paged_fill_on_device`` is intentional, not a TODO.**
+        Because the page table is DP-sharded to ONE row per device, ``batch_idx=0``
+        is the only valid (and correct) per-device index -- each chip fills its own
+        single sequence. (A non-DP shared cache that packed multiple sequences into
+        one device's batch dim would need a varying ``batch_idx``; that is the
+        shared-cache design, not this DP fork.)
+
+    So the ``arange`` default and ``batch_idx=0`` are deliberately kept: removing
+    them would corrupt KV for the DP layout. The Tier-S2 deliverable is the
+    ``set_vllm_page_table`` hook (installed) plus per-row decode positions.
+    """
+
     def __init__(
         self,
         num_layers: int,
@@ -93,6 +118,8 @@ class TTNNPagedAttentionKVCache(Cache):
         self._seen_tokens = 0
         self._external_seq_tracking = False
 
+        # Default = contiguous identity (standalone/HF path). vLLM serving
+        # overrides this via set_vllm_page_table (see class docstring, TS-5).
         page_table = torch.arange(config.max_num_blocks, dtype=torch.int32)
         self.page_table = page_table.reshape(config.batch_size, config.blocks_per_sequence)
 
@@ -100,6 +127,9 @@ class TTNNPagedAttentionKVCache(Cache):
         self._tt_value_cache: list[Optional[ttnn.Tensor]] = [None] * num_layers
         self._tt_page_table: Optional[ttnn.Tensor] = None
         self._is_on_device = False
+        # TS-5 observability: True once a vLLM block-manager table is installed
+        # (serving), False while the contiguous identity default is in use.
+        self._vllm_page_table_installed = False
 
     def to_device(self, device) -> "TTNNPagedAttentionKVCache":
         if self._is_on_device and self._device == device:
@@ -146,19 +176,118 @@ class TTNNPagedAttentionKVCache(Cache):
         self._is_on_device = True
         return self
 
+    def _page_table_mesh_mapper(self):
+        """Mesh mapper for the page table, matching ``to_device``.
+
+        Under DP (``batch_size == num_devices`` on an (N,1)/(1,N) mesh) the
+        page table is sharded along the batch dim so device ``d`` holds the
+        block ids for sequence ``d``. Otherwise it is replicated.
+        """
+        bs = self.config.batch_size
+        mapper = dp_batch_shard_tensor_mapper(self._device, bs)
+        if mapper is None and self._device.get_num_devices() > 1:
+            mapper = ttnn.ReplicateTensorToMesh(self._device)
+        return mapper
+
+    def set_vllm_page_table(self, page_table: torch.Tensor) -> "TTNNPagedAttentionKVCache":
+        """Install an externally-managed page table (e.g. vLLM block ids).
+
+        By default the cache uses a contiguous identity mapping
+        (``arange(max_num_blocks)``) built in ``to_device``. Under
+        tt-inference-server's vLLM backend the block manager assigns physical
+        block ids per request (one row per DP stream), so the serving adapter
+        calls this to point the paged ops (``paged_fill_on_device`` /
+        ``paged_update_on_device`` / ``paged_sdpa_decode``) at the blocks vLLM
+        allocated.
+
+        This is **additive and HF-preserving**: HF ``generate()`` never calls
+        it, so the default contiguous mapping (and every existing numeric
+        result) is unchanged. It is the dots.ocr Tier-S2 seam; see
+        docs/development/tt_inference_server_integration.md §9.
+
+        DP layout: ``page_table`` is ``[batch, blocks_per_sequence]`` with
+        ``batch == config.batch_size`` (one row per mesh device). The row for
+        device ``d`` is sharded onto device ``d`` via the same
+        ``dp_batch_shard_tensor_mapper`` ``to_device`` uses.
+
+        Trace stability: the device page-table tensor is updated **in place**
+        (upload to a temp, then ``ttnn.copy`` into the pre-allocated
+        ``_tt_page_table`` buffer) so its buffer identity is preserved. A
+        captured decode trace references that buffer, so swapping block tables
+        between requests does NOT require re-capturing the trace. Call this
+        *outside* a trace boundary (at request setup / between decode traces).
+
+        Args:
+            page_table: int32 tensor ``[batch, blocks_per_sequence]`` mapping
+                logical block index -> physical block id.
+        """
+        if not self._is_on_device:
+            raise RuntimeError("KV cache not on device. Call to_device(device).")
+        if page_table.dim() != 2:
+            raise ValueError(
+                f"page_table must be 2D [batch, blocks_per_sequence], got shape {tuple(page_table.shape)}"
+            )
+        bs = self.config.batch_size
+        bps = self.config.blocks_per_sequence
+        if int(page_table.shape[0]) != bs:
+            raise ValueError(
+                f"page_table batch dim {int(page_table.shape[0])} != cache batch_size {bs} "
+                "(one row per DP stream is required)"
+            )
+        if int(page_table.shape[1]) > bps:
+            raise ValueError(
+                f"page_table has {int(page_table.shape[1])} blocks/seq > cache capacity {bps}"
+            )
+
+        # Build a full-width [bs, bps] host table so the in-place device copy is
+        # shape-stable (the preallocated _tt_page_table is [bs, bps]). Keep the
+        # existing mapping for any trailing columns vLLM did not provide; those
+        # columns are never read (the kernels index logical block = pos //
+        # block_size, bounded by the sequence length).
+        full = self.page_table.clone().to(torch.int32)
+        n_blocks = int(page_table.shape[1])
+        full[:, :n_blocks] = page_table.to(torch.int32)
+        self.page_table = full.contiguous()
+
+        mapper = self._page_table_mesh_mapper()
+        upload = ttnn.from_torch(
+            self.page_table,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self._device,
+            mesh_mapper=mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # In-place: preserve _tt_page_table's buffer identity for trace safety.
+        ttnn.copy(upload, self._tt_page_table)
+        ttnn.deallocate(upload)
+        self._vllm_page_table_installed = True
+        return self
+
     def paged_fill_on_device(
         self,
         key_states: ttnn.Tensor,
         value_states: ttnn.Tensor,
         layer_idx: int,
         batch_idx: int = 0,
+        page_table: Optional[ttnn.Tensor] = None,
     ):
+        """Fill the paged KV cache with a (chunk of) prefill K/V.
+
+        ``page_table`` overrides the installed full page table. TS-7 chunked
+        prefill passes a *chunk* page table (the slice of physical blocks for the
+        chunk, see :meth:`build_chunk_page_table`) so the ``paged_fill_cache``
+        kernel -- which always writes from virtual position 0 -- lands the chunk's
+        K/V at its true absolute blocks. The default (``None``) uses the full
+        page table and writes from offset 0 (single-shot prefill, unchanged).
+        """
         if not self._is_on_device:
             raise RuntimeError("KV cache not on device. Call to_device(device).")
 
         k_cache = self._tt_key_cache[layer_idx]
         v_cache = self._tt_value_cache[layer_idx]
-        page_table = self._tt_page_table
+        if page_table is None:
+            page_table = self._tt_page_table
 
         max_len = self.config.blocks_per_sequence * self.config.block_size
         seq_len = key_states.shape[2]
@@ -178,6 +307,90 @@ class TTNNPagedAttentionKVCache(Cache):
             self._seq_lengths[layer_idx] += seq_len
             if layer_idx == 0:
                 self._seen_tokens += seq_len
+
+    def build_chunk_page_table(self, chunk_start: int, chunk_end: int) -> ttnn.Tensor:
+        """Upload the page-table slice covering absolute positions [chunk_start, chunk_end).
+
+        Returns a fresh device tensor ``[batch, n_blocks_chunk]`` mapping the
+        chunk's virtual block 0..k-1 onto the physical blocks that hold positions
+        ``[chunk_start, chunk_end)``. ``paged_fill_cache`` writes from virtual
+        position 0, so handing it this slice lands the chunk K/V at its true
+        blocks (TS-7). The caller owns the returned tensor (deallocate it).
+
+        Both ``chunk_start`` and ``chunk_end`` should be block-aligned except for
+        the final chunk, whose ``chunk_end`` may be the (unaligned) sequence end;
+        we round the end block up so the partial trailing block is included.
+        """
+        if not self._is_on_device:
+            raise RuntimeError("KV cache not on device. Call to_device(device).")
+        block = self.config.block_size
+        start_block = chunk_start // block
+        end_block = (chunk_end + block - 1) // block
+        chunk_pt = self.page_table[:, start_block:end_block].contiguous().to(torch.int32)
+        return ttnn.from_torch(
+            chunk_pt,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self._device,
+            mesh_mapper=self._page_table_mesh_mapper(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    @staticmethod
+    def _chunk_prefill_program_config(seq_len: int, chunk_start_idx: int):
+        """Per-chunk SDPA program config (mirrors tt_transformers).
+
+        ``q_chunk_size`` must divide ``chunk_start_idx`` (tt-metal constraint);
+        ``(x & -x)`` is the largest power of two dividing x.
+        """
+        base = 256 if seq_len >= 2048 else 64
+        if not chunk_start_idx:
+            q_chunk = base
+        else:
+            q_chunk = min(base, chunk_start_idx & -chunk_start_idx)
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            exp_approx_mode=False,
+            q_chunk_size=q_chunk,
+            k_chunk_size=q_chunk,
+        )
+
+    def chunked_sdpa_prefill(
+        self,
+        query: ttnn.Tensor,
+        layer_idx: int,
+        chunk_start_idx: int,
+        seq_len: int,
+    ) -> ttnn.Tensor:
+        """Chunked prefill SDPA: a Q chunk attends over the cached prefix.
+
+        Reads K/V from the paged cache via the full page table and uses the host
+        ``chunk_start_idx`` to apply the correct causal mask for the chunk's
+        absolute position. Requires the chunk's K/V to have already been written
+        (via :meth:`paged_fill_on_device` with the chunk page table). Mirrors
+        tt_transformers' chunked-prefill attention (eager; the host int variant
+        of ``chunk_start_idx``).
+
+        ``scale`` is intentionally NOT passed: the installed kernel binding marks
+        ``scale`` as ``.noconvert()`` and rejects a Python float for it on
+        multi-device tensors. The kernel default is ``1/sqrt(head_dim)``, which
+        equals dots.ocr's ``self.scaling`` (head_dim**-0.5), so the numerics are
+        identical. (The legacy int ``chunk_start_idx`` overload also does not
+        accept ``compute_kernel_config``.)
+        """
+        if not self._is_on_device:
+            raise RuntimeError("KV cache not on device. Call to_device(device).")
+        k_cache = self._tt_key_cache[layer_idx]
+        v_cache = self._tt_value_cache[layer_idx]
+        program_config = self._chunk_prefill_program_config(seq_len, chunk_start_idx)
+        return ttnn.transformer.chunked_scaled_dot_product_attention(
+            input_tensor_q=query,
+            input_tensor_k=k_cache,
+            input_tensor_v=v_cache,
+            page_table_tensor=self._tt_page_table,
+            chunk_start_idx=int(chunk_start_idx),
+            program_config=program_config,
+        )
 
     def paged_update_on_device(
         self,
@@ -305,7 +518,7 @@ class TTNNPagedAttentionKVCache(Cache):
     def get_max_cache_shape(self) -> Optional[int]:
         return self.config.max_seq_length
 
-    def reset(self) -> None:
+    def reset(self, clear_seq: bool = True) -> None:
         """Reset KV cache tracking for a new generation turn.
 
         Resets Python-side sequence tracking. Device buffer addresses are
@@ -313,9 +526,26 @@ class TTNNPagedAttentionKVCache(Cache):
         values in the cache are harmless: prefill overwrites positions
         0..seq_len-1, and paged_sdpa_decode uses cur_pos_tensor to limit
         attention to valid positions.
+
+        ``clear_seq=False`` (TS-8 prefix caching) keeps the per-layer sequence
+        counters so a follow-up prefill computes only the uncached suffix on top
+        of an already-populated prefix; the caller is then responsible for the
+        counters via :meth:`seed_seq_length` / :meth:`update_seq_length`.
         """
-        self._seq_lengths = [0] * self.num_layers
-        self._seen_tokens = 0
+        if clear_seq:
+            self._seq_lengths = [0] * self.num_layers
+            self._seen_tokens = 0
+
+    def seed_seq_length(self, prefix_len: int) -> None:
+        """Seed per-layer counters to ``prefix_len`` (TS-8 prefix caching).
+
+        Used when the first ``prefix_len`` tokens are already resident in the
+        paged cache (a vLLM prefix-cache hit), so the next prefill chunk starts
+        at absolute position ``prefix_len``. Enables external seq tracking.
+        """
+        self._external_seq_tracking = True
+        self._seq_lengths = [int(prefix_len)] * self.num_layers
+        self._seen_tokens = int(prefix_len)
 
 
 class TorchSDPAAttention(torch.nn.Module):

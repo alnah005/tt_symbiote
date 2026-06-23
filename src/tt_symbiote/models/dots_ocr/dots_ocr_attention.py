@@ -220,6 +220,14 @@ class TTNNDotsOCRAttention(StatefulTTNNModule):
         # this is a reasoned decision). Were the KV write ever changed to an advancing append
         # (e.g. ttnn.update_cache, whose position advances per call), this MUST roll the write
         # position back to its pre-forward baseline here instead.
+        #
+        # vLLM page table (Tier S2): ``TTNNPagedAttentionKVCache.set_vllm_page_table`` updates the
+        # device page-table tensor IN PLACE (``ttnn.copy`` into the pre-allocated ``_tt_page_table``
+        # buffer), so its buffer identity is preserved across requests and the captured decode trace
+        # stays valid when vLLM swaps block tables. That install runs at request setup, OUTSIDE the
+        # trace boundary, so it does not interact with this hook either -- the no-op reasoning above
+        # is unaffected. (If set_vllm_page_table is ever changed to reallocate the buffer, the trace
+        # would have to be re-captured, not reset here.)
         return None
 
     @classmethod
@@ -430,8 +438,17 @@ class TTNNDotsOCRAttention(StatefulTTNNModule):
 
         return qkv_states
 
-    def _forward_prefill(self, hidden_states, attention_mask, past_key_values, cache_position):
+    def _forward_prefill(
+        self,
+        hidden_states,
+        attention_mask,
+        past_key_values,
+        cache_position,
+        chunk_start_idx: int = 0,
+        chunk_page_table_tt=None,
+    ):
         batch_size, seq_length = hidden_states.shape[0], hidden_states.shape[1]
+        is_chunked = chunk_page_table_tt is not None
 
         # Prefill uses qkv_proj_prefill (conventional [Q_all|K_all|V_all] weight),
         # so the matmul output is already in the layout the Interleaved
@@ -450,7 +467,10 @@ class TTNNDotsOCRAttention(StatefulTTNNModule):
         ttnn.deallocate(qkv_states)
 
         seq_len = query_states.shape[2]
-        cos, sin = self._rotary_setup.get_cos_sin_for_prefill(seq_len)
+        # TS-7: chunked prefill applies RoPE for the chunk's TRUE absolute
+        # positions [chunk_start_idx, chunk_start_idx + seq_len); single-shot
+        # prefill keeps chunk_start_idx=0 (original behavior).
+        cos, sin = self._rotary_setup.get_cos_sin_for_prefill(seq_len, start=chunk_start_idx)
 
         # ``ttnn.experimental.rotary_embedding`` preserves input dtype, so
         # Q/K stay BFP8 through the rotary instead of round-tripping
@@ -480,11 +500,37 @@ class TTNNDotsOCRAttention(StatefulTTNNModule):
                 if value_states.dtype == ttnn.bfloat16
                 else ttnn.typecast(value_states, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
             )
-            past_key_values.paged_fill_on_device(k_fill, v_fill, layer_idx=self.layer_idx, batch_idx=0)
+            past_key_values.paged_fill_on_device(
+                k_fill,
+                v_fill,
+                layer_idx=self.layer_idx,
+                batch_idx=0,
+                page_table=chunk_page_table_tt,
+            )
             if k_fill is not key_states:
                 ttnn.deallocate(k_fill)
             if v_fill is not value_states:
                 ttnn.deallocate(v_fill)
+
+        # TS-7: chunked prefill -- attend the Q chunk over the cached prefix
+        # ([0, chunk_start+seq_len)) read from the paged KV via the chunked SDPA
+        # kernel, instead of the single-shot in-memory causal SDPA below.
+        if is_chunked:
+            # The paged chunked-SDPA kernel reads Q from DRAM (like decode).
+            query_states = ttnn.to_memory_config(query_states, ttnn.DRAM_MEMORY_CONFIG)
+            attn_output = past_key_values.chunked_sdpa_prefill(
+                query_states,
+                self.layer_idx,
+                chunk_start_idx=int(chunk_start_idx),
+                seq_len=int(seq_len),
+            )
+            ttnn.deallocate(query_states)
+            ttnn.deallocate(key_states)
+            ttnn.deallocate(value_states)
+            attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
+            attn_output = ttnn.squeeze(attn_output, 1)
+            attn_output = self.o_proj(attn_output)
+            return attn_output, None
 
         # attn_output = self.sdpa(
         #     self,
@@ -630,7 +676,14 @@ class TTNNDotsOCRAttention(StatefulTTNNModule):
                 decode_cos_sin=kwargs.get("decode_cos_sin"),
             )
         else:
-            return self._forward_prefill(hidden_states, attention_mask, past_key_values, cache_position)
+            return self._forward_prefill(
+                hidden_states,
+                attention_mask,
+                past_key_values,
+                cache_position,
+                chunk_start_idx=int(kwargs.get("chunk_start_idx", 0) or 0),
+                chunk_page_table_tt=kwargs.get("chunk_page_table_tt"),
+            )
 
 
 @trace_enabled  # optional (inherited from parent); kept for explicitness

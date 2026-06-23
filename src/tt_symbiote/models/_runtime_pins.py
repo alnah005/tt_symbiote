@@ -102,6 +102,10 @@ RUNTIME_PINS: dict[str, dict] = {
     "DotsOCRForCausalLM": {
         "tt_metal_commit": "c09f09c35a1a59a428f0e1b5cdaa8fe59fb1b195",
         "extras": ["vision", "qwen-vl"],
+        # Default S0 (native / single-stream vLLM). For S2 continuous batching,
+        # set "serving_tier": "S2_PAGED" here AND the dots.ocr block in
+        # tt-inference-server workflows/model_specs/dev/vlm.yaml (max_concurrency,
+        # max-num-seqs, DOTS_OCR_PARALLELISM).
         "serving_tier": "S0_GREEDY_ENGINE",
     },
     # Ling-mini-2.0 — first S2 (paged, continuous-batching) model. Pins its OWN
