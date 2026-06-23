@@ -2011,6 +2011,70 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         logits_full = logits_torch.reshape(-1, int(logits_torch.shape[-1]))  # [bs, vocab]
         return logits_full[:n_in]
 
+    def forward_tokens_decode(
+        self,
+        prev_token_id: Union[int, List[int]],
+        cache_position: Union[int, List[int], torch.Tensor],
+    ) -> List[int]:
+        """One Tier-S2 GREEDY decode step; returns on-device-argmax token ids.
+
+        Identical setup to :meth:`forward_logits_decode` (per-stream positions +
+        page table seeded into the stable decode buffers), but drives the native
+        on-device argmax graph (``graph_decode``) instead of the logits graph.
+        Only the chosen token id per row is read back (``[bs]`` ints), avoiding the
+        per-step full-vocab ``[bs, 152064]`` host readback + host sampling. The
+        vLLM S2 adapter bridges these tokens back to vLLM via one-hot logits, so
+        greedy (temperature 0) requests get a byte-identical result at a fraction
+        of the host round-trip cost. Returns the ``n_in`` active rows' tokens in
+        the caller's input order (device-sharded row ``i`` -> token ``i``).
+        """
+        if self.graph_decode is None:
+            raise RuntimeError("forward_tokens_decode requires the decode graph (built by from_hf_model)")
+        bs = int(self.config.batch_size)
+
+        prev_list = [int(prev_token_id)] if isinstance(prev_token_id, int) else [int(x) for x in prev_token_id]
+        if torch.is_tensor(cache_position):
+            pos_list = [int(x) for x in cache_position.reshape(-1).tolist()]
+        elif isinstance(cache_position, int):
+            pos_list = [int(cache_position)]
+        else:
+            pos_list = [int(x) for x in cache_position]
+        n_in = len(prev_list)
+        if n_in == 0 or n_in > bs or len(pos_list) != n_in:
+            raise ValueError(
+                f"forward_tokens_decode expects 1..{bs} matching prev_token/cache_position "
+                f"entries; got {n_in} tokens and {len(pos_list)} positions"
+            )
+
+        prev_full = prev_list + [0] * (bs - n_in)
+        pos_full = [max(0, p) for p in pos_list] + [0] * (bs - n_in)
+
+        if self._decode_cache_position is None or self._decode_token_buffer is None:
+            self._external_decode_positions = list(pos_full)
+            self._init_decode_buffers(prev_full)
+        else:
+            self._write_logits_decode_inputs(prev_full, pos_full)
+
+        trace_decode_tokens = getattr(self.graph_decode, "_d_embedding", None) is not None
+        if trace_decode_tokens:
+            decode_input = self._decode_token_buffer
+        else:
+            decode_input = self.embedding(self._decode_token_buffer)
+            if self._mesh_dp_dual_stream() and self._batch_input_mapper is not None:
+                decode_input = self._dp_repack_batch_sharded_hidden(decode_input)
+
+        with _profile_stage(self.device, "decode.graph_decode_tokens_sync"):
+            token_tt = self.graph_decode(
+                decode_input, self._decode_cache_position, past_key_value=self.paged_cache
+            )
+        with _profile_stage(self.device, "decode.token_readback"):
+            token_torch = ttnn.to_torch(
+                token_tt,
+                mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
+            )
+        tokens = [int(x) for x in token_torch.reshape(-1).tolist()]  # [bs]
+        return tokens[:n_in]
+
     # ------------------------------------------------------------------
     # Generate
     # ------------------------------------------------------------------
