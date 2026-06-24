@@ -4,7 +4,9 @@
 
 import contextlib
 import os
+import threading
 import time
+import traceback
 import warnings
 from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, Type
@@ -950,6 +952,19 @@ class TracedRun(LightweightRun):
     _base_pre_trace_execute: Any = None
     _base_post_trace_execute: Any = None
 
+    # --- Allocation-safety seam (reusable by any @trace_enabled model) ---
+    # tests/CI set True so device_allocation_barrier RAISES on entry-with-captures
+    # (a site entering it with live traces must use the uniform host-only fix instead).
+    _strict_alloc_guard: bool = False
+    # anti-thrash telemetry: incremented once per barrier release; asserted bounded,
+    # reset in configure()/release_all(). MUST NOT scale with token count.
+    _barrier_release_count: int = 0
+    # Serializes release / capture / replay / barriered-alloc / per-token H2D copies.
+    # Single decode-driver thread for dots.ocr serving (supports_async_decode=False forces
+    # async_scheduling off; single driver Worker), so this RLock is uncontended -> effectively
+    # a re-entrant no-op. It is wired regardless so enabling multi-threaded decode later is safe.
+    _trace_lock = threading.RLock()
+
     @classmethod
     def configure(
         cls,
@@ -965,8 +980,10 @@ class TracedRun(LightweightRun):
         cls._input_memory_config = input_memory_config or ttnn.DRAM_MEMORY_CONFIG
         cls._trace_cache = {}
         cls._warmup_keys = set()
+        cls._barrier_release_count = 0
         cls._base_pre_trace_execute = TTNNModule.pre_trace_execute
         cls._base_post_trace_execute = TTNNModule.post_trace_execute
+        cls._install_alloc_guard()
 
     @classmethod
     def cache_size(cls) -> int:
@@ -990,6 +1007,7 @@ class TracedRun(LightweightRun):
             ttnn.release_trace(entry.device, entry.trace_id)
         cls._trace_cache.clear()
         cls._warmup_keys.clear()
+        cls._barrier_release_count = 0
 
     @classmethod
     def release(cls, module_name: str) -> int:
@@ -999,6 +1017,105 @@ class TracedRun(LightweightRun):
             entry = cls._trace_cache.pop(key)
             ttnn.release_trace(entry.device, entry.trace_id)
         return len(to_remove)
+
+    @classmethod
+    def has_active_captures(cls) -> bool:
+        """True iff a captured trace currently exists. Allocating a device buffer while
+        this is True risks corrupting those traces (tt-metal allocator.cpp:105). This is
+        the framework's "is a trace active" proxy -- ttnn exposes no such query."""
+        return bool(cls._trace_cache)
+
+    @classmethod
+    def before_device_allocation(cls, reason: str = "") -> int:
+        """Release every captured trace IF any exist, so an imminent device-buffer
+        allocation that is NOT a @trace_enabled warm-up cannot corrupt a live trace.
+
+        Preserves ``_warmup_keys`` -> released keys RE-CAPTURE on next encounter (NOT
+        re-warm: no redundant cold compile). Fast path (no traces live) is a single
+        dict-emptiness check -> zero steady-state cost. Returns # released. Thread-safe
+        via ``_trace_lock`` (uncontended/no-op when a single thread drives decode)."""
+        with cls._trace_lock:
+            if not cls._trace_cache:
+                return 0
+            n = len(cls._trace_cache)
+            for entry in cls._trace_cache.values():
+                ttnn.release_trace(entry.device, entry.trace_id)
+            cls._trace_cache.clear()
+            cls._barrier_release_count += 1
+        from loguru import logger
+
+        logger.info(
+            f"before_device_allocation(reason={reason!r}): released {n} trace(s); "
+            f"re-capture on next encounter. If this fires per-token it is a BUG."
+        )
+        return n
+
+    @classmethod
+    @contextlib.contextmanager
+    def device_allocation_barrier(cls, reason: str = ""):
+        """Make a PER-REQUEST device-buffer allocation safe w.r.t. captured traces.
+
+        HARD RULE: NEVER use this in a per-token / per-decode-step path (catastrophic
+        re-capture thrash; destroys the DP=8 perf path). Per-token sites MUST be made
+        allocation-free instead (host-only ``from_torch`` + ``copy_host_to_device_tensor``).
+        FALLBACK ONLY, for per-request setup that cannot be converted, plus cold-compile.
+
+        strict mode (tests/CI, ``_strict_alloc_guard=True``): RAISE on entry-with-captures --
+          the site must use the uniform fix instead.
+        production: release captured traces (re-capture afterward; amortized per request)."""
+        if cls._strict_alloc_guard and cls.has_active_captures():
+            raise RuntimeError(
+                f"device_allocation_barrier({reason!r}) entered with "
+                f"{len(cls._trace_cache)} active captured trace(s). Use the uniform "
+                f"host-only from_torch + copy_host_to_device_tensor fix instead."
+            )
+        cls.before_device_allocation(reason)
+        yield
+
+    @classmethod
+    def _install_alloc_guard(cls) -> None:
+        """Opt-in allocation tripwire (off by default). Diagnostic/regression sentinel only --
+        NOT the completeness oracle (that is ``grep -c allocator.cpp:105 == 0``).
+
+        Modes via ``TT_SYMBIOTE_TRACE_ALLOC_GUARD={off|warn|raise}``. Production default
+        ``off`` -> not installed -> zero overhead. The guard fires only when traces are live
+        AND not inside a trace warm-up/capture (``_TRACE_RUNNING`` is True during both -- those
+        allocations are the legitimate trace buffers and are INTENTIONALLY exempt; do NOT remove
+        that check). Idempotent: re-install replaces the prior wrappers' state."""
+        mode = os.environ.get("TT_SYMBIOTE_TRACE_ALLOC_GUARD", "off").lower()
+        if mode not in ("warn", "raise"):
+            return
+        if getattr(cls, "_alloc_guard_installed", False):
+            return
+        from loguru import logger
+
+        # Broadened target set. Skip names absent at the pinned commit.
+        target_names = [
+            "from_torch", "to_device", "zeros", "allocate_tensor_on_device",
+            "allocate_tensor", "to_layout", "reshape", "concat", "add",
+        ]
+
+        def _make_wrapper(name, orig):
+            def wrapped(*args, **kwargs):
+                if cls.has_active_captures() and not _TRACE_RUNNING:
+                    stack = "".join(traceback.format_stack(limit=8))
+                    msg = (f"TRACE-ALLOC-GUARD: ttnn.{name} allocating while "
+                           f"{len(cls._trace_cache)} trace(s) live:\n{stack}")
+                    if mode == "raise":
+                        raise RuntimeError(msg)
+                    logger.warning(msg)
+                return orig(*args, **kwargs)
+            return wrapped
+
+        installed = []
+        for name in target_names:
+            orig = getattr(ttnn, name, None)
+            if orig is None or not callable(orig):
+                continue
+            setattr(ttnn, name, _make_wrapper(name, orig))
+            installed.append(name)
+        cls._alloc_guard_installed = True
+        logger.info(f"TRACE-ALLOC-GUARD installed (mode={mode}) on: {installed}")
 
     @classmethod
     def invalidate_captures_for_cold_compile(cls) -> int:
@@ -1022,12 +1139,11 @@ class TracedRun(LightweightRun):
 
         Returns the number of traces released. Distinct from ``release_all`` (teardown:
         also clears ``_warmup_keys`` to dodge the cross-test ``id()``-reuse collision).
-        """
-        n = len(cls._trace_cache)
-        for entry in cls._trace_cache.values():
-            ttnn.release_trace(entry.device, entry.trace_id)
-        cls._trace_cache.clear()
-        return n
+
+        Refactored to delegate to ``before_device_allocation`` so there
+        is ONE invariant-enforcing release path; behavior is preserved (same release of all
+        captured traces, ``_warmup_keys`` untouched, returns # released)."""
+        return cls.before_device_allocation(reason="cold_compile")
 
     @staticmethod
     def _assert_no_stateful_descendants(module) -> None:
@@ -1230,10 +1346,11 @@ class TracedRun(LightweightRun):
         # already primed caches/ops, so we capture directly with no extra
         # in-capture warm-up forward (an extra forward double-mutates stateful
         # graphs and frees buffers the captured trace references).
-        trace_id = ttnn.begin_trace_capture(device, cq_id=cq_id)
-        trace_output = module.forward(*trace_func_args, **trace_func_kwargs)
-        ttnn.end_trace_capture(device, trace_id, cq_id=cq_id)
-        ttnn.synchronize_device(device)
+        with TracedRun._trace_lock:
+            trace_id = ttnn.begin_trace_capture(device, cq_id=cq_id)
+            trace_output = module.forward(*trace_func_args, **trace_func_kwargs)
+            ttnn.end_trace_capture(device, trace_id, cq_id=cq_id)
+            ttnn.synchronize_device(device)
 
         entry = TraceEntry(
             trace_id=trace_id,
@@ -1284,7 +1401,8 @@ class TracedRun(LightweightRun):
             {},
             pre_trace_end - pre_trace_begin,
         )
-        ttnn.execute_trace(entry.device, entry.trace_id, cq_id=TracedRun._cq_id, blocking=capture_encounter)
+        with TracedRun._trace_lock:
+            ttnn.execute_trace(entry.device, entry.trace_id, cq_id=TracedRun._cq_id, blocking=capture_encounter)
         result = entry.trace_output
         post_trace_begin = time.time()
         if type(self).post_trace_execute is not TracedRun._base_post_trace_execute:

@@ -211,11 +211,12 @@ class TTNNPagedAttentionKVCache(Cache):
         ``dp_batch_shard_tensor_mapper`` ``to_device`` uses.
 
         Trace stability: the device page-table tensor is updated **in place**
-        (upload to a temp, then ``ttnn.copy`` into the pre-allocated
-        ``_tt_page_table`` buffer) so its buffer identity is preserved. A
-        captured decode trace references that buffer, so swapping block tables
-        between requests does NOT require re-capturing the trace. Call this
-        *outside* a trace boundary (at request setup / between decode traces).
+        via ``copy_host_to_device_tensor`` from a HOST-ONLY source tensor (no
+        device buffer is allocated -- uniform host-upload fix), so its
+        buffer identity is preserved AND no device allocation occurs while a
+        trace is live. A captured decode trace references that buffer, so
+        swapping block tables between requests does NOT require re-capturing the
+        trace, and the install is allocation-safe even inside a serving step.
 
         Args:
             page_table: int32 tensor ``[batch, blocks_per_sequence]`` mapping
@@ -250,17 +251,17 @@ class TTNNPagedAttentionKVCache(Cache):
         self.page_table = full.contiguous()
 
         mapper = self._page_table_mesh_mapper()
-        upload = ttnn.from_torch(
+        # UNIFORM FIX: HOST-only tensor (no device= -> no
+        # device buffer allocated) built with the SAME mapper as the device buffer, then
+        # written IN PLACE via copy_host_to_device_tensor into the pre-allocated
+        # _tt_page_table. No per-request device allocation -> cannot corrupt a live trace.
+        host_pt = ttnn.from_torch(
             self.page_table,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self._device,
             mesh_mapper=mapper,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        # In-place: preserve _tt_page_table's buffer identity for trace safety.
-        ttnn.copy(upload, self._tt_page_table)
-        ttnn.deallocate(upload)
+        ttnn.copy_host_to_device_tensor(host_pt, self._tt_page_table)
         self._vllm_page_table_installed = True
         return self
 

@@ -19,7 +19,7 @@ name = "tt_symbiote"
 # back to noisy `0.0.1.dev<n>+<sha>` strings that PyPI rejects as
 # pre-releases. The literal pin below is the source of truth that
 # `importlib.metadata.version("tt_symbiote")` returns.
-version = "0.1.6"
+version = "0.1.7"
 authors = [
     {name = "Tenstorrent"},
     {email = "info@tenstorrent.com"},
