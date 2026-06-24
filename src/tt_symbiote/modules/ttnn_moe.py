@@ -1102,11 +1102,12 @@ class TTNNExperts(StatelessTTNNModule):
         del self.torch_w2_proj
 
     def move_weights_to_device_impl(self):
-        """Move preprocessed weights to device and create mapping tensors."""
-
-        self.num_experts_per_device = self._get_num_experts_per_device(self.config, self.device)
-        self.num_devices = self.device.get_num_devices()
-        self.num_dispatch_devices = self.device.shape[1]
+        """Move weights to device + create the expert mapping tensors (flat ttnn.Tensors only). The
+        device-derived counts used here are LOCAL vars; the per-device counts and program/compute
+        configs are NON-TENSOR -> configure_runtime."""
+        num_devices = self.device.get_num_devices()
+        num_experts_per_device = self._get_num_experts_per_device(self.config, self.device)
+        num_dispatch_devices = self.device.shape[1]
 
         self.tt_w1_proj = ttnn.to_device(self.tt_w1_proj, self.device)
         self.tt_w3_proj = ttnn.to_device(self.tt_w3_proj, self.device)
@@ -1114,8 +1115,8 @@ class TTNNExperts(StatelessTTNNModule):
 
         # Create expert mapping tensors for all-to-all ops
         self.expert_mapping_tensors = ttnn.from_torch(
-            torch.eye(self.num_devices, dtype=torch.int32)
-            .repeat_interleave(self.num_experts_per_device, dim=0)
+            torch.eye(num_devices, dtype=torch.int32)
+            .repeat_interleave(num_experts_per_device, dim=0)
             .unsqueeze(0)
             .unsqueeze(0),
             device=self.device,
@@ -1127,13 +1128,21 @@ class TTNNExperts(StatelessTTNNModule):
 
         # Create remap topk mask for expert token remap
         self.remap_topk_mask = ttnn.from_torch(
-            torch.ones((1, self.num_dispatch_devices, 1, self.num_experts), dtype=torch.bfloat16),
+            torch.ones((1, num_dispatch_devices, 1, self.num_experts), dtype=torch.bfloat16),
             device=self.device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
+
+    def configure_runtime(self):
+        """Runs AFTER device tensors are restored on warm: recompute the per-device expert counts +
+        matmul program/compute configs from persistent state (``self.config``/``self.device``/shapes),
+        so nothing is lost when ``move_weights_to_device_impl`` is skipped on warm."""
+        self.num_experts_per_device = self._get_num_experts_per_device(self.config, self.device)
+        self.num_devices = self.device.get_num_devices()
+        self.num_dispatch_devices = self.device.shape[1]
 
         hidden_tiles = self.hidden_size // ttnn.TILE_SIZE
         intermediate_tiles = self.intermediate_size // ttnn.TILE_SIZE

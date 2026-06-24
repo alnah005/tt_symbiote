@@ -22,6 +22,304 @@ from tt_symbiote.core.utils import tree_map
 
 TENSOR_RUN_IMPLEMENTATION = get_tensor_run_implementation()
 
+# Records which tt-metal version this gate was developed against.
+TT_METAL_COMMIT = "c09f09c35a1a59a428f0e1b5cdaa8fe59fb1b195"
+
+
+# Dynamic-canary gate: a ``*_impl`` may only create/replace/``del`` a flat ``ttnn.Tensor``/``None``
+# attr (plus a flat ``torch.Tensor`` in preprocess); any other ``__dict__`` write raises. ``_impl`` is
+# SKIPPED on a warm load, so non-tensor state set there is silently lost -> use ``configure_runtime()``.
+
+
+class NonTensorStateMutationError(RuntimeError):
+    """Raised when a weight-lifecycle ``_impl`` mutates non-tensor module state.
+
+    Hard-fails via the surgical re-raise in ``device_management.set_device``.
+    """
+
+
+# Framework-owned ``__dict__`` keys excluded from every canary diff (self + touched children).
+# LOAD-BEARING for the transitive child-diff (a parent recursion flips a child's flags); additive.
+FRAMEWORK_BOOKKEEPING_KEYS = frozenset(
+    {
+        "_weights_on_device",  # lifecycle flag
+        "_preprocessed_weight",  # lifecycle flag
+        "_device",
+        "_device_state",
+        "_unique_name",  # lazily set by the module_name property
+        "_fallback_torch_layer",  # re-set inside preprocess_weights_impl (conv/norm)
+        "_model_config",
+        "_bypass_tensor_wrapping",
+        "_tt_symbiote_device_set",
+        # Weight-cache + deferred-configure lifecycle flags (written outside every canary window).
+        "_weights_from_cache",  # set True on a warm cache HIT
+        "_tt_cache_state",  # memoized CacheState (HIT|MISS|DISABLED)
+        "_configure_runtime_done",  # idempotency flag for configure_runtime
+        "_tt_src_fp",  # source-weight fingerprint snapshot (captured at preprocess-start)
+    }
+)
+
+
+# Types the canary treats as ``ttnn.Tensor``. Empty in production; ``tests/auto`` registers its
+# concrete sentinel because the stub makes ``ttnn.Tensor`` a non-type ``_Anything``.
+_CANARY_FAKE_TENSOR_TYPES: tuple = ()
+
+
+# Depth-tracked deferred ``configure_runtime`` driver: runs on EVERY load, OUTSIDE every canary
+# window. Each ``move_weights_to_device`` increments a depth counter; the queue flushes FIFO only at
+# depth 0 (so FIFO drain == children-before-parents). Single-threaded.
+_CONFIGURE_DEPTH = 0  # move_weights_to_device frames on the stack (this thread)
+_PENDING_CONFIGURE: list = []  # modules awaiting flush, in ENQUEUE order (children before parents)
+_CONFIGURE_IN_PROGRESS = False  # re-entrancy guard: a configure body must never trigger a flush
+
+
+def _flush_pending_configure():
+    """Drain ``_PENDING_CONFIGURE`` FIFO (children-before-parents); snapshot-then-clear +
+    ``_CONFIGURE_IN_PROGRESS`` guard are re-entrancy safe. Each module configured at most once."""
+    global _PENDING_CONFIGURE, _CONFIGURE_IN_PROGRESS
+    if _CONFIGURE_IN_PROGRESS:  # never re-enter (a configure body must not flush)
+        return
+    _CONFIGURE_IN_PROGRESS = True
+    try:
+        while _PENDING_CONFIGURE:
+            pending = _PENDING_CONFIGURE
+            _PENDING_CONFIGURE = []  # snapshot-then-clear-before-run (re-entrancy safe)
+            for m in pending:  # FIFO front-to-back == children-before-parents
+                m._configure_runtime_once()  # a raise here propagates exactly like an _impl raise
+    finally:
+        _CONFIGURE_IN_PROGRESS = False
+
+
+def _discard_pending_configure():
+    """Drop all deferred entries at a top-level exception boundary."""
+    global _PENDING_CONFIGURE
+    _PENDING_CONFIGURE = []
+
+
+def _none_valued_attr_keys(module) -> list:
+    """Cold-``None`` slot keys (live ``__dict__`` value ``None``, minus bookkeeping/``*_host``) so the
+    warm loader can re-materialize them (the cache cannot persist a ``None``). Cold MISS path only."""
+    return [
+        k
+        for k, v in module.__dict__.items()
+        if v is None and k not in FRAMEWORK_BOOKKEEPING_KEYS and not k.endswith("_host")
+    ]
+
+
+def _register_canary_fake_tensor_type(t: type) -> None:
+    """TEST-ONLY hook: register a sentinel type the canary treats as ``ttnn.Tensor`` (``tests/auto``)."""
+    global _CANARY_FAKE_TENSOR_TYPES
+    if isinstance(t, type) and t not in _CANARY_FAKE_TENSOR_TYPES:
+        _CANARY_FAKE_TENSOR_TYPES = _CANARY_FAKE_TENSOR_TYPES + (t,)
+
+
+def _is_real_ttnn_tensor(v) -> bool:
+    """POSITIVE TYPE IDENTITY tensor test (never ``hasattr`` duck-typing); lazy ttnn import,
+    guarded with ``isinstance(T, type)`` so a non-type stub never raises."""
+    try:
+        import ttnn
+
+        T = getattr(ttnn, "Tensor", None)
+        if isinstance(T, type) and isinstance(v, T):  # guarded: a non-type stub never raises
+            return True
+    except Exception:
+        pass
+    return isinstance(v, _CANARY_FAKE_TENSOR_TYPES)  # NOT hasattr-duck-typing
+
+
+def _is_allowed_post(value, *, allow_torch: bool) -> bool:
+    """ALLOW predicate for an ADD/REPLACE post-value: ``None`` or any ``ttnn.Tensor`` in any frame;
+    a flat ``torch.Tensor`` only in preprocess. Containers are always FORBIDDEN."""
+    if value is None:  # optional/empty tensor slot -- ALLOW (by identity, not truthiness)
+        return True
+    if _is_real_ttnn_tensor(value):  # ttnn device/host tensor -- ALLOW
+        return True
+    if allow_torch and isinstance(value, torch.Tensor):  # preprocess only (covers TorchTTNNTensor)
+        return True
+    return False
+
+
+def _is_tensor_for_removal(value) -> bool:
+    """Removal-verdict tensor test, uniform across both frames (ttnn OR torch OR None-pre); a
+    removal can never reintroduce stale state on a warm load."""
+    return _is_real_ttnn_tensor(value) or isinstance(value, torch.Tensor)
+
+
+class _SnapEntry:
+    """Reference-only snapshot of one ``__dict__`` value.
+
+    Containers EAGERLY record ``length``/``has_tensor_elem`` at snapshot time: the pre-snapshot holds
+    the live container by reference, so a lazy ``len()`` at diff time would see the post-state and
+    miss an in-place ``.append``/``.clear``.
+    """
+
+    __slots__ = ("value", "value_id", "is_tensor", "kind", "length", "has_tensor_elem")
+
+    def __init__(self, value):
+        self.value = value
+        self.value_id = id(value)
+        self.is_tensor = _is_tensor_for_removal(value)
+        self.length = None
+        self.has_tensor_elem = False
+        if value is None:
+            self.kind = "none"
+        elif self.is_tensor:
+            self.kind = "tensor"
+        elif isinstance(value, (list, dict, tuple)):
+            self.kind = "list" if isinstance(value, list) else ("dict" if isinstance(value, dict) else "tuple")
+            try:
+                self.length = len(value)
+                elems = value.values() if isinstance(value, dict) else value
+                self.has_tensor_elem = any(_is_tensor_for_removal(e) for e in elems)
+            except Exception:
+                self.length = None
+        else:
+            self.kind = "other"
+
+
+def _canary_snapshot(module) -> dict:
+    """Snapshot ``module.__dict__`` DIRECTLY (never via ``getattr``/``module_name``, which would set
+    ``_unique_name``). Returns ``{key: _SnapEntry}``; an absent key encodes "absent"."""
+    return {k: _SnapEntry(v) for k, v in module.__dict__.items()}
+
+
+def _canary_child_snapshots(module):
+    """Pre-snapshot immediate touched ``TTNNModule`` children (walking ``__dict__`` DIRECTLY, incl.
+    one level inside dict/list/tuple attrs; never ``torch.nn.Module``; skips
+    ``_fallback_torch_layer``/``torch_layer``; deduped by id). Returns ``[(label, child, pre_snap)]``."""
+    out = []
+    seen = set()
+
+    def _consider(label, value):
+        if isinstance(value, TTNNModule) and id(value) not in seen:
+            seen.add(id(value))
+            out.append((label, value, _canary_snapshot(value)))
+
+    for key, value in module.__dict__.items():
+        if key in ("_fallback_torch_layer", "torch_layer"):
+            continue
+        if isinstance(value, TTNNModule):
+            _consider(key, value)
+        elif isinstance(value, dict):
+            for sub_k, sub_v in value.items():
+                _consider(f"{key}[{sub_k!r}]", sub_v)
+        elif isinstance(value, (list, tuple)):
+            for i, sub_v in enumerate(value):
+                _consider(f"{key}[{i}]", sub_v)
+    return out
+
+
+def _safe_repr(value) -> str:
+    """Bounded, exception-proof repr for a NON-tensor value on the raise path only."""
+    try:
+        r = repr(value)
+    except Exception:
+        return f"<unreprable {type(value).__name__}>"
+    if len(r) > 120:
+        r = r[:117] + "..."
+    return r
+
+
+def _describe(entry) -> str:
+    """One-side description used in the error message."""
+    if entry is None:
+        return "<absent>"
+    if entry.kind == "tensor":
+        return "<ttnn.Tensor>"
+    if entry.kind == "none":
+        return "None"
+    if entry.kind in ("list", "tuple", "dict"):
+        try:
+            n = len(entry.value)
+        except Exception:
+            n = "?"
+        if entry.kind == "dict":
+            return f"<dict x{n}>"
+        bracket = "[" if entry.kind == "list" else "("
+        close = "]" if entry.kind == "list" else ")"
+        return f"{bracket}<ttnn.Tensor> x{n}{close}" if n else f"{bracket}{close}"
+    return _safe_repr(entry.value)
+
+
+def _container_inplace_violation(pre_entry, post_entry) -> bool:
+    """In-place-growth backstop for a same-id list/dict/tuple in BOTH snapshots: FORBID iff ``len()``
+    changed OR an element transitioned to/from a tensor (a stable non-tensor collection is NOT
+    flagged). Uses the EAGERLY-recorded ``length``/``has_tensor_elem`` (live container shared by ref)."""
+    if pre_entry is None or post_entry is None:
+        return False
+    if pre_entry.value_id != post_entry.value_id:
+        return False
+    if pre_entry.kind not in ("list", "dict", "tuple"):
+        return False
+    if pre_entry.length is None or post_entry.length is None:
+        return False
+    if pre_entry.length != post_entry.length:
+        return True
+    return pre_entry.has_tensor_elem != post_entry.has_tensor_elem
+
+
+def _diff_one(pre_snap, post_snap, *, allow_torch, on_label):
+    """Diff one module's pre/post ``__dict__`` snapshots; return a list of violation records.
+
+    Each violation record: ``(attr_name, pre_entry_or_None, post_entry_or_None, on_label, note)``.
+    """
+    violations = []
+    keys = set(pre_snap) | set(post_snap)
+    for key in sorted(keys):
+        if key in FRAMEWORK_BOOKKEEPING_KEYS:
+            continue
+        pre_entry = pre_snap.get(key)
+        post_entry = post_snap.get(key)
+
+        if pre_entry is not None and post_entry is None:
+            # REMOVED (``del``): verdict keys on the PRE-value (tensor/None -> ALLOW cleanup).
+            if pre_entry.kind == "none" or pre_entry.is_tensor:
+                continue
+            violations.append((key, pre_entry, None, on_label, "deleted non-tensor state"))
+            continue
+
+        if pre_entry is None and post_entry is not None:
+            # ADDED.
+            if not _is_allowed_post(post_entry.value, allow_torch=allow_torch):
+                note = "container of tensors" if post_entry.kind in ("list", "dict", "tuple") else None
+                violations.append((key, None, post_entry, on_label, note))
+            continue
+
+        # Present in BOTH.
+        if pre_entry.value_id != post_entry.value_id:
+            # REPLACED (rebind): verdict keys on the POST-value.
+            if not _is_allowed_post(post_entry.value, allow_torch=allow_torch):
+                note = "container of tensors" if post_entry.kind in ("list", "dict", "tuple") else None
+                violations.append((key, pre_entry, post_entry, on_label, note))
+        elif _container_inplace_violation(pre_entry, post_entry):
+            # In-place growth/clear of a same-id container (the in-place backstop).
+            violations.append((key, pre_entry, post_entry, on_label, "in-place container mutation"))
+    return violations
+
+
+def _format_violation(module, origin, violations) -> str:
+    """Build the actionable multi-line error message. Names the class via ``__module__`` +
+    ``__qualname__`` ONLY (never the lazy ``module_name``), so no ``_unique_name`` set on the raise path."""
+    cls = type(module)
+    qual = f"{cls.__module__}.{cls.__qualname__}"
+    lines = [
+        f"{qual} mutated non-tensor module state inside {origin}. _impl methods may ONLY",
+        "create/replace a flat ttnn.Tensor or None attribute (plus a flat torch.Tensor in",
+        "preprocess_weights_impl), because _impl is SKIPPED on a warm cache load.",
+        "",
+        "Forbidden writes (attribute: pre -> post  [on: self | child <label>]):",
+    ]
+    for attr, pre_entry, post_entry, on_label, note in violations:
+        location = "self" if on_label is None else f"child {on_label}"
+        suffix = f"  (forbidden: {note})" if note else ""
+        lines.append(f"  - {attr}: {_describe(pre_entry)} -> {_describe(post_entry)}{suffix}  [on: {location}]")
+    lines += [
+        "",
+        "FIX: move this state into configure_runtime() (runs on cold AND warm); flatten any",
+        "container of tensors to indexed flat attrs (tt_weight_chunk_0, ...).",
+    ]
+    return "\n".join(lines)
+
 
 def set_distributed_tensor_config(distribute_tensor_config: DistributedTensorConfig):
     def _set_distributed_config(e):
@@ -98,6 +396,11 @@ class TTNNModule:
         self._device_state: Optional[DistributedConfig] = None
         self._model_config = {}
         self._bypass_tensor_wrapping = False
+        # Weight-cache + deferred-configure bookkeeping.
+        self._weights_from_cache = False
+        self._tt_cache_state = None
+        self._configure_runtime_done = False
+        self._tt_src_fp = None
 
     def set_model_config(self, model_config):
         """Set model configuration dictionary."""
@@ -122,26 +425,124 @@ class TTNNModule:
             self._preprocessed_weight = True
         else:
             return
-        self.preprocess_weights_impl()
+        # Snapshot the source-weight fingerprint BEFORE _impl creates the transient *_host stash, so
+        # the cache key's src fingerprint is identical at the warm read-check and the cold save.
+        from tt_symbiote.core.weight_cache import capture_src_fingerprint
+
+        capture_src_fingerprint(self)
+        self._run_impl_under_canary(self.preprocess_weights_impl, origin="preprocess_weights_impl")
+
+    def _configure_runtime_once(self):
+        """Idempotent wrapper around :meth:`configure_runtime` (runs at most once per module)."""
+        if getattr(self, "_configure_runtime_done", False):
+            return
+        self._configure_runtime_done = True
+        self.configure_runtime()
+
+    def weight_cache_excluded_attrs(self) -> frozenset:
+        """Attrs to EXCLUDE from cacheable-tensor selection (base: none). A hybrid composite owning a
+        runtime-position tensor (e.g. ``_decode_cur_pos``) overrides this so it owns ZERO cacheable
+        tensors -> always runs ``_impl`` -> the base recursion still descends to children on warm."""
+        return frozenset()
+
+    def weight_cache_variant(self) -> str:
+        """Per-module cache-key variant discriminator (base: empty). Subclasses fold a build-time
+        config flag so identical modules built differently never collide (e.g. PatchMerger)."""
+        return ""
 
     def move_weights_to_device(self):
-        """Move preprocessed weights to device."""
-        from tt_symbiote.core.run_config import _TRACE_RUNNING
+        """Move preprocessed weights to device, wired with the weight cache: warm device-load first,
+        else cold materialize under the canary + persist flat cacheable tensors + ENQUEUE
+        ``configure_runtime`` for the depth-0 flush (OUTSIDE every canary window, children-first, once)."""
+        from tt_symbiote.core.run_config import _TRACE_RUNNING  # PRESERVE: gate's lazy import pattern
+        from tt_symbiote.core import weight_cache as wc  # LAZY (matches gate's lazy ttnn)
 
-        if _TRACE_RUNNING:
+        global _CONFIGURE_DEPTH
+
+        if _TRACE_RUNNING:  # PRESERVE: BEFORE depth-increment (zero work; never perturbs the counter)
             assert (
                 self._weights_on_device
             ), f"Weights must be on device for {self.module_name} before running traced execution."
             return
-        assert (
-            self._preprocessed_weight
-        ), f"Weights must be preprocessed for {self.module_name} before moving to device."
-        assert self.device is not None, f"Device must be set for {self.module_name} before moving weights to device."
-        if not self._weights_on_device:
-            self._weights_on_device = True
-        else:
-            return
-        self.move_weights_to_device_impl()
+
+        _CONFIGURE_DEPTH += 1
+        top_level = _CONFIGURE_DEPTH == 1
+        try:
+            assert (
+                self._preprocessed_weight
+            ), f"Weights must be preprocessed for {self.module_name} before moving to device."
+            assert (
+                self.device is not None
+            ), f"Device must be set for {self.module_name} before moving weights to device."
+            if not self._weights_on_device:
+                self._weights_on_device = True
+            else:
+                return  # guarded re-entry no-op; finally still runs depth-- and an empty flush
+
+            state = wc.module_cache_state(self)  # HIT|MISS|DISABLED; DISABLED-fast before fingerprinting
+
+            # WARM READ: device-load BEFORE any device work. Short-circuit _impl ONLY when this module
+            # owns >=1 *cacheable* tensor (composites owning 0 MUST still run _impl to recurse).
+            if wc.caching_enabled_for_reads() and state == wc.CacheState.HIT and wc.owns_cached_tensors(self):
+                if wc.try_load_module_weights(self):
+                    self._weights_from_cache = True
+                    # Configure INLINE at the outermost frame; under a cold-parent canary (depth>1)
+                    # ENQUEUE so it lands at the depth-0 flush OUTSIDE the parent's window.
+                    if top_level:
+                        self._configure_runtime_once()
+                    elif not getattr(self, "_configure_runtime_done", False):
+                        _PENDING_CONFIGURE.append(self)
+                    return  # ZERO further device work
+                wc.purge(self)  # corrupt/mismatch -> fall through to cold recompute
+
+            # COLD MATERIALIZE: the real work, UNDER THE CANARY (cold path only).
+            self._run_impl_under_canary(self.move_weights_to_device_impl, origin="move_weights_to_device_impl")
+
+            # WRITE-AS-YOU-GO: persist flat cacheable device tensors + cold-None slot KEYS (a fresh
+            # post-_impl read-only scan sources none_slots).
+            if wc.caching_enabled_for_writes() and state != wc.CacheState.DISABLED:
+                wc.save_module_weights(self, none_slots=_none_valued_attr_keys(self))
+
+            # Register for the deferred configure flush (cold MISS path).
+            if not getattr(self, "_configure_runtime_done", False):
+                _PENDING_CONFIGURE.append(self)
+        except BaseException:
+            # Top-level cold failure: drop the deferred queue so a failed module's enqueued siblings
+            # aren't flushed on a later sibling's move (set_device warn-and-continue path).
+            # NonTensorStateMutationError still re-raises through set_device and aborts.
+            if top_level:
+                _discard_pending_configure()
+            raise
+        finally:
+            _CONFIGURE_DEPTH -= 1
+            if _CONFIGURE_DEPTH == 0 and _PENDING_CONFIGURE:
+                _flush_pending_configure()
+
+    def _run_impl_under_canary(self, impl_callable, origin):
+        """Run a weight-lifecycle ``_impl`` under the dynamic-canary gate (cold path only): snapshot
+        self + each touched child's ``__dict__``, run ``_impl``, re-snapshot, diff, and raise
+        :class:`NonTensorStateMutationError` on any violation."""
+        allow_torch = origin == "preprocess_weights_impl"
+        self_pre = _canary_snapshot(self)
+        children = _canary_child_snapshots(self)
+
+        result = impl_callable()
+
+        violations = _diff_one(self_pre, _canary_snapshot(self), allow_torch=allow_torch, on_label=None)
+        for label, child, child_pre in children:
+            violations += _diff_one(
+                child_pre, _canary_snapshot(child), allow_torch=allow_torch, on_label=label
+            )
+        if violations:
+            raise NonTensorStateMutationError(_format_violation(self, origin, violations))
+        return result
+
+    def configure_runtime(self):
+        """Sanctioned home for device-dependent NON-TENSOR runtime config (compute-kernel configs,
+        sharded MemoryConfigs, derived scalars, rotary setups). Runs on EVERY load (cold AND warm),
+        so it is never lost when ``*_impl`` is skipped on warm; store the raw ``ttnn.to_device(...)``
+        result, NOT a TorchTTNNTensor. Base no-op; do NOT call from any ``_impl`` (the driver does)."""
+        return None
 
     def deallocate_weights(self):
         """Deallocate weights from device."""

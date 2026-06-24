@@ -40,7 +40,7 @@ from typing import Any, Optional
 
 from torch import nn
 
-from tt_symbiote.core.module import MeshShapeToDeviceArch, TTNNModule
+from tt_symbiote.core.module import MeshShapeToDeviceArch, NonTensorStateMutationError, TTNNModule
 from tt_symbiote.core.run_config import DispatchManager, DistributedConfig
 from tt_symbiote.utils.graph_visualization import draw_model_graph
 
@@ -389,9 +389,25 @@ def set_device(obj, device) -> None:
         try:
             module.preprocess_weights()
             module.move_weights_to_device()
+        except NonTensorStateMutationError:
+            # Contract violation: never downgrade the dynamic-canary hard-raise to a warning.
+            raise
         except Exception as e:
             warnings.warn(
                 f"set_device: failed to (preprocess|move) weights for " f"{module.module_name}: {e!r}",
+                stacklevel=2,
+            )
+
+    # Idempotent post-order (children-first) configure_runtime safety net for a non-flushing module.
+    for module in reversed(initialized_modules):
+        try:
+            module._configure_runtime_once()
+        except NonTensorStateMutationError:
+            # configure_runtime is OUTSIDE the canary; preserve the surgical re-raise defensively.
+            raise
+        except Exception as e:
+            warnings.warn(
+                f"set_device: configure_runtime failed for {module.module_name}: {e!r}",
                 stacklevel=2,
             )
 

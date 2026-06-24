@@ -99,10 +99,9 @@ class _TTNNDotsOCROProjPrefillLinear(TTNNLinearLLamaIReplicatedWColSharded):
         raw_weight_torch = self.tt_weight_host.clone() if isinstance(self.tt_weight_host, torch.Tensor) else None
         super().move_weights_to_device_impl()
 
+        # Only the flat ttnn.Tensor (or None) is written here; the three prefill MemoryConfig/
+        # program configs are NON-TENSOR -> configure_runtime.
         self._prefill_weight = None
-        self._prefill_in0_mem = None
-        self._prefill_out_mem = None
-        self._prefill_pc = None
 
         shape_matches = int(self.in_features) == self._PREFILL_DIM and int(self.out_features) == self._PREFILL_DIM
         if raw_weight_torch is None or _tp_requires_ccl(self.device) or not shape_matches:
@@ -118,6 +117,16 @@ class _TTNNDotsOCROProjPrefillLinear(TTNNLinearLLamaIReplicatedWColSharded):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def configure_runtime(self):
+        # o_proj parent config (_decode_input_shard_cfg + compute_kernel_config) + the prefill
+        # MemoryConfig/program configs.
+        super().configure_runtime()
+        shape_matches = int(self.in_features) == self._PREFILL_DIM and int(self.out_features) == self._PREFILL_DIM
+        if _tp_requires_ccl(self.device) or not shape_matches:
+            self._prefill_in0_mem = None
+            self._prefill_out_mem = None
+            self._prefill_pc = None
+            return
         m = self._PREFILL_M_TILES * ttnn.TILE_SIZE
         self._prefill_in0_mem = ttnn.create_sharded_memory_config(
             (1, 1, m, self._PREFILL_DIM),
@@ -301,45 +310,8 @@ class TTNNDotsOCRAttention(StatefulTTNNModule):
         return new_attn
 
     def move_weights_to_device_impl(self):
+        # Canary-clean cold path: base recursion + the flat ttnn/None decode position buffer only.
         super().move_weights_to_device_impl()
-
-        grid = self.device.compute_with_storage_grid_size()
-        self.core_grid = ttnn.CoreGrid(y=grid.y, x=grid.x)
-
-        if self.sdpa.program_config is None:
-            # Prefill SDPA: tuned 8x8 grid, q_chunk=256 / k_chunk=256 (both divide M=2816=256*11),
-            # exact softmax (exp_approx_mode=False) + HiFi2 (see compute_kernel_config below).
-            # This 256/256 schedule matches the gpt_oss prefill and llama3-70b configs and the
-            # standalone prefill op-sequence tuning (test_prefill_ops_sequence_univ_2.py).
-            self.sdpa.program_config = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
-                q_chunk_size=256,
-                k_chunk_size=256,
-                exp_approx_mode=False,
-            )
-            self.sdpa.decode_program_config = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
-                q_chunk_size=0,
-                k_chunk_size=0,
-                exp_approx_mode=True,
-            )
-            self.sdpa.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi,
-                math_approx_mode=True,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=True,
-            )
-            # Decode SDPA: HiFi2 (was LoFi in commit d1b17d1a3c6 -- swapped back
-            # because LoFi at the per-token batch=1 K/V cache reads produces
-            # off-by-many-tokens argmax errors visible as garbled output. The
-            # earlier "validation" run that approved LoFi was confounded by the
-            # broken DRAM-sharded LM head also in that commit, so the LoFi delta
-            # was masked. Keep at HiFi2 until a clean A/B confirms it's safe.)
-            # Decode SDPA: HiFi4 (decoder precision default; was HiFi2).
-            self.sdpa.decode_compute_kernel_config = _decoder_compute_kernel_config(math_approx_mode=True)
-
-        # QKV decode compute config: HiFi4 (decoder precision default; was HiFi2).
-        self.qkv_proj.compute_kernel_config = _decoder_compute_kernel_config()
 
         mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
 
@@ -358,6 +330,39 @@ class TTNNDotsOCRAttention(StatefulTTNNModule):
         # _q_bias / _k_bias / _v_bias / _qkv_bias are no longer materialized as
         # separate device tensors — bias is folded into qkv_proj.tt_bias and
         # fused into the matmul kernel by the linear layer.
+
+    def weight_cache_excluded_attrs(self):
+        # Runtime position buffer, not a weight. Excluding it keeps the attention owning 0 cacheable
+        # tensors -> always runs _impl on warm -> the super().move() recursion into qkv/o_proj.
+        return frozenset({"_decode_cur_pos"})
+
+    def configure_runtime(self):
+        # The parent attention is the SINGLE owner of sdpa.*; qkv_proj owns its own
+        # compute_kernel_config (NOT written here).
+        grid = self.device.compute_with_storage_grid_size()
+        self.core_grid = ttnn.CoreGrid(y=grid.y, x=grid.x)
+        # Prefill SDPA: tuned 8x8 grid, q_chunk=256 / k_chunk=256, exact softmax + LoFi.
+        self.sdpa.program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
+            q_chunk_size=256,
+            k_chunk_size=256,
+            exp_approx_mode=False,
+        )
+        self.sdpa.decode_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
+            q_chunk_size=0,
+            k_chunk_size=0,
+            exp_approx_mode=True,
+        )
+        self.sdpa.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        # Decode SDPA: HiFi4 (decoder precision default; was HiFi2).
+        self.sdpa.decode_compute_kernel_config = _decoder_compute_kernel_config(math_approx_mode=True)
+        # NOTE: self.qkv_proj.compute_kernel_config is NOT set here (B2: qkv_proj owns it).
 
         config = self._fallback_torch_layer.config
         rope_params = getattr(config, "rope_parameters", {}) or {}

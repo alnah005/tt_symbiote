@@ -856,6 +856,11 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         # the merger loads w2 REPLICATED (full-hidden output per device). Default
         # False -> the merger keeps its hardware-validated col-shard path.
         vision_tower._batched_vision = bool(batched_vision)
+        # Construction-time relay: the merger CONSUMES _batched_full_hidden in its own _impl (to pick
+        # the w2 shard mapping), so it is too late for configure_runtime -> set OUTSIDE any _impl here
+        # (the tower _impl no longer writes it, which would be a parent-sets-child gate offender).
+        if getattr(vision_tower, "patch_merger", None) is not None:
+            vision_tower.patch_merger._batched_full_hidden = bool(batched_vision)
         vision_tower.override_children_module_names()
 
         decoder_layers = []
