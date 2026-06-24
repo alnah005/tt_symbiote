@@ -1091,20 +1091,30 @@ class TracedRun(LightweightRun):
 
         # Broadened target set. Skip names absent at the pinned commit.
         target_names = [
-            "from_torch", "to_device", "zeros", "allocate_tensor_on_device",
-            "allocate_tensor", "to_layout", "reshape", "concat", "add",
+            "from_torch",
+            "to_device",
+            "zeros",
+            "allocate_tensor_on_device",
+            "allocate_tensor",
+            "to_layout",
+            "reshape",
+            "concat",
+            "add",
         ]
 
         def _make_wrapper(name, orig):
             def wrapped(*args, **kwargs):
                 if cls.has_active_captures() and not _TRACE_RUNNING:
                     stack = "".join(traceback.format_stack(limit=8))
-                    msg = (f"TRACE-ALLOC-GUARD: ttnn.{name} allocating while "
-                           f"{len(cls._trace_cache)} trace(s) live:\n{stack}")
+                    msg = (
+                        f"TRACE-ALLOC-GUARD: ttnn.{name} allocating while "
+                        f"{len(cls._trace_cache)} trace(s) live:\n{stack}"
+                    )
                     if mode == "raise":
                         raise RuntimeError(msg)
                     logger.warning(msg)
                 return orig(*args, **kwargs)
+
             return wrapped
 
         installed = []

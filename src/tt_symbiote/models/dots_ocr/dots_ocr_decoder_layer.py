@@ -470,7 +470,10 @@ class TTNNDotsOCRLayerStack(TTNNLayerStack):
             for d in cp.shape:
                 total_elems *= d
             cp = ttnn.reshape(cp, (total_elems,))
-        if getattr(self, "_per_stream_positions", False) and getattr(self, "_shared_decode_cur_pos_dp", None) is not None:
+        if (
+            getattr(self, "_per_stream_positions", False)
+            and getattr(self, "_shared_decode_cur_pos_dp", None) is not None
+        ):
             # Per-DP-stream: keep every row (one position per device); do NOT
             # collapse to element 0. ``cp`` is the DP-sharded [batch] position
             # vector, so each device's own scalar is copied into the stable
@@ -497,7 +500,10 @@ class TTNNDotsOCRLayerStack(TTNNLayerStack):
                 total *= d
             cp = ttnn.reshape(cp, (total,))
 
-        if getattr(self, "_per_stream_positions", False) and getattr(self, "_shared_decode_cur_pos_dp", None) is not None:
+        if (
+            getattr(self, "_per_stream_positions", False)
+            and getattr(self, "_shared_decode_cur_pos_dp", None) is not None
+        ):
             # Per-DP-stream: keep all per-device positions (no [0:1] collapse).
             ttnn.copy(cp, self._shared_decode_cur_pos_dp)
             return

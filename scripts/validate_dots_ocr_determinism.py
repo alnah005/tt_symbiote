@@ -26,11 +26,9 @@ from pathlib import Path
 
 import requests
 
-DEFAULT_PROMPT = (
-    "Extract all the text content from this image, preserving the reading order."
-)
+DEFAULT_PROMPT = "Extract all the text content from this image, preserving the reading order."
 GARBAGE_PATTERNS = [
-    re.compile(r"!!+"),          # the observed "!!" corruption
+    re.compile(r"!!+"),  # the observed "!!" corruption
     re.compile(r"!ororv!"),
     re.compile(r"(?:!\s*){6,}"),  # long runs of bangs
 ]
@@ -53,13 +51,15 @@ def detect_garbage(text: str):
 def ocr_one(base_url, api_key, model, prompt, max_tokens, path, timeout):
     payload = {
         "model": model,
-        "messages": [{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": to_data_uri(path)}},
-            ],
-        }],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": to_data_uri(path)}},
+                ],
+            }
+        ],
         "temperature": 0,
         "max_tokens": max_tokens,
         "stream": False,
@@ -70,7 +70,9 @@ def ocr_one(base_url, api_key, model, prompt, max_tokens, path, timeout):
     t0 = time.perf_counter()
     resp = requests.post(
         f"{base_url.rstrip('/')}/chat/completions",
-        json=payload, headers=headers, timeout=timeout,
+        json=payload,
+        headers=headers,
+        timeout=timeout,
     )
     elapsed = time.perf_counter() - t0
     resp.raise_for_status()
@@ -133,8 +135,7 @@ def main():
     ap.add_argument("--prompt", default=DEFAULT_PROMPT)
     ap.add_argument("--mode", choices=["light", "full", "recompaction"], default="light")
     ap.add_argument("--out", default="/home/aroberge/results/validate_run")
-    ap.add_argument("--golden-dir", default=None,
-                    help="dir with pageN.txt goldens to byte-compare against")
+    ap.add_argument("--golden-dir", default=None, help="dir with pageN.txt goldens to byte-compare against")
     ap.add_argument("--log", default=None, help="server log to grep for allocator.cpp:105")
     ap.add_argument("--label", default="run")
     args = ap.parse_args()
@@ -168,12 +169,12 @@ def main():
             def _one(job):
                 jid, path = job
                 try:
-                    r = ocr_one(args.base_url, args.api_key, args.model,
-                                args.prompt, mt[jid], path, args.timeout)
+                    r = ocr_one(args.base_url, args.api_key, args.model, args.prompt, mt[jid], path, args.timeout)
                     r["ok"] = True
                 except Exception as e:  # noqa: BLE001
                     r = {"ok": False, "error": str(e)}
                 out_map[jid] = r
+
             with ThreadPoolExecutor(max_workers=max(args.concurrency, len(jobs))) as pool:
                 futs = [pool.submit(_one, j) for j in jobs]
                 for f in as_completed(futs):
@@ -181,21 +182,33 @@ def main():
             batch = out_map
         else:
             jobs = [(p, page_path[p]) for p in pages]
-            batch = run_batch(jobs, args.base_url, args.api_key, args.model,
-                              args.prompt, args.max_tokens, args.timeout,
-                              args.concurrency)
+            batch = run_batch(
+                jobs,
+                args.base_url,
+                args.api_key,
+                args.model,
+                args.prompt,
+                args.max_tokens,
+                args.timeout,
+                args.concurrency,
+            )
         for p in pages:
             r = batch.get(p, {"ok": False, "error": "missing"})
             txt = r.get("text", "") if r.get("ok") else ""
             per_page_text[p].append(txt)
             all_results.append({"page": p, "repeat": rep, **r})
-        print(f"[{args.label}] repeat {rep+1}/{args.repeats} done "
-              f"(conc={args.concurrency}, pages={pages})")
+        print(f"[{args.label}] repeat {rep+1}/{args.repeats} done " f"(conc={args.concurrency}, pages={pages})")
 
     # Analysis
-    report = {"label": args.label, "mode": args.mode, "pages": pages,
-              "repeats": args.repeats, "concurrency": args.concurrency,
-              "max_tokens": args.max_tokens, "per_page": {}}
+    report = {
+        "label": args.label,
+        "mode": args.mode,
+        "pages": pages,
+        "repeats": args.repeats,
+        "concurrency": args.concurrency,
+        "max_tokens": args.max_tokens,
+        "per_page": {},
+    }
     overall_ok = True
     for p in pages:
         texts = per_page_text[p]
@@ -228,20 +241,23 @@ def main():
         report["per_page"][str(p)] = rp
         if not determ or garbage or empties:
             overall_ok = False
-        print(f"  page{p}: determ={determ} uniq={len(set(texts))} "
-              f"garbage={'YES' if garbage else 'no'} empty={empties} "
-              f"lens={rp['lengths']} golden={golden_match}")
+        print(
+            f"  page{p}: determ={determ} uniq={len(set(texts))} "
+            f"garbage={'YES' if garbage else 'no'} empty={empties} "
+            f"lens={rp['lengths']} golden={golden_match}"
+        )
 
     if args.log:
         log_counts = grep_log(args.log, ["allocator.cpp:105", "active trace"])
         report["log_counts"] = log_counts
-        print(f"  LOG: allocator.cpp:105={log_counts.get('allocator.cpp:105')} "
-              f"active-trace={log_counts.get('active trace')}")
+        print(
+            f"  LOG: allocator.cpp:105={log_counts.get('allocator.cpp:105')} "
+            f"active-trace={log_counts.get('active trace')}"
+        )
 
     report["overall_determinism_garbage_ok"] = overall_ok
     (out / f"{args.label}_report.json").write_text(json.dumps(report, indent=2))
-    json.dump({"meta": report, "results": all_results},
-              open(out / f"{args.label}_full.json", "w"), indent=2)
+    json.dump({"meta": report, "results": all_results}, open(out / f"{args.label}_full.json", "w"), indent=2)
     print(f"\nReport: {out / (args.label + '_report.json')}")
     print(f"OVERALL determinism+garbage OK: {overall_ok}")
     sys.exit(0 if overall_ok else 1)

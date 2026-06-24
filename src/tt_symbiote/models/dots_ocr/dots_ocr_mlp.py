@@ -5,6 +5,7 @@ import torch
 import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
+from tt_symbiote.core.arch import is_blackhole
 from tt_symbiote.core.module import SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS, StatelessTTNNModule, run_on_devices
 from tt_symbiote.models.dots_ocr._linear import (
     TTNNLinearLLamaIColShardedWAllReducedFusedGateUp,
@@ -12,7 +13,9 @@ from tt_symbiote.models.dots_ocr._linear import (
     _ccl_num_links,
     _decode_down_proj_dram_sharded_program_config,
     _decode_down_proj_input_memory_config,
+    _decode_down_proj_mcast1d_program_config,
     _decode_gate_up_dram_sharded_program_config,
+    _decode_gate_up_mc1d_program_config,
     _decoder_compute_kernel_config,
     _dp_matmul_program_config,
     _dram_sharded_mem_config_2d,
@@ -101,6 +104,29 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
         # Input must be L1 width-sharded 16c 8x2 (matches the sharded RMSNorm
         # output of post_attention_layernorm — no reshard needed). Output lands
         # L1 width-sharded on the same 16c 8x2 grid, BFP8.
+        # Decode fast path: interleaved-I/O mcast1d (110-core) instead of the 16c
+        # DRAM-sharded matmul. The interleaved output lets the MLP skip the
+        # post-gate_up sharded->interleaved reshard; removing the DRAM-sharded
+        # decode reshards is the dominant DP=4 decode win (~3.5x net e2e, since
+        # those reshards carry large host/trace-replay overhead). bf8 + HiFi2/LoFi
+        # numerics match the DRAM-sharded path to within run-to-run noise
+        # (logits PCC >= 0.99 vs the prior path). Blackhole-only: the 110-core grid
+        # is tuned for P150x4; T3K/Wormhole keeps the DRAM-sharded decode path.
+        if not needs_ccl and is_blackhole():
+            mc1d_pc = _decode_gate_up_mc1d_program_config(input_shape, self.tt_weight.shape)
+            if mc1d_pc is not None:
+                x = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
+                tt_output = ttnn.linear(
+                    x,
+                    self.tt_weight,
+                    bias=self.tt_bias,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=self._gate_up_decode_compute_kernel_config,
+                    program_config=mc1d_pc,
+                )
+                return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
+
         dram_shard_cfg = getattr(self, "_gate_up_dram_input_shard_cfg", None)
         dram_pc = (
             _decode_gate_up_dram_sharded_program_config(input_shape, self.tt_weight.shape)
@@ -238,6 +264,27 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
         input_tensor = ttnn.reshape(input_tensor, input_shape)
         needs_ccl = _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device)
         fused_bias = None if needs_ccl else self.tt_bias
+
+        # Decode fast path: interleaved-I/O mcast1d (8x3=24-core) instead of the 8c
+        # DRAM-sharded matmul. Consumes the L1-interleaved silu_mul output directly
+        # (the MLP no longer I2S-reshards it to the 8c sharded layout). ~46.3us
+        # isolated vs ~56.6us DRAM-sharded, and dropping the reshard is the bigger
+        # end-to-end win. Numerics match the DRAM-sharded path to within noise.
+        # Blackhole-only (tuned for P150x4); T3K/Wormhole keeps the DRAM-sharded path.
+        if not needs_ccl and is_blackhole():
+            mc1d_pc = _decode_down_proj_mcast1d_program_config(input_shape, self.tt_weight.shape)
+            if mc1d_pc is not None:
+                x = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
+                tt_output = ttnn.linear(
+                    x,
+                    self.tt_weight,
+                    bias=fused_bias,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=self.compute_kernel_config,
+                    program_config=mc1d_pc,
+                )
+                return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
 
         # Decode fast path: DRAM-sharded 8c (8x1 grid) matmul with
         # ``DRAM_WIDTH_SHARDED`` weight + L1 width-sharded I/O (44us
@@ -394,7 +441,16 @@ class TTNNDotsOCRMLP(StatelessTTNNModule):
         # the "preshard gate+up" variant needed) and lets down_proj engage
         # its faster DRAM-sharded 8c kernel (~44us, vs the mcast1d 8x3
         # interleaved-I/O variant's ~52us).
-        down_dram_shard_cfg = getattr(self.down_proj, "_down_proj_dram_input_shard_cfg", None) if is_decode else None
+        # On Blackhole, down_proj decode runs the interleaved-I/O mcast1d kernel and
+        # consumes the L1-interleaved silu_mul output directly, so we skip the pre-down
+        # I2S reshard into the 8c DRAM-sharded layout. T3K/Wormhole keeps the original
+        # DRAM-sharded down path (and its I2S).
+        if is_decode and is_blackhole():
+            down_dram_shard_cfg = None
+        elif is_decode:
+            down_dram_shard_cfg = getattr(self.down_proj, "_down_proj_dram_input_shard_cfg", None)
+        else:
+            down_dram_shard_cfg = None
 
         # ``fast_and_approximate_mode=True`` routes the fused SILU through
         # the polynomial exp/sigmoid path. SILU dominates this op (the

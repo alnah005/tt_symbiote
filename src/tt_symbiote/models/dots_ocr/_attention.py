@@ -225,9 +225,7 @@ class TTNNPagedAttentionKVCache(Cache):
         if not self._is_on_device:
             raise RuntimeError("KV cache not on device. Call to_device(device).")
         if page_table.dim() != 2:
-            raise ValueError(
-                f"page_table must be 2D [batch, blocks_per_sequence], got shape {tuple(page_table.shape)}"
-            )
+            raise ValueError(f"page_table must be 2D [batch, blocks_per_sequence], got shape {tuple(page_table.shape)}")
         bs = self.config.batch_size
         bps = self.config.blocks_per_sequence
         if int(page_table.shape[0]) != bs:
@@ -236,9 +234,7 @@ class TTNNPagedAttentionKVCache(Cache):
                 "(one row per DP stream is required)"
             )
         if int(page_table.shape[1]) > bps:
-            raise ValueError(
-                f"page_table has {int(page_table.shape[1])} blocks/seq > cache capacity {bps}"
-            )
+            raise ValueError(f"page_table has {int(page_table.shape[1])} blocks/seq > cache capacity {bps}")
 
         # Build a full-width [bs, bps] host table so the in-place device copy is
         # shape-stable (the preallocated _tt_page_table is [bs, bps]). Keep the

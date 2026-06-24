@@ -20,9 +20,11 @@ import pytest
 def traced_run(monkeypatch):
     """Import TracedRun with ttnn.release_trace stubbed so no hardware is touched."""
     import ttnn
+
     released = []
     monkeypatch.setattr(ttnn, "release_trace", lambda dev, tid: released.append(tid), raising=False)
     from tt_symbiote.core.run_config import TracedRun
+
     # snapshot + reset class state
     orig_cache = TracedRun._trace_cache
     orig_warm = TracedRun._warmup_keys

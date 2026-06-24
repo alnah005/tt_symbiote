@@ -292,9 +292,7 @@ class TTNNDotsOCRPrefillGraph(StatefulTTNNModule):
             n_vis_list = [int(x) for x in n_vision]
             if len(n_vis_list) == 1:
                 n_vis_list = n_vis_list * B
-            assert len(n_vis_list) == B, (
-                f"per-row n_vision length {len(n_vis_list)} != batch {B}"
-            )
+            assert len(n_vis_list) == B, f"per-row n_vision length {len(n_vis_list)} != batch {B}"
         else:
             n_vis_list = [int(n_vision)] * B
         cache_key = (
@@ -485,11 +483,7 @@ class TTNNDotsOCRPrefillGraph(StatefulTTNNModule):
         the decoder. Kept byte-equivalent to the inline logic in ``forward``.
         """
         h0 = hidden_states
-        if (
-            self._p_embedding is not None
-            and isinstance(h0, ttnn.Tensor)
-            and h0.dtype in (ttnn.uint32, ttnn.int32)
-        ):
+        if self._p_embedding is not None and isinstance(h0, ttnn.Tensor) and h0.dtype in (ttnn.uint32, ttnn.int32):
             text_e = self._p_embedding.forward(h0)
         else:
             text_e = h0
@@ -1443,9 +1437,7 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         """
         bs = int(self.config.batch_size)
         if len(positions) != bs:
-            raise ValueError(
-                f"set_decode_positions expects {bs} positions (one per DP stream), got {len(positions)}"
-            )
+            raise ValueError(f"set_decode_positions expects {bs} positions (one per DP stream), got {len(positions)}")
         clamped = [0 if int(p) < 0 else int(p) for p in positions]
         self._external_decode_positions = clamped
         # Tell the decoder stack to stop collapsing the per-stream position
@@ -1482,10 +1474,7 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         """
         if self._decode_token_buffer is not None and self._decode_cache_position is not None:
             bs = int(self.config.batch_size)
-            prev_full = (
-                [int(prev_token_id)] if isinstance(prev_token_id, int)
-                else [int(x) for x in prev_token_id]
-            )
+            prev_full = [int(prev_token_id)] if isinstance(prev_token_id, int) else [int(x) for x in prev_token_id]
             prev_full = prev_full + [0] * (bs - len(prev_full))
             if self._external_decode_positions is not None:
                 pos_full = [int(p) for p in self._external_decode_positions]
@@ -1808,9 +1797,7 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         pv = pixel_values if torch.is_tensor(pixel_values) else torch.as_tensor(pixel_values)
         total = int(pv.shape[0])
         if sum(counts) != total:
-            raise ValueError(
-                f"multi-grid vision: pixel_values rows {total} != sum(grid patches) {sum(counts)}"
-            )
+            raise ValueError(f"multi-grid vision: pixel_values rows {total} != sum(grid patches) {sum(counts)}")
         num_devices = int(self.device.get_num_devices()) if hasattr(self.device, "get_num_devices") else 1
         H = int(self.config.hidden_size)
 
@@ -1899,8 +1886,7 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         dual = self._mesh_dp_dual_stream()
         if dual and int(input_ids.shape[0]) != int(self.config.batch_size):
             raise ValueError(
-                f"DP multi-grid prefill expects input_ids batch {self.config.batch_size}, "
-                f"got {input_ids.shape[0]}"
+                f"DP multi-grid prefill expects input_ids batch {self.config.batch_size}, " f"got {input_ids.shape[0]}"
             )
         seq_len = int(input_ids.shape[-1])
         num_devices = int(self.device.get_num_devices()) if hasattr(self.device, "get_num_devices") else 1
@@ -1933,9 +1919,7 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
             )
 
             vision_tt, n_vis_list = self._assemble_multigrid_vision(pixel_values, image_grid_thw)
-            tt_idx, tt_mask = graph_prefill.get_or_build_scatter_tensors(
-                input_ids, n_vis_list, id_mapper, num_devices
-            )
+            tt_idx, tt_mask = graph_prefill.get_or_build_scatter_tensors(input_ids, n_vis_list, id_mapper, num_devices)
 
             # EAGER scatter-fuse outside the trace: device b fuses its own image's
             # vision into its text stream. The fused [B, S, H] hidden then feeds the
@@ -1961,9 +1945,7 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         # graph skips its vision trunk and runs embed-passthrough + decoder).
         out = graph_prefill(fused, tt_cache_position, past_key_value=self.paged_cache)
 
-        logits_torch = ttnn.to_torch(
-            out, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0)
-        )
+        logits_torch = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
         ttnn.deallocate(tt_cache_position)
         return logits_torch.reshape(-1, int(logits_torch.shape[-1]))
 
@@ -1989,6 +1971,7 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         # future config flip that puts decode on a separate thread (would race the trace
         # buffers) instead of silently corrupting.
         import threading as _threading
+
         tid = _threading.get_ident()
         if self._decode_driver_tid is None:
             self._decode_driver_tid = tid
@@ -2012,11 +1995,8 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=mapper,
         )
-        assert (
-            tuple(tok_host_tt.shape) == tuple(self._decode_token_buffer.shape)
-        ), (
-            f"tok host shape {tuple(tok_host_tt.shape)} != decode buffer "
-            f"{tuple(self._decode_token_buffer.shape)}"
+        assert tuple(tok_host_tt.shape) == tuple(self._decode_token_buffer.shape), (
+            f"tok host shape {tuple(tok_host_tt.shape)} != decode buffer " f"{tuple(self._decode_token_buffer.shape)}"
         )
         # In-place H2D into the stable buffer (no device allocation); lock is a no-op
         # under the single-thread model; guards against a concurrent replay if that ever changes.
@@ -2031,9 +2011,7 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=mapper,
         )
-        assert (
-            tuple(pos_host_tt.shape) == tuple(self._decode_cache_position.shape)
-        ), (
+        assert tuple(pos_host_tt.shape) == tuple(self._decode_cache_position.shape), (
             f"pos host shape {tuple(pos_host_tt.shape)} != decode position buffer "
             f"{tuple(self._decode_cache_position.shape)}"
         )
@@ -2163,9 +2141,7 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
                 decode_input = self._dp_repack_batch_sharded_hidden(decode_input)
 
         with _profile_stage(self.device, "decode.graph_decode_tokens_sync"):
-            token_tt = self.graph_decode(
-                decode_input, self._decode_cache_position, past_key_value=self.paged_cache
-            )
+            token_tt = self.graph_decode(decode_input, self._decode_cache_position, past_key_value=self.paged_cache)
         with _profile_stage(self.device, "decode.token_readback"):
             token_torch = ttnn.to_torch(
                 token_tt,
@@ -2498,9 +2474,7 @@ class TTNNDotsOCRPipeline(StatelessTTNNModule):
         prompt_len = int(input_ids.shape[-1])
 
         def _one_pass(decode_steps: int, preserve_decode_buffers: bool = False) -> None:
-            logits = self.forward_logits_prefill(
-                input_ids, pixel_values=pixel_values, image_grid_thw=image_grid_thw
-            )
+            logits = self.forward_logits_prefill(input_ids, pixel_values=pixel_values, image_grid_thw=image_grid_thw)
             n_rows = int(logits.shape[0])
             for step in range(decode_steps):
                 prev = [int(logits[r].argmax().item()) for r in range(n_rows)]

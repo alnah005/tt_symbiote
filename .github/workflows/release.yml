@@ -60,7 +60,7 @@ jobs:
       - name: install built wheel
         # ttnn is NOT a dependency of the wheel (it is source-build-only), so
         # this install pulls only the real, ttnn-free dependency graph that a
-        # PyPI user gets — and crucially can never overwrite a source-built ttnn.
+        # PyPI user gets — and can never overwrite a source-built ttnn.
         run: python -m pip install dist/*.whl
       - name: import tt_symbiote (ttnn pre-stubbed; CI has no sfpi)
         run: |

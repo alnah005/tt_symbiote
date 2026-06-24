@@ -61,9 +61,7 @@ def test_forward_logits_matches_token_path(mesh_device):
     """argmax(forward_logits_*) reproduces the native greedy token path."""
     torch.set_grad_enabled(False)
     batch = pipeline_batch_size()
-    pipeline = TTNNDotsOCRPipeline.from_hf_model(
-        model_path=DOTS_OCR_LOCAL_PATH, device=mesh_device, batch_size=batch
-    )
+    pipeline = TTNNDotsOCRPipeline.from_hf_model(model_path=DOTS_OCR_LOCAL_PATH, device=mesh_device, batch_size=batch)
     # The S2 logits graphs must have been built by the factory.
     assert pipeline.graph_prefill_logits is not None
     assert pipeline.graph_decode_logits is not None
@@ -172,9 +170,7 @@ def test_forward_logits_distinct_streams(mesh_device):
         pytest.skip("distinct-stream continuous batching requires a DP mesh (batch_size == num_devices > 1)")
 
     torch.set_grad_enabled(False)
-    pipeline = TTNNDotsOCRPipeline.from_hf_model(
-        model_path=DOTS_OCR_LOCAL_PATH, device=mesh_device, batch_size=batch
-    )
+    pipeline = TTNNDotsOCRPipeline.from_hf_model(model_path=DOTS_OCR_LOCAL_PATH, device=mesh_device, batch_size=batch)
     tok = AutoTokenizer.from_pretrained(DOTS_OCR_LOCAL_PATH, trust_remote_code=True)
 
     distinct_ids, prompt_len = _stack_distinct_prompts(tok, batch)
@@ -256,9 +252,7 @@ def test_chunked_prefill_matches_single_shot(mesh_device):
     """
     torch.set_grad_enabled(False)
     batch = pipeline_batch_size()
-    pipeline = TTNNDotsOCRPipeline.from_hf_model(
-        model_path=DOTS_OCR_LOCAL_PATH, device=mesh_device, batch_size=batch
-    )
+    pipeline = TTNNDotsOCRPipeline.from_hf_model(model_path=DOTS_OCR_LOCAL_PATH, device=mesh_device, batch_size=batch)
     assert pipeline.graph_prefill_logits is not None
 
     tok = AutoTokenizer.from_pretrained(DOTS_OCR_LOCAL_PATH, trust_remote_code=True)
@@ -295,9 +289,7 @@ def test_chunked_prefill_matches_single_shot(mesh_device):
     # chunked path uses the paged chunked-SDPA kernel while single-shot uses the
     # in-memory full-causal SDPA, so accumulation order differs over the
     # 152K-wide logits. Greedy argmax matching on every stream bounds the impact.
-    cos = torch.nn.functional.cosine_similarity(
-        single.float().flatten(), chunked.float().flatten(), dim=0
-    ).item()
+    cos = torch.nn.functional.cosine_similarity(single.float().flatten(), chunked.float().flatten(), dim=0).item()
     print(f"[chunked-vs-single logits cosine] {cos:.5f}")
     assert cos > 0.98, f"chunked prefill logits cosine too low: {cos}"
 
@@ -316,8 +308,7 @@ def test_chunked_prefill_matches_single_shot(mesh_device):
         f"single={[single_tok[i] for i in mism512]} chunk512={[chunk512_tok[i] for i in mism512]}"
     )
     assert chunk512_tok == chunk_tok, (
-        "chunked prefill is not deterministic across chunk counts: "
-        f"chunk256={chunk_tok} chunk512={chunk512_tok}"
+        "chunked prefill is not deterministic across chunk counts: " f"chunk256={chunk_tok} chunk512={chunk512_tok}"
     )
     pipeline.release()
 
@@ -336,9 +327,7 @@ def test_prefix_cache_suffix_matches_full_prefill(mesh_device):
     """
     torch.set_grad_enabled(False)
     batch = pipeline_batch_size()
-    pipeline = TTNNDotsOCRPipeline.from_hf_model(
-        model_path=DOTS_OCR_LOCAL_PATH, device=mesh_device, batch_size=batch
-    )
+    pipeline = TTNNDotsOCRPipeline.from_hf_model(model_path=DOTS_OCR_LOCAL_PATH, device=mesh_device, batch_size=batch)
     assert pipeline.graph_prefill_logits is not None
 
     tok = AutoTokenizer.from_pretrained(DOTS_OCR_LOCAL_PATH, trust_remote_code=True)
@@ -356,9 +345,7 @@ def test_prefix_cache_suffix_matches_full_prefill(mesh_device):
     full_tok = [int(full[i].argmax().item()) for i in range(batch)]
 
     # --- Candidate: reuse the resident prefix [0, prefix_len), compute [P, S) -
-    suffix = pipeline.forward_logits_prefill(
-        ids, chunk_size=256, prefix_len=prefix_len
-    )
+    suffix = pipeline.forward_logits_prefill(ids, chunk_size=256, prefix_len=prefix_len)
     ttnn.synchronize_device(mesh_device)
     suffix_tok = [int(suffix[i].argmax().item()) for i in range(batch)]
     print(f"\n[full-prefill ] {full_tok}\n[suffix-only  ] {suffix_tok}\n")
@@ -369,9 +356,7 @@ def test_prefix_cache_suffix_matches_full_prefill(mesh_device):
         f"{mism}: full={[full_tok[i] for i in mism]} "
         f"suffix={[suffix_tok[i] for i in mism]}"
     )
-    cos = torch.nn.functional.cosine_similarity(
-        full.float().flatten(), suffix.float().flatten(), dim=0
-    ).item()
+    cos = torch.nn.functional.cosine_similarity(full.float().flatten(), suffix.float().flatten(), dim=0).item()
     print(f"[suffix-vs-full logits cosine] {cos:.5f}")
     assert cos > 0.98, f"prefix-cache suffix logits cosine too low: {cos}"
     pipeline.release()
@@ -424,7 +409,9 @@ def test_multigrid_vision_per_stream_matches_single(mesh_device):
         pytest.skip("processor collapsed both images to one grid; cannot test multi-grid")
 
     pipeline = TTNNDotsOCRPipeline.from_hf_model(
-        model_path=DOTS_OCR_LOCAL_PATH, device=mesh_device, batch_size=batch,
+        model_path=DOTS_OCR_LOCAL_PATH,
+        device=mesh_device,
+        batch_size=batch,
         batched_vision=True,
     )
     assert pipeline.graph_prefill_logits is not None
@@ -442,9 +429,7 @@ def test_multigrid_vision_per_stream_matches_single(mesh_device):
     def _ref(pv_one, g_one):
         pv_all = torch.cat([pv_one] * batch, dim=0)
         g_all = g_one.repeat(batch, 1)
-        out = pipeline.forward_logits_prefill(
-            ids, pixel_values=pv_all, image_grid_thw=g_all
-        )
+        out = pipeline.forward_logits_prefill(ids, pixel_values=pv_all, image_grid_thw=g_all)
         ttnn.synchronize_device(mesh_device)
         return out
 

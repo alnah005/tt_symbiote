@@ -493,6 +493,32 @@ def _decode_down_proj_mcast1d_program_config(input_shape, weight_shape):
     )
 
 
+def _decode_gate_up_mc1d_program_config(input_shape, weight_shape):
+    """Gate-up decode mcast1d program config: 32x1536x17920 @ 11x10 grid (110 cores).
+
+    Op-sweep winner on Blackhole P150x4: ~81.6us isolated vs ~102us for the 16c
+    DRAM-sharded path. More importantly the interleaved L1 I/O lets the MLP drop
+    the post-gate_up sharded->interleaved reshard; the DRAM-sharded decode reshards
+    carry large host/trace-replay overhead, so removing them is the dominant DP=4
+    decode win end to end (~3.5x net). Decode shapes only (M<=1 tile); consumes
+    ``self.tt_weight`` (DRAM_INTERLEAVED)."""
+    if int(input_shape[-2]) > ttnn.TILE_SIZE:
+        return None
+    if int(weight_shape[-1]) != 17920 or int(weight_shape[-2]) != 1536:
+        return None
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(11, 10),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=3,
+        per_core_M=1,
+        per_core_N=6,
+        mcast_in0=True,
+        fuse_batch=False,
+        fused_activation=None,
+    )
+
+
 def _linear_mesh_num_devices(device) -> int:
     """Rank count on the active mesh. Single-device meshes cannot use fabric CCLs."""
     if device is None or not hasattr(device, "get_num_devices"):

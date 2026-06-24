@@ -155,14 +155,14 @@ def ensure_ttnn_available(hf_class_name: Optional[str] = None) -> None:
         except Exception:
             commit = ""
     detail = (
-        f" {hf_class_name} is verified against tt-metal commit {commit[:12]}; build ttnn "
-        f"from that commit."
+        f" {hf_class_name} is verified against tt-metal commit {commit[:12]}; build ttnn " f"from that commit."
         if commit
         else ""
     )
     raise ImportError(
         "tt_symbiote requires `ttnn`, which is provided by a tt-metal SOURCE BUILD "
         "(not a PyPI wheel) and is not installed. Build tt-metal at the model's pinned "
-        "commit and point $TT_METAL_HOME at it so `ttnn` is importable." + detail
+        "commit and point $TT_METAL_HOME at it so `ttnn` is importable."
+        + detail
         + " See the Installation section of the README."
     )

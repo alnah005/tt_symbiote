@@ -81,9 +81,9 @@ def _make_page_table(bs: int, bps: int, shift: int = 0) -> torch.Tensor:
 def _readback_page_table(cache, mesh_device) -> torch.Tensor:
     nd = int(mesh_device.get_num_devices()) if hasattr(mesh_device, "get_num_devices") else 1
     if nd > 1:
-        return ttnn.to_torch(
-            cache._tt_page_table, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
-        ).to(torch.int32)
+        return ttnn.to_torch(cache._tt_page_table, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).to(
+            torch.int32
+        )
     return ttnn.to_torch(cache._tt_page_table).to(torch.int32)
 
 
@@ -312,10 +312,14 @@ def test_dots_ocr_per_stream_positions_no_collapse(mesh_device):
     assert materialized is decoder_stack._shared_decode_cur_pos_dp, "per-stream path must use the DP position buffer"
     ttnn.synchronize_device(mesh_device)
 
-    host_pos = ttnn.to_torch(
-        decoder_stack._shared_decode_cur_pos_dp,
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
-    ).to(torch.int32).reshape(-1)
+    host_pos = (
+        ttnn.to_torch(
+            decoder_stack._shared_decode_cur_pos_dp,
+            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+        )
+        .to(torch.int32)
+        .reshape(-1)
+    )
     assert torch.equal(host_pos[:bs], positions.reshape(-1)), (
         f"per-stream positions were collapsed/lost: got {host_pos[:bs].tolist()}, "
         f"expected {positions.reshape(-1).tolist()}"
