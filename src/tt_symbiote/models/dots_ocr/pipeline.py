@@ -707,9 +707,14 @@ def _create_paged_kv_cache(model_config, device, batch_size: int = 1):
         "head_dim",
         model_config.hidden_size // model_config.num_attention_heads,
     )
-    # Keep at least 64 pages per DP stream. The vision prompt is ~2.8K tokens;
-    # a fixed 256 global block pool gives only 2K tokens/stream at batch 8.
-    blocks_per_sequence = 64
+    # Keep 128 pages per DP stream = 128*64 = 8192 tokens/stream. The vision
+    # prompt is ~2.8-3K tokens; 8192 covers the prompt plus a full-page OCR or
+    # layout-JSON output without truncation at 8-way concurrency (KV is cheap:
+    # GQA with 2 KV heads => ~1.8GB/device for the 8*128-block buffer). MUST be
+    # kept in sync with _dots_ocr_max_tokens_all_users in the tt-inference-server
+    # adapter (tt_symbiote_generators.py); a mismatch hands out out-of-range
+    # block IDs (KV corruption) or wastes the buffer.
+    blocks_per_sequence = 128
     config = PagedAttentionConfig(
         block_size=64,
         max_num_blocks=max(256, batch_size * blocks_per_sequence),
