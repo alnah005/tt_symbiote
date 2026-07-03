@@ -551,8 +551,22 @@ def run_on_devices(
                 raise RuntimeError(f"{self.__class__.__name__}: No device set. ")
             mesh_device = MeshShapeToDeviceArch.get(os.environ.get("MESH_DEVICE"))
             if mesh_device is None:
+                # MESH_DEVICE is unset or not an arch *name*. tt-metal/vLLM also
+                # accept MESH_DEVICE as a literal mesh-shape tuple (e.g. "(8, 1)"
+                # to open a T3K data-parallel mesh); that string is not a key in
+                # MeshShapeToDeviceArch. Fall back to introspecting the live mesh
+                # device, which disambiguates Wormhole/Blackhole via
+                # ttnn.get_arch_name() + device count.
+                try:
+                    from tt_symbiote.core.arch import determine_device_name
+
+                    mesh_device = MeshShapeToDeviceArch.get(determine_device_name(self.device))
+                except Exception:
+                    mesh_device = None
+            if mesh_device is None:
                 raise RuntimeError(
-                    f"{self.__class__.__name__}: Unable to determine device architecture from MESH_DEVICE environment variable."
+                    f"{self.__class__.__name__}: Unable to determine device architecture "
+                    "from MESH_DEVICE environment variable or the live mesh device."
                 )
             if mesh_device not in MeshShapeToDeviceArch.values():
                 raise RuntimeError(

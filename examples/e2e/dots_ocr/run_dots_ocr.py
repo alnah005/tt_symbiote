@@ -65,9 +65,9 @@ DEFAULT_PROMPT = "Extract the text from this image."
 MAX_PIXELS = 2_207_744
 
 # DP-only demo: `dp` independent OCR streams on a (dp, 1) data-parallel mesh.
-# The model's @run_on_devices guard accepts exactly T3K=(8,1) and P150x4=(4,1),
-# so dp 8 -> T3K (Wormhole), dp 4 -> P150x4 (Blackhole).
-_DP_ARCH = {4: "P150x4", 8: "T3K"}
+# The model's @run_on_devices guard accepts N300=(2,1), T3K=(8,1) and P150x4=(4,1),
+# so dp 2 -> N300 (Wormhole, 1 board), dp 8 -> T3K (Wormhole), dp 4 -> P150x4 (Blackhole).
+_DP_ARCH = {2: "N300", 4: "P150x4", 8: "T3K"}
 _IMAGE_EXTS = ("*.png", "*.jpg", "*.jpeg", "*.bmp", "*.webp", "*.tif", "*.tiff")
 
 
@@ -325,10 +325,10 @@ def main() -> int:
     ap.add_argument(
         "--dp",
         type=int,
-        choices=(4, 8),
+        choices=(2, 4, 8),
         default=8,
         help="data-parallel degree = number of images OCR'd concurrently. "
-        "8 -> T3K mesh (8,1); 4 -> P150x4 mesh (4,1). Default 8.",
+        "2 -> N300 mesh (2,1); 8 -> T3K mesh (8,1); 4 -> P150x4 mesh (4,1). Default 8.",
     )
     ap.add_argument("--prompt", default=DEFAULT_PROMPT)
     ap.add_argument("--max-new-tokens", type=int, default=512)

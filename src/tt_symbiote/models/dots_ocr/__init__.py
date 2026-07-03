@@ -3,9 +3,6 @@
 
 """tt_symbiote port of the dots.ocr model (text decoder + vision tower + pipeline).
 
-Vendored from ``models/experimental/tt_symbiote/`` in tt-metal at commit
-``c09f09c35a1a59a428f0e1b5cdaa8fe59fb1b195``.
-
 Layout:
   Foundational (leading underscore) -- shared sharded variants the dots.ocr
   layers depend on:
@@ -14,7 +11,7 @@ Layout:
     dots_ocr_attention, dots_ocr_mlp, dots_ocr_decoder_layer, dots_ocr_vision
   Orchestration:
     pipeline (TTNNDotsOCRPipeline + prefill/decode graphs + PipelineConfig +
-              _create_paged_kv_cache), kv_cache (thin re-export shim)
+              _create_paged_kv_cache)
 """
 
 # Single source of truth: tt_symbiote.models._runtime_pins.RUNTIME_PINS.
