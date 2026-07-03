@@ -99,12 +99,23 @@ def _make_generate_shim(model):
         run_ids = input_ids.expand(bs, -1).contiguous() if bs > 1 else input_ids
 
         pv = pixel_values.to(torch.bfloat16) if pixel_values is not None else None
+        run_grid = image_grid_thw
+        # DP batched vision shards one image per stream, so replicate the single
+        # prompt's image (patches + grid) across the streams to match run_ids.
+        if bs > 1 and pv is not None and image_grid_thw is not None:
+            grid = image_grid_thw if torch.is_tensor(image_grid_thw) else torch.as_tensor(image_grid_thw)
+            if grid.dim() == 1:
+                grid = grid.unsqueeze(0)
+            count0 = int(grid[0][0]) * int(grid[0][1]) * int(grid[0][2])
+            first_block = pv[:count0]
+            pv = torch.cat([first_block] * bs, dim=0).contiguous()
+            run_grid = torch.cat([grid[:1]] * bs, dim=0).contiguous()
 
-        pipeline.warmup(run_ids, pixel_values=pv, image_grid_thw=image_grid_thw)
+        pipeline.warmup(run_ids, pixel_values=pv, image_grid_thw=run_grid)
         generated = pipeline.generate(
             run_ids,
             pixel_values=pv,
-            image_grid_thw=image_grid_thw,
+            image_grid_thw=run_grid,
             max_new_tokens=max_new_tokens,
             stop_on_eos=stop_on_eos,
         )
@@ -140,10 +151,15 @@ class DotsOCRRecipe:
         # TTNN pipeline now, reusing the already-loaded HF weights (hf_model=model)
         # so we don't pay a second multi-GB load.
         batch_size = _pipeline_batch_size(device)
+        # DP serving (batch_size == num_devices) needs batched vision so each DP
+        # stream OCRs its own image (patches batch-sharded one image per device);
+        # single-stream (batch_size==1) keeps the single-image vision path.
+        batched_vision = batch_size > 1
         model._tt_pipeline = TTNNDotsOCRPipeline.from_hf_model(
             model_path=model._tt_dots_model_path,
             device=device,
             batch_size=batch_size,
+            batched_vision=batched_vision,
             hf_model=model,
         )
         model._tt_pipeline_batch = batch_size

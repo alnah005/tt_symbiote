@@ -5,8 +5,9 @@
 
 Design (scalable to 100+ models, mirroring how ``transformers`` scales):
 
-  PIN  (per-model, metadata)   -> ``RUNTIME_PINS[hf_class]["tt_metal_commit"]``
-  INSTALL (single, shared)     -> ``RELEASE_TTNN`` + ``CAPABILITY_EXTRAS``
+  PIN     (per-model, metadata)   -> ``RUNTIME_PINS[hf_class]["tt_metal_commit"]``
+  INSTALL (single, shared)        -> ``CAPABILITY_EXTRAS`` (ttnn is source-built,
+                                     not installed; ``RELEASE_TTNN`` is provenance)
 
 A Python process can import exactly ONE ``ttnn`` (a compiled extension with a
 global device singleton), so we CANNOT pip-install a different ttnn per model.
@@ -16,10 +17,13 @@ We therefore separate two concerns that are easy to conflate:
   is metadata -- it scales to 100+ entries, drives the runtime compatibility gate
   (``tt_symbiote.utils.runtime_compat``), and gives provenance. It is NEVER a pip
   dependency.
-* **Install (one per release):** ``RELEASE_TTNN`` is the single ttnn runtime the
-  release ships, declared once in ``pyproject.toml``'s base ``dependencies``.
-  Per-capability Python extras (``CAPABILITY_EXTRAS``) are shared across models,
-  exactly like ``transformers``' ``[vision]`` / ``[audio]`` extras.
+* **Install (one per release):** ttnn itself is NOT pip-installed -- it is a
+  compiled extension tied to a tt-metal commit and must be built from source at
+  the model's pinned commit (a PyPI ttnn wheel would silently overwrite that
+  build). ``RELEASE_TTNN`` therefore is NOT a pip dependency; it is kept only as
+  provenance for the runtime gate (the ttnn version this release was verified
+  against). The installable side is just the shared per-capability Python extras
+  (``CAPABILITY_EXTRAS``), à la ``transformers``' ``[vision]`` / ``[audio]``.
 
 The gate reconciles the two: a model whose ``tt_metal_commit`` matches the
 installed ttnn's commit runs correctly; one that differs is flagged (the
@@ -37,10 +41,12 @@ from __future__ import annotations
 # INSTALL side (single, shared across every model in the release)
 # --------------------------------------------------------------------------- #
 
-# The one ttnn runtime this release ships. Pinned once into pyproject.toml's base
-# `dependencies` by scripts/sync_ttnn_extras.py. Empty string => not yet chosen;
-# the package is source-build-only until an empirically-verified version is set
-# (see docs/development/ttnn_pinning.md, "Choosing RELEASE_TTNN").
+# Provenance only: the ttnn version this release was verified against. ttnn is
+# NEVER pip-installed (it must be source-built from each model's pinned tt-metal
+# commit; a PyPI wheel would overwrite that build), so this is NOT written into
+# pyproject.toml's `dependencies`. It exists so the runtime gate / docs can name
+# the verified runtime; pair it with a TTNN_VERSION_COMMITS entry below when the
+# tt-metal commit it was built from is known. Empty string => unset.
 RELEASE_TTNN: str = "==0.68.0"
 
 # Shared, per-capability Python dependency groups (à la transformers extras).
@@ -91,12 +97,15 @@ SERVING_TIERS: frozenset[str] = frozenset({"S0_GREEDY_ENGINE", "S1_LOGITS_UNPAGE
 #   "serving_tier": str      (optional) one of SERVING_TIERS; how the model is
 #                            driven under vLLM. Defaults to S1_LOGITS_UNPAGED.
 #
-# Adding a model is a single dict entry here (+ its recipe). See
-# docs/development/ttnn_pinning.md.
+# Adding a model is a single dict entry here (+ its recipe).
 RUNTIME_PINS: dict[str, dict] = {
     "DotsOCRForCausalLM": {
         "tt_metal_commit": "c09f09c35a1a59a428f0e1b5cdaa8fe59fb1b195",
         "extras": ["vision", "qwen-vl"],
+        # Default S0 (native / single-stream vLLM). For S2 continuous batching,
+        # set "serving_tier": "S2_PAGED" here AND the dots.ocr block in
+        # tt-inference-server workflows/model_specs/dev/vlm.yaml (max_concurrency,
+        # max-num-seqs, DOTS_OCR_PARALLELISM).
         "serving_tier": "S0_GREEDY_ENGINE",
     },
     # Ling-mini-2.0 — first S2 (paged, continuous-batching) model. Pins its OWN

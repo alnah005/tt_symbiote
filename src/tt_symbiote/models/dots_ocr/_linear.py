@@ -11,6 +11,7 @@ import ttnn
 from torch import nn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
+from tt_symbiote.core.arch import is_blackhole
 from tt_symbiote.core.module import (
     SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS,
     StatelessTTNNModule,
@@ -18,6 +19,20 @@ from tt_symbiote.core.module import (
     run_on_devices,
 )
 from tt_symbiote.core.run_config import trace_disabled, trace_enabled
+
+
+# Decoder precision (fixed default): bfloat8_b weights + HiFi2 math on the MLP (gate_up/down)
+# AND attention (QKV / o_proj / SDPA). Op-sweep finding: HiFi2 is the accuracy lever (LoFi caps
+# the deep stack at ~0.97; HiFi2 reaches 0.99) and the weight dtype barely matters above HiFi2,
+# so BFP8+HiFi2 holds full-28-layer decode PCC 0.9929 -- vs bf16+HiFi4 (0.9936) at ~half the
+# decode-weight DRAM and ~-40% matmul device time. (The prior BFP4 + LoFi scheme capped at ~0.92.)
+def _decoder_compute_kernel_config(math_approx_mode=False):
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=math_approx_mode,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
 
 
 def _tp_mesh_mapper(device, dim):
@@ -84,6 +99,32 @@ def _dp_prefill_matmul_program_config(device, input_shape, weight_shape):
 
     tile = 32
     k_tiles = math.ceil(k_dim / tile)
+
+    if is_blackhole():
+        n_tiles = math.ceil(n_dim / tile)
+        m_tiles = math.ceil(m_dim / tile)
+        grid_x = _largest_divisor_at_most(n_tiles, grid_x)
+        per_core_n = n_tiles // grid_x
+        per_core_m = math.ceil(m_tiles / grid_y)
+        if per_core_n > 24:
+            return None
+        if k_tiles % grid_y == 0:
+            in0_block_w = _largest_divisor_at_most(k_tiles // grid_y, 8)
+        else:
+            in0_block_w = 2 if k_tiles % 2 == 0 else 1
+        out_subblock_h = 1
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(grid_x, grid_y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=_out_subblock_w(per_core_n, out_subblock_h),
+            per_core_M=per_core_m,
+            per_core_N=per_core_n,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+
     per_core_m = math.ceil(m_dim / (tile * grid_y))
     per_core_n = math.ceil(n_dim / (tile * grid_x))
 
@@ -452,6 +493,32 @@ def _decode_down_proj_mcast1d_program_config(input_shape, weight_shape):
     )
 
 
+def _decode_gate_up_mc1d_program_config(input_shape, weight_shape):
+    """Gate-up decode mcast1d program config: 32x1536x17920 @ 11x10 grid (110 cores).
+
+    Op-sweep winner on Blackhole P150x4: ~81.6us isolated vs ~102us for the 16c
+    DRAM-sharded path. More importantly the interleaved L1 I/O lets the MLP drop
+    the post-gate_up sharded->interleaved reshard; the DRAM-sharded decode reshards
+    carry large host/trace-replay overhead, so removing them is the dominant DP=4
+    decode win end to end (~3.5x net). Decode shapes only (M<=1 tile); consumes
+    ``self.tt_weight`` (DRAM_INTERLEAVED)."""
+    if int(input_shape[-2]) > ttnn.TILE_SIZE:
+        return None
+    if int(weight_shape[-1]) != 17920 or int(weight_shape[-2]) != 1536:
+        return None
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(11, 10),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=3,
+        per_core_M=1,
+        per_core_N=6,
+        mcast_in0=True,
+        fuse_batch=False,
+        fused_activation=None,
+    )
+
+
 def _linear_mesh_num_devices(device) -> int:
     """Rank count on the active mesh. Single-device meshes cannot use fabric CCLs."""
     if device is None or not hasattr(device, "get_num_devices"):
@@ -739,24 +806,6 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
 
 
 @trace_disabled
-class TTNNLinearLLama(TTNNLinear):
-    """TTNN Linear layer optimized for LLaMA models using bfloat8."""
-
-    def preprocess_weights_impl(self):
-        """Preprocess linear weights with bfloat8 precision."""
-        self.tt_weight_host = preprocess_linear_weight(self.weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-        self.tt_bias_host = None
-        if self.bias is not None:
-            self.tt_bias_host = preprocess_linear_bias(self.bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-
-    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
-    @deallocate_weights_after
-    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-        """Forward pass with automatic weight deallocation."""
-        return super().forward(input_tensor)
-
-
-@trace_disabled
 class TTNNLinearLLamaIColShardedWRowSharded(TTNNLinearIColShardedWRowSharded):
     """TTNN Linear layer optimized for LLaMA models using bfloat8."""
 
@@ -1027,7 +1076,7 @@ class TTNNLinearLLamaIColShardedWAllReducedFusedGateUp(TTNNLinearLLamaIColSharde
         # overhead on cold start). Fusing in torch space removes the
         # on-device op outright.
         fused_weight_torch = torch.cat([self._gate_weight_torch, self._up_weight_torch], dim=0)
-        weight_dtype = getattr(self, "_weight_dtype", ttnn.bfloat4_b)
+        weight_dtype = getattr(self, "_weight_dtype", ttnn.bfloat8_b)
         fused_w_host = preprocess_linear_weight(
             fused_weight_torch,
             dtype=weight_dtype,
@@ -1074,12 +1123,8 @@ class TTNNLinearLLamaIColShardedWAllReducedFusedGateUp(TTNNLinearLLamaIColSharde
         self._gate_up_dram_bias = None
         # Decode compute_kernel_config matches the verified DRAM-sharded
         # benchmark (LoFi, 71us). Prefill stays on HiFi2 for BFP4 accuracy.
-        self._gate_up_decode_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
+        # Raised to HiFi4 (+fp32 acc under 'max') by the decoder precision knob.
+        self._gate_up_decode_compute_kernel_config = _decoder_compute_kernel_config()
         if use_dram_sharded:
             # gate / up are stored as [out, in] each; concat on axis=0 and
             # transpose to [in, 2*out] for the DRAM-sharded matmul layout.
@@ -1123,7 +1168,8 @@ class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
         return self
 
     def move_weights_to_device_impl(self):
-        weight_dtype = getattr(self, "_weight_dtype", ttnn.bfloat4_b)
+        # o_proj weight: bfloat8_b (decoder precision default; op-sweep: BFP8+HiFi2 holds 0.99).
+        weight_dtype = getattr(self, "_weight_dtype", ttnn.bfloat8_b)
         if isinstance(self.tt_weight_host, torch.Tensor):
             weight = self.tt_weight_host.T.contiguous()
             mesh_shape = list(self.device.shape) if hasattr(self.device, "shape") else [1, 1]
@@ -1155,12 +1201,7 @@ class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
         else:
             self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
         self._decode_input_shard_cfg = _decode_o_proj_input_memory_config(self.in_features)
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
+        self.compute_kernel_config = _decoder_compute_kernel_config()
 
     @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
@@ -1195,97 +1236,6 @@ class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
         )
         tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
         return tt_output
-
-
-@trace_disabled
-class TTNNLinearLLamaBFloat16(TTNNLinear):
-    """TTNN Linear layer optimized for LLaMA models using bfloat16."""
-
-    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
-    @deallocate_weights_after
-    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-        """Forward pass with automatic weight deallocation."""
-        return super().forward(input_tensor)
-
-
-class PytorchLinearActivation(nn.Module):
-    def __init__(self, dense, act_fn) -> None:
-        super().__init__()
-        self.dense = dense
-        self.intermediate_act_fn = act_fn
-
-    def forward(self, hidden_states):
-        hidden_states = self.dense(hidden_states)
-        hidden_states = self.intermediate_act_fn(hidden_states)
-
-        return hidden_states
-
-
-class TTNNLinearActivation(StatelessTTNNModule):
-    """Linear layer with activation using TTNN."""
-
-    @classmethod
-    def from_parameters(cls, weight, linear_class, ttnn_act_fn, nn_act_fn, bias=None):
-        new_linear = cls()
-        new_linear.dense = linear_class.from_parameters(weight=weight, bias=bias)
-        new_linear.activation = ttnn_act_fn
-        return new_linear
-
-    @classmethod
-    def from_torch(cls, linear: nn.Linear, linear_class, ttnn_act_fn, nn_act_fn):
-        new_linear = cls()
-        new_linear._fallback_torch_layer = PytorchLinearActivation(dense=linear, act_fn=nn_act_fn)
-        new_linear.dense = linear_class.from_torch(linear)
-        new_linear.activation = ttnn_act_fn
-        return new_linear
-
-    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
-    def forward(self, hidden_states):
-        hidden_states = self.dense(hidden_states)
-        hidden_states = self.activation(hidden_states)
-        return hidden_states
-
-
-class TTNNLinearGelu:
-    """Linear layer with GELU activation using TTNN."""
-
-    @classmethod
-    def from_parameters(cls, weight, bias=None, linear_class=TTNNLinear):
-        new_linear = TTNNLinearActivation.from_parameters(weight, linear_class, ttnn.gelu, nn.GELU(), bias)
-        return new_linear
-
-    @classmethod
-    def from_torch(cls, linear: nn.Linear, linear_class=TTNNLinear):
-        new_linear = TTNNLinearActivation.from_torch(linear, linear_class, ttnn.gelu, nn.GELU())
-        return new_linear
-
-
-class TTNNLinearSilu:
-    """SiLU activated Linear module with TTNN acceleration."""
-
-    @classmethod
-    def from_parameters(cls, weight, bias=None, linear_class=TTNNLinear):
-        new_linear = TTNNLinearActivation.from_parameters(weight, linear_class, ttnn.silu, nn.SiLU(), bias)
-        return new_linear
-
-    @classmethod
-    def from_torch(cls, linear: nn.Linear, linear_class=TTNNLinear):
-        new_linear = TTNNLinearActivation.from_torch(linear, linear_class, ttnn.silu, nn.SiLU())
-        return new_linear
-
-
-class TTNNViTIntermediate(TTNNLinearGelu):
-    """ViT Intermediate module with TTNN acceleration."""
-
-    @classmethod
-    def from_torch(cls, torch_vit_intermediate: "ViTIntermediate"):
-        assert (
-            torch_vit_intermediate.intermediate_act_fn.__class__.__name__ == "GELUActivation"
-        ), "Only GELU activation is supported."
-        new_intermediate = cls()
-        new_intermediate._fallback_torch_layer = torch_vit_intermediate
-        new_intermediate.dense = TTNNLinear.from_torch(torch_vit_intermediate.dense)
-        return new_intermediate
 
 
 # =============================================================================
@@ -1525,7 +1475,7 @@ class TTNNDotsOCRDRAMShardedLMHead(StatelessTTNNModule):
                 device=device,
                 mesh_mapper=weight_mapper,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat4_b,
+                dtype=ttnn.bfloat8_b,
                 memory_config=mem_cfg,
             )
             self.tt_weight_chunks.append(tt_chunk)
@@ -1578,10 +1528,14 @@ class TTNNDotsOCRDRAMShardedLMHead(StatelessTTNNModule):
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         )
 
-        # Compute kernel: LoFi + BFP4 weights + packer L1 acc + FP32 dest accum
-        # (bandwidth-bound LM head). Pipeline may override after weight load.
+        # Compute kernel: HiFi2 + bfloat8_b weights + packer L1 acc + FP32 dest accum
+        # (bandwidth-bound LM head). HiFi2 (not LoFi) is the accuracy lever for the
+        # final logits -- LoFi caps the deep stack at ~0.97 PCC, HiFi2 reaches ~0.99 --
+        # and on a bandwidth-bound op the extra math pass is hidden under the weight
+        # DRAM reads, so it costs little. The pipeline sets the same config after
+        # weight load; keep this default in sync for any direct (non-pipeline) use.
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -1655,7 +1609,12 @@ class TTNNDotsOCRDRAMShardedLMHead(StatelessTTNNModule):
                 program_config=pc,
                 compute_kernel_config=self.compute_kernel_config,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b,
+                # bf16 (not bfloat8_b) logits: the matmul accumulates in fp32, so
+                # packing the output to bf8 here would discard that precision and
+                # let near-tie vocab logits rank-flip in argmax. bf16 preserves it.
+                # Weights stay bf8, so weight DRAM bandwidth (the dominant cost of
+                # this bandwidth-bound head) is unchanged.
+                dtype=ttnn.bfloat16,
             )
             full = ttnn.sharded_to_interleaved(full, ttnn.DRAM_MEMORY_CONFIG)
         else:
@@ -1669,7 +1628,10 @@ class TTNNDotsOCRDRAMShardedLMHead(StatelessTTNNModule):
                     program_config=pc,
                     compute_kernel_config=self.compute_kernel_config,
                     memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                    dtype=ttnn.bfloat8_b,
+                    # bf16 (not bfloat8_b): preserve the fp32-accumulated logits so
+                    # near-tie vocab tokens don't rank-flip in argmax (see single-chunk
+                    # path above). Weights stay bf8 -> weight bandwidth unchanged.
+                    dtype=ttnn.bfloat16,
                 )
                 out_chunk = ttnn.sharded_to_interleaved(out_chunk, ttnn.DRAM_MEMORY_CONFIG)
                 chunk_outs.append(out_chunk)

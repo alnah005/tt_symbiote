@@ -48,15 +48,6 @@ def _take_local_dp_batch(hidden_states, device):
     )
 
 
-def _use_bfp8_decoder_weights(layer_idx) -> bool:
-    if layer_idx is None:
-        return False
-    layer_idx = int(layer_idx)
-    # Layers 0..6 stay BFP4 for decode speed; later layers are more sensitive
-    # for OCR spelling/table tokens.
-    return layer_idx >= 7
-
-
 class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
     def move_weights_to_device_impl(self):
         # Inherit the distributed-RMSNorm weight setup (weight_distributed +
@@ -178,7 +169,7 @@ class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
             tt_out = ttnn.reshape(tt_out, [tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]])
         return tt_out
 
-    @run_on_devices(DeviceArch.T3K, DeviceArch.P150x4)
+    @run_on_devices(DeviceArch.N300, DeviceArch.T3K, DeviceArch.P150x4)
     def forward(self, inp):
         original_shape = inp.shape
         # Sharded LN fast path: decode-shape (M=1) and single-device or pure DP
@@ -213,12 +204,11 @@ class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
 def _select_attention_class():
     """Pick the attention subclass by the active MESH_DEVICE arch at build time.
 
-    T3K uses TTNNDotsOCRAttentionT3K (resurrected 1c50f66 width-sharded
-    nlp_create_qkv_heads + standard rotary_embedding decode). Every other arch
-    (incl. P150x4) uses the dd67664 TTNNDotsOCRAttention. Active-arch-only.
+    T3K/N300/P150x4 use TTNNDotsOCRAttentionT3K (1c50f66 width-sharded
+    nlp_create_qkv_heads + standard rotary_embedding decode). Active-arch-only.
     """
     arch = MeshShapeToDeviceArch.get(os.environ.get("MESH_DEVICE"))
-    if arch is DeviceArch.T3K:
+    if arch in (DeviceArch.T3K, DeviceArch.N300, DeviceArch.P150x4):
         return TTNNDotsOCRAttentionT3K
     return TTNNDotsOCRAttention
 
@@ -256,8 +246,10 @@ class TTNNDotsOCRDecoderLayer(StatefulTTNNModule):
         )
         new_layer.self_attn = _select_attention_class().from_torch(torch_layer.self_attn)
         new_layer.mlp = TTNNDotsOCRMLP.from_torch(torch_layer.mlp)
-        if _use_bfp8_decoder_weights(getattr(new_layer.self_attn, "layer_idx", None)):
-            new_layer.mlp.fused_gate_up_proj.set_weight_dtype(ttnn.bfloat8_b)
+        # MLP weights bfloat8_b on every layer (decoder precision default; op-sweep: BFP8+HiFi2
+        # holds full-28L decode PCC 0.9929 at ~half DRAM / -40% matmul vs bf16+HiFi4). The matching
+        # HiFi2 math / attention precision live in _linear.py + dots_ocr_mlp.py.
+        new_layer.mlp.set_weight_dtype(ttnn.bfloat8_b)
         return new_layer
 
     def call(self, *args, **kwds):
@@ -276,9 +268,10 @@ class TTNNDotsOCRDecoderLayer(StatefulTTNNModule):
         past_key_value.update_seq_length(layer_idx=layer_idx, seq_len=seq_len)
 
     @run_on_devices(
+        DeviceArch.N300,
         DeviceArch.T3K,
         DeviceArch.P150x4,
-        mesh_shape={DeviceArch.T3K: (8, 1), DeviceArch.P150x4: (4, 1)},
+        mesh_shape={DeviceArch.N300: (2, 1), DeviceArch.T3K: (8, 1), DeviceArch.P150x4: (4, 1)},
     )
     def forward(
         self,
@@ -311,6 +304,9 @@ class TTNNDotsOCRDecoderLayer(StatefulTTNNModule):
             cache_position=kwargs.get("cache_position"),
             decode_cur_pos_tt=kwargs.get("decode_cur_pos_tt"),
             decode_cos_sin=kwargs.get("decode_cos_sin"),
+            # TS-7 chunked prefill (threaded through; None on the default path).
+            chunk_start_idx=kwargs.get("chunk_start_idx", 0),
+            chunk_page_table_tt=kwargs.get("chunk_page_table_tt"),
         )
 
         # Prefill block-sharded region (ops 14-16): the o_proj returns its
@@ -384,7 +380,47 @@ class TTNNDotsOCRLayerStack(TTNNLayerStack):
                     attn._decode_cur_pos = shared_buf
         self._shared_decode_cur_pos = shared_buf
 
-    @run_on_devices(DeviceArch.T3K, DeviceArch.P150x4)
+    def enable_per_stream_positions(self, batch_size: int, mapper) -> None:
+        """Activate per-DP-stream decode positions (Tier-S2 continuous batching).
+
+        Allocates a stable DP-sharded ``[batch]`` position buffer (one scalar
+        per mesh device) so each stream decodes at its own cache position.
+        ``_materialize_shared_cur_pos`` / ``pre_trace_execute`` then stop
+        collapsing the position vector to a single global scalar.
+
+        Single-device / non-DP (``mapper is None`` or ``batch_size <= 1``): there
+        is only one stream, so the default shared scalar is already correct and
+        this is a no-op.
+        """
+        if mapper is None or int(batch_size) <= 1:
+            self._per_stream_positions = False
+            return
+        self._per_stream_positions = True
+        if getattr(self, "_shared_decode_cur_pos_dp", None) is None:
+            # Build the host tensor 1-D [batch] so the DP batch-shard mapper
+            # (ShardTensor2dMesh dims=(0, None)) slices it into a [1] shard per
+            # device. That per-device [1] already matches the cur_pos shape the
+            # paged kernels and rotary consume, so NO reshape is needed -- a
+            # post-upload reshape to (batch,) would run per-shard (each shard is
+            # volume 1) and fail the volume check.
+            host = torch.zeros(int(batch_size), dtype=torch.int32)
+            self._shared_decode_cur_pos_dp = ttnn.from_torch(
+                host,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                mesh_mapper=mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+    def disable_per_stream_positions(self) -> None:
+        """Revert to the default single global replicated cache position.
+
+        The DP position buffer is kept allocated for reuse.
+        """
+        self._per_stream_positions = False
+
+    @run_on_devices(DeviceArch.N300, DeviceArch.T3K, DeviceArch.P150x4)
     def forward(self, hidden_states, **kwargs):
         seq_len = hidden_states.shape[-2]
         if (
@@ -400,14 +436,23 @@ class TTNNDotsOCRLayerStack(TTNNLayerStack):
                 cur_pos_tt = self._materialize_shared_cur_pos(cache_position)
                 if cur_pos_tt is not None:
                     kwargs["decode_cur_pos_tt"] = cur_pos_tt
-                    # HEIGHT-sharded cos/sin: the decode attention now uses
-                    # rotary_embedding_hf (sharded decode kernel), which requires
-                    # sharded cos/sin. The interleaved get_cos_sin_for_decode is
-                    # only correct for the legacy ttnn.experimental.rotary_embedding
-                    # path; the hoisted value is shared across all layers.
-                    kwargs["decode_cos_sin"] = rotary_setup.get_cos_sin_for_decode_sharded(
-                        cur_pos_tt, int(hidden_states.shape[0])
-                    )
+                    # cos/sin is prepared ONCE per token here and shared across all
+                    # layers. The required format depends on the decode rotary kernel
+                    # of the (arch-selected) attention subclass:
+                    #   * TTNNDotsOCRAttentionT3K uses the legacy
+                    #     ttnn.experimental.rotary_embedding, which consumes INTERLEAVED
+                    #     cos/sin (this is exactly the subclass's own per-layer fallback,
+                    #     and matches the tt-metal reference decode path). Hoisting the
+                    #     interleaved value avoids two per-token interleaved_to_sharded
+                    #     reshards on the host critical path.
+                    #   * The base attention uses rotary_embedding_hf (sharded decode
+                    #     kernel), which REQUIRES HEIGHT-sharded cos/sin.
+                    if isinstance(attn0, TTNNDotsOCRAttentionT3K):
+                        kwargs["decode_cos_sin"] = rotary_setup.get_cos_sin_for_decode(cur_pos_tt)
+                    else:
+                        kwargs["decode_cos_sin"] = rotary_setup.get_cos_sin_for_decode_sharded(
+                            cur_pos_tt, int(hidden_states.shape[0])
+                        )
 
         for layer in self.layers:
             layer_output = layer.forward(hidden_states, **kwargs)
@@ -425,6 +470,16 @@ class TTNNDotsOCRLayerStack(TTNNLayerStack):
             for d in cp.shape:
                 total_elems *= d
             cp = ttnn.reshape(cp, (total_elems,))
+        if (
+            getattr(self, "_per_stream_positions", False)
+            and getattr(self, "_shared_decode_cur_pos_dp", None) is not None
+        ):
+            # Per-DP-stream: keep every row (one position per device); do NOT
+            # collapse to element 0. ``cp`` is the DP-sharded [batch] position
+            # vector, so each device's own scalar is copied into the stable
+            # per-stream buffer (fixed identity for trace replay).
+            ttnn.copy(cp, self._shared_decode_cur_pos_dp)
+            return self._shared_decode_cur_pos_dp
         if cp.shape[0] > 1:
             cp = ttnn.slice(cp, [0], [1])
         ttnn.copy(cp, self._shared_decode_cur_pos)
@@ -444,6 +499,14 @@ class TTNNDotsOCRLayerStack(TTNNLayerStack):
             for d in cp.shape:
                 total *= d
             cp = ttnn.reshape(cp, (total,))
+
+        if (
+            getattr(self, "_per_stream_positions", False)
+            and getattr(self, "_shared_decode_cur_pos_dp", None) is not None
+        ):
+            # Per-DP-stream: keep all per-device positions (no [0:1] collapse).
+            ttnn.copy(cp, self._shared_decode_cur_pos_dp)
+            return
 
         if cp.shape[0] > 1:
             cp = ttnn.slice(cp, [0], [1])

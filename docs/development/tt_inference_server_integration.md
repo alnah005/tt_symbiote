@@ -107,8 +107,9 @@ no checkout, no rebuild.
 **Consequence (this is the crux for tt_symbiote):** "per-model tt-metal commit"
 means **per-model Docker image**, *not* multiple commits in one process. This is
 how tt-inference-server lives under the same "one ttnn per process" constraint
-documented in [`ttnn_pinning.md`](./ttnn_pinning.md) — it gives each commit its
-own container. `tt_symbiote`'s per-model `RUNTIME_PINS[...]["tt_metal_commit"]`
+(per-model commits are metadata in `RUNTIME_PINS`, enforced by the runtime gate)
+— it gives each commit its own container. `tt_symbiote`'s per-model
+`RUNTIME_PINS[...]["tt_metal_commit"]`
 maps **1:1** onto a model_spec `tt_metal_commit` → its own image.
 
 ---
@@ -223,15 +224,14 @@ tt-metal + ttnn are source-built from `TT_METAL_COMMIT_SHA_OR_TAG`, the image
 
 ```dockerfile
 # after create_venv.sh (ttnn built from the pinned commit is already importable)
-RUN pip install --no-deps tt_symbiote==<version> \
- && pip install <tt_symbiote runtime deps EXCEPT ttnn>
+RUN pip install tt_symbiote==<version>
 ```
 
-`--no-deps` (or a `tt_symbiote` extra that omits ttnn) is **required** so the
-PyPI `ttnn==0.68.0` pin does **not** override the source-built ttnn. This is the
-clean resolution to the correctness problem chased in
-[`ttnn_pinning.md`](./ttnn_pinning.md): served images get ttnn built from the
-model's own commit, not a PyPI wheel.
+As of `tt_symbiote` 0.1.5, `ttnn` is **not** a dependency of the package, so a
+plain `pip install tt_symbiote` can no longer override the source-built ttnn —
+served images get ttnn built from the model's own commit, not a PyPI wheel. (The
+older `--no-deps` + "install deps except ttnn" workaround was only needed for
+≤0.1.4, which still pinned `ttnn==0.68.0`.)
 
 ---
 
@@ -447,8 +447,8 @@ is a tiny additive field in tt_symbiote's existing per-model metadata
 (`RUNTIME_PINS[arch]["serving_tier"]`, metadata only — no behavior change),
 exported alongside the tt-metal commit. The adapter reads it; tt-inference-server
 holds no per-model logic. This keeps the model package authoritative and the
-serving layer generic, matching the "pin = metadata" philosophy in
-[`ttnn_pinning.md`](./ttnn_pinning.md).
+serving layer generic, matching the "pin = metadata" philosophy of
+`RUNTIME_PINS`.
 
 ### 9.4 Multimodal (dots.ocr, future VLMs)
 
@@ -490,8 +490,10 @@ reused by every VLM recipe.
 
 ## References
 
-- [`ttnn_pinning.md`](./ttnn_pinning.md) — per-model commit pinning, "pin vs.
-  install", and the one-ttnn-per-process constraint this design works within.
+- `src/tt_symbiote/models/_runtime_pins.py` — per-model commit pinning, "pin vs.
+  install", and the one-ttnn-per-process constraint this design works within
+  (`RUNTIME_PINS`, `RELEASE_TTNN`); the README Installation section covers the
+  source-built-ttnn policy.
 - `tt-metal/models/tt_transformers/tt/generator.py` — the `Generator` base whose
   contract the adapter implements (`prefill_forward`, `decode_forward`).
 - `tt-metal/models/tt_transformers/tt/generator_vllm.py` — `allocate_vllm_kv_cache`

@@ -171,6 +171,18 @@
   ],
   "decision_log": [
     {
+      "timestamp": "2026-06-12T16:45:00Z",
+      "decision": "n300_dp2_enablement",
+      "reason": "User requested DOTS OCR DP=2 on N300 (TP=1). N300 (2,1) is a single n300 board (2 Wormhole chips). Framework + test harness already N300-ready; widened 6 dots_ocr-specific @run_on_devices guards from {T3K,P150x4} to include N300 + mesh_shape (2,1), and routed N300 (Wormhole) through TTNNDotsOCRAttentionT3K decode like T3K (the default decode path calls the removed ttnn.experimental.rotary_embedding_hf). On a T3K host, isolate one board via TT_VISIBLE_DEVICES=0 so the (2,1) fabric builds. Tiers 1-3 PCC green + text decode coherent on N300.",
+      "result": "pass"
+    },
+    {
+      "timestamp": "2026-06-12T17:30:00Z",
+      "decision": "vision_sdpa_fp32acc_fix",
+      "reason": "Multimodal OCR produced garbage on N300 (and was a pre-existing, device-independent vision-accuracy bug). Bisected: patch_embed 0.999, norms/merger fine, MLP path benign-accumulation (~0.97/block), but vision-tower output structurally wrong vs torch (PCC -0.20, negative=structural). Drilled into the vision block attention: torch-SDPA on the SAME ttnn q/k/v recovered structure (-0.20 -> +0.25), isolating the ttnn SDPA. Root cause: _vision_sdpa_compute_config used fp32_dest_acc_en=False; the chunked/online-softmax exp-sum denominator over up to 11264 vision keys lost precision in bf16, collapsing attention toward uniform (default scale -> -0.20; correct scale -> uniform/constant). Fix: fp32_dest_acc_en=True. Vision-vs-torch -0.20 -> +0.28; Tier4 vision OCR on N300 now extracts the correct HTML table (was Chinese hallucination). One-line fix in src/tt_symbiote/models/dots_ocr/dots_ocr_vision.py.",
+      "result": "pass"
+    },
+    {
       "timestamp": "2026-06-09T17:10:38Z",
       "decision": "scope",
       "reason": "User chose 'Full re-bring-up from scratch' + 'T3K 8x1' hardware. Honor intent responsibly: reconcile faithful src to current reference (no risky blank-slate rewrite of validated kernels), regenerate full tier test suite from scratch, re-validate on T3K.",

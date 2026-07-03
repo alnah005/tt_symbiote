@@ -47,6 +47,7 @@ MESH_DEVICE_MAP = {
 DOTS_OCR_DP_MESH_DEVICE_MAP = {
     "N300": (2, 1),
     "T3K": (8, 1),
+    "P150x4": (4, 1),
 }
 
 
