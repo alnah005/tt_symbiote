@@ -1528,10 +1528,14 @@ class TTNNDotsOCRDRAMShardedLMHead(StatelessTTNNModule):
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         )
 
-        # Compute kernel: LoFi + BFP4 weights + packer L1 acc + FP32 dest accum
-        # (bandwidth-bound LM head). Pipeline may override after weight load.
+        # Compute kernel: HiFi2 + bfloat8_b weights + packer L1 acc + FP32 dest accum
+        # (bandwidth-bound LM head). HiFi2 (not LoFi) is the accuracy lever for the
+        # final logits -- LoFi caps the deep stack at ~0.97 PCC, HiFi2 reaches ~0.99 --
+        # and on a bandwidth-bound op the extra math pass is hidden under the weight
+        # DRAM reads, so it costs little. The pipeline sets the same config after
+        # weight load; keep this default in sync for any direct (non-pipeline) use.
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -1605,7 +1609,12 @@ class TTNNDotsOCRDRAMShardedLMHead(StatelessTTNNModule):
                 program_config=pc,
                 compute_kernel_config=self.compute_kernel_config,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b,
+                # bf16 (not bfloat8_b) logits: the matmul accumulates in fp32, so
+                # packing the output to bf8 here would discard that precision and
+                # let near-tie vocab logits rank-flip in argmax. bf16 preserves it.
+                # Weights stay bf8, so weight DRAM bandwidth (the dominant cost of
+                # this bandwidth-bound head) is unchanged.
+                dtype=ttnn.bfloat16,
             )
             full = ttnn.sharded_to_interleaved(full, ttnn.DRAM_MEMORY_CONFIG)
         else:
@@ -1619,7 +1628,10 @@ class TTNNDotsOCRDRAMShardedLMHead(StatelessTTNNModule):
                     program_config=pc,
                     compute_kernel_config=self.compute_kernel_config,
                     memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                    dtype=ttnn.bfloat8_b,
+                    # bf16 (not bfloat8_b): preserve the fp32-accumulated logits so
+                    # near-tie vocab tokens don't rank-flip in argmax (see single-chunk
+                    # path above). Weights stay bf8 -> weight bandwidth unchanged.
+                    dtype=ttnn.bfloat16,
                 )
                 out_chunk = ttnn.sharded_to_interleaved(out_chunk, ttnn.DRAM_MEMORY_CONFIG)
                 chunk_outs.append(out_chunk)

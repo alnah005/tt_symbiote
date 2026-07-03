@@ -61,6 +61,13 @@ def _argmax_token_on_device(logits: ttnn.Tensor) -> ttnn.Tensor:
     extent), just not for argmax over a giant vocab with M=1.
     """
     logits_rm = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
+    # Greedy argmax in fp32. The LM head accumulates in fp32 (fp32_dest_acc_en)
+    # and now emits bf16 logits; casting to fp32 here keeps tie-breaking exact so
+    # near-tie tokens (rare multilingual / diacritic glyphs) don't rank-flip. The
+    # cast is a single elementwise op over the vocab vector -- negligible next to
+    # the lm_head matmul + all_gather that dominate this step.
+    if logits_rm.dtype != ttnn.float32:
+        logits_rm = ttnn.typecast(logits_rm, ttnn.float32)
     token = ttnn.argmax(
         logits_rm,
         dim=-1,
