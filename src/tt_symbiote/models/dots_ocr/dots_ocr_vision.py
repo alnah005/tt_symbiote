@@ -15,6 +15,7 @@ vision block, patch merger, and the top-level vision tower.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
@@ -36,18 +37,133 @@ from tt_symbiote.core.run_config import is_trace_enabled
 # BFP8 so the LoFi multiplication delta lands inside the existing BFP8 output
 # quantization noise. Saves ~50% on the per-layer attn matmul time at the
 # 60.9 / 130 TFLOPs peak HiFi2 ceiling we were hitting in tracy.
-VISION_MATMUL_MATH_FIDELITY = ttnn.MathFidelity.LoFi
-VISION_SDPA_MATH_FIDELITY = ttnn.MathFidelity.LoFi
-# All vision matmuls / SDPA / norms run at LoFi -- the residual stream
-# carries BFP8 activations (post-attention out, post-MLP out, post-norm
-# out) so the higher norm fidelity was being thrown away into a coarser
-# downstream representation anyway.
-# RMSNorm/LayerNorm at LoFi: when the input residual stream is BFP8 the
-# multiplication precision needed for the variance reduce is bounded by
-# BFP8's per-tile shared exponent (~7 mantissa bits effective on a tile of
-# correlated magnitudes), so dropping from HiFi2 to LoFi is in the noise
-# floor of the BFP8 quantization upstream.
-VISION_NORM_MATH_FIDELITY = ttnn.MathFidelity.LoFi
+# ---------------------------------------------------------------------------
+# Vision-encoder precision toggle (A/B/C experiment)
+# ---------------------------------------------------------------------------
+# Every precision knob in the vision path is selected here by the env var
+# ``DOTS_OCR_VISION_PRECISION`` so the encoder can be flipped between named
+# precision tiers WITHOUT editing source per run (the tt-inference-server
+# launcher does ``env = os.environ.copy()`` so the var reaches the vLLM
+# EngineCore subprocess unchanged). Tiers:
+#   baseline : reproduces git HEAD a418638 byte-faithfully -- LoFi fidelity
+#              everywhere (incl. MLP), BFP4 at the four hot sites (MLP up/down,
+#              SDPA V, merger fc1), BFP8 elsewhere. approx softmax/SILU on. This
+#              is the DEFAULT when the var is unset (and the fallback for an
+#              unknown value), so adding this toggle is purely additive -- a
+#              normal launch keeps the exact committed HEAD behavior.
+#   hifi2    : intermediate tier -- matmul/SDPA/norm at HiFi2 (MLP still LoFi),
+#              the four hot sites BFP8. Opt-in.
+#   hifi4    : compute-precision tier -- HiFi4 math fidelity everywhere incl. MLP,
+#              matmul fp32 accumulation ON, approx softmax/SILU OFF, BFP8 dtypes.
+#              Runs on the AUTO-config / DRAM-intermediate path (NOT the tuned L1
+#              fast path, which is budgeted for LoFi/HiFi2 and overflows at HiFi4);
+#              this trades latency for the higher compute precision. See preset note.
+#   bf16     : accuracy-ceiling tier -- hifi4 PLUS weights/activations/RoPE
+#              tables promoted BFP8->BF16. Because the tuned program configs
+#              and L1-resident intermediates are sized for BFP8, this tier
+#              routes those matmuls to DRAM with auto program configs
+#              (prefer_dram_intermediates / use_tuned_program_configs) so BF16
+#              doesn't blow the ~1.5 MB/core L1 budget.
+#
+# NOTE: ``_vision_sdpa_compute_config`` keeps fp32_dest_acc_en=True in ALL
+# tiers -- lowering it collapses vision-tower PCC (see comment at the SDPA
+# compute-config factory below); it is NOT a tunable here.
+
+
+@dataclass(frozen=True)
+class VisionPrecisionProfile:
+    """All vision-encoder precision knobs for one tier (see module comment)."""
+
+    tier: str
+    matmul_fidelity: ttnn.MathFidelity
+    sdpa_fidelity: ttnn.MathFidelity
+    norm_fidelity: ttnn.MathFidelity
+    mlp_fidelity: ttnn.MathFidelity
+    matmul_fp32_acc: bool
+    sdpa_exp_approx: bool
+    mlp_fast_silu: bool
+    dt_mlp_up: ttnn.DataType
+    dt_mlp_down: ttnn.DataType
+    dt_sdpa_v: ttnn.DataType
+    dt_merger_fc1: ttnn.DataType
+    dt_activations: ttnn.DataType
+    dt_weights: ttnn.DataType
+    dt_rope_tables: ttnn.DataType
+    prefer_dram_intermediates: bool
+    use_tuned_program_configs: bool
+
+
+def _resolve_vision_precision() -> VisionPrecisionProfile:
+    tier = os.environ.get("DOTS_OCR_VISION_PRECISION", "baseline").strip().lower()
+    lofi, hifi2, hifi4 = ttnn.MathFidelity.LoFi, ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi4
+    bfp4, bfp8, bf16 = ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16
+    presets = {
+        "baseline": dict(
+            matmul_fidelity=lofi, sdpa_fidelity=lofi, norm_fidelity=lofi, mlp_fidelity=lofi,
+            matmul_fp32_acc=False, sdpa_exp_approx=True, mlp_fast_silu=True,
+            dt_mlp_up=bfp4, dt_mlp_down=bfp4, dt_sdpa_v=bfp4, dt_merger_fc1=bfp4,
+            dt_activations=bfp8, dt_weights=bfp8, dt_rope_tables=bfp8,
+            prefer_dram_intermediates=False, use_tuned_program_configs=True,
+        ),
+        "hifi2": dict(
+            matmul_fidelity=hifi2, sdpa_fidelity=hifi2, norm_fidelity=hifi2, mlp_fidelity=lofi,
+            matmul_fp32_acc=False, sdpa_exp_approx=True, mlp_fast_silu=True,
+            dt_mlp_up=bfp8, dt_mlp_down=bfp8, dt_sdpa_v=bfp8, dt_merger_fc1=bfp8,
+            dt_activations=bfp8, dt_weights=bfp8, dt_rope_tables=bfp8,
+            prefer_dram_intermediates=False, use_tuned_program_configs=True,
+        ),
+        # hifi4 runs on the AUTO-config / DRAM-intermediate path, NOT the hand-tuned
+        # fast path. The tuned vision program configs are L1-budgeted for LoFi/HiFi2
+        # with only ~200 KB/core headroom; raising math fidelity to HiFi4 (and matmul
+        # fp32 accumulation, which halves the DST register budget 8->4 tiles) overflows
+        # that budget op-by-op -- first the tuned matmul subblock assert
+        # (matmul_device_operation.cpp:1016), then the MLP gate/up static-CB-vs-L1
+        # clash (program.cpp:934). Rather than re-tune every config for HiFi4, we take
+        # use_tuned_program_configs=False (ttnn auto-sizes CBs for HiFi4 + makes
+        # fp32_dest_acc_en=True safe) + prefer_dram_intermediates=True (no L1-resident
+        # activation clashes). This costs latency (un-tuned matmuls + DRAM round-trips)
+        # -- an intentional, documented tradeoff: HiFi4 compute precision is not
+        # available on the tuned L1 fast path. matmul_fp32_acc is restored to True here
+        # since auto-config respects the 4-tile DST budget.
+        "hifi4": dict(
+            matmul_fidelity=hifi4, sdpa_fidelity=hifi4, norm_fidelity=hifi4, mlp_fidelity=hifi4,
+            matmul_fp32_acc=True, sdpa_exp_approx=False, mlp_fast_silu=False,
+            dt_mlp_up=bfp8, dt_mlp_down=bfp8, dt_sdpa_v=bfp8, dt_merger_fc1=bfp8,
+            dt_activations=bfp8, dt_weights=bfp8, dt_rope_tables=bfp8,
+            prefer_dram_intermediates=True, use_tuned_program_configs=False,
+        ),
+        "bf16": dict(
+            matmul_fidelity=hifi4, sdpa_fidelity=hifi4, norm_fidelity=hifi4, mlp_fidelity=hifi4,
+            matmul_fp32_acc=True, sdpa_exp_approx=False, mlp_fast_silu=False,
+            dt_mlp_up=bf16, dt_mlp_down=bf16, dt_sdpa_v=bf16, dt_merger_fc1=bf16,
+            dt_activations=bf16, dt_weights=bf16, dt_rope_tables=bf16,
+            prefer_dram_intermediates=True, use_tuned_program_configs=False,
+        ),
+    }
+    if tier not in presets:
+        tier = "baseline"
+    return VisionPrecisionProfile(tier=tier, **presets[tier])
+
+
+_VP = _resolve_vision_precision()
+print(
+    "[dots_ocr_vision] DOTS_OCR_VISION_PRECISION tier="
+    f"{_VP.tier} matmul={_VP.matmul_fidelity} sdpa={_VP.sdpa_fidelity} "
+    f"norm={_VP.norm_fidelity} mlp={_VP.mlp_fidelity} matmul_fp32_acc={_VP.matmul_fp32_acc} "
+    f"sdpa_exp_approx={_VP.sdpa_exp_approx} mlp_fast_silu={_VP.mlp_fast_silu} "
+    f"dt_mlp_up={_VP.dt_mlp_up} dt_mlp_down={_VP.dt_mlp_down} dt_sdpa_v={_VP.dt_sdpa_v} "
+    f"dt_merger_fc1={_VP.dt_merger_fc1} dt_activations={_VP.dt_activations} "
+    f"dt_weights={_VP.dt_weights} dt_rope_tables={_VP.dt_rope_tables} "
+    f"prefer_dram_intermediates={_VP.prefer_dram_intermediates} "
+    f"use_tuned_program_configs={_VP.use_tuned_program_configs}",
+    flush=True,
+)
+
+# Preserved as module constants so the many ``math_fidelity=VISION_*`` call
+# sites need no edit; they now follow the resolved precision tier.
+VISION_MATMUL_MATH_FIDELITY = _VP.matmul_fidelity
+VISION_SDPA_MATH_FIDELITY = _VP.sdpa_fidelity
+VISION_NORM_MATH_FIDELITY = _VP.norm_fidelity
 
 
 def _vision_tower_signpost(header: str) -> None:
@@ -543,7 +659,7 @@ def _vision_matmul_compute_config(device, *, math_fidelity: ttnn.MathFidelity) -
         device.arch(),
         math_fidelity=math_fidelity,
         math_approx_mode=True,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=_VP.matmul_fp32_acc,
         packer_l1_acc=True,
     )
 
@@ -690,7 +806,7 @@ class TTNNDotsVision2DRoPE:
         cos_tt = ttnn.from_torch(
             cos_full,
             device=self.device,
-            dtype=ttnn.bfloat8_b,
+            dtype=_VP.dt_rope_tables,
             layout=ttnn.TILE_LAYOUT,
             memory_config=mem,
             mesh_mapper=mapper,
@@ -698,7 +814,7 @@ class TTNNDotsVision2DRoPE:
         sin_tt = ttnn.from_torch(
             sin_full,
             device=self.device,
-            dtype=ttnn.bfloat8_b,
+            dtype=_VP.dt_rope_tables,
             layout=ttnn.TILE_LAYOUT,
             memory_config=mem,
             mesh_mapper=mapper,
@@ -737,7 +853,7 @@ class TTNNDotsVision2DRoPE:
         cos_tt = ttnn.from_torch(
             cos_full,
             device=self.device,
-            dtype=ttnn.bfloat8_b,
+            dtype=_VP.dt_rope_tables,
             layout=ttnn.TILE_LAYOUT,
             memory_config=mem,
             mesh_mapper=mapper,
@@ -745,7 +861,7 @@ class TTNNDotsVision2DRoPE:
         sin_tt = ttnn.from_torch(
             sin_full,
             device=self.device,
-            dtype=ttnn.bfloat8_b,
+            dtype=_VP.dt_rope_tables,
             layout=ttnn.TILE_LAYOUT,
             memory_config=mem,
             mesh_mapper=mapper,
@@ -930,12 +1046,12 @@ class TTNNDotsVisionMLP(StatelessTTNNModule):
         def pw(w):
             if w is None:
                 return None
-            return preprocess_linear_weight(w, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            return preprocess_linear_weight(w, dtype=_VP.dt_weights, layout=ttnn.TILE_LAYOUT)
 
         def pb(b):
             if b is None:
                 return None
-            return preprocess_linear_bias(b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            return preprocess_linear_bias(b, dtype=_VP.dt_weights, layout=ttnn.TILE_LAYOUT)
 
         # Unfused gate/up projections (two linears). Vision MLP uses DRAM linears without
         # decoder-style CCL, so fusion only saved one matmul launch while forcing two
@@ -959,7 +1075,7 @@ class TTNNDotsVisionMLP(StatelessTTNNModule):
                 return None
             return ttnn.to_device(t, self.device, memory_config=mem)
 
-        self.compute_kernel_config = _vision_matmul_compute_config(self.device, math_fidelity=ttnn.MathFidelity.LoFi)
+        self.compute_kernel_config = _vision_matmul_compute_config(self.device, math_fidelity=_VP.mlp_fidelity)
 
         self.tt_fused_gate_up_weight = _to_dev(getattr(self, "tt_fused_gate_up_weight", None))
         self.tt_fused_gate_up_bias = _to_dev(getattr(self, "tt_fused_gate_up_bias", None))
@@ -1002,13 +1118,17 @@ class TTNNDotsVisionMLP(StatelessTTNNModule):
         # the activation L1 win is more than wiped out by the weight DRAM
         # cost. Stay on the DRAM-interleaved path.
         # in0 is L1 interleaved from norm2 (``output_l1=True`` in the block).
-        gate_up_pc = _vision_matmul_program_config(self.device, m_dim, k_dim, n_dim)
+        # bf16 tier: the tuned 2D-mcast PC + L1-resident gate_up_mul/down are sized
+        # for BFP8; with BF16 activations they overflow the ~1.5 MB/core L1 budget.
+        # Fall back to auto program configs + DRAM intermediates in that tier.
+        gate_up_pc = _vision_matmul_program_config(self.device, m_dim, k_dim, n_dim) if _VP.use_tuned_program_configs else None
+        interm_mem = ttnn.DRAM_MEMORY_CONFIG if _VP.prefer_dram_intermediates else ttnn.L1_MEMORY_CONFIG
         _vision_debug_mem("gate input", hidden_states)
         gate = ttnn.linear(
             hidden_states,
             self.tt_fc1_weight,
             bias=self.tt_fc1_bias,
-            dtype=ttnn.bfloat8_b,
+            dtype=_VP.dt_activations,
             memory_config=mem,
             compute_kernel_config=self.compute_kernel_config,
             program_config=gate_up_pc,
@@ -1030,7 +1150,7 @@ class TTNNDotsVisionMLP(StatelessTTNNModule):
             hidden_states,
             self.tt_fc3_weight,
             bias=self.tt_fc3_bias,
-            dtype=ttnn.bfloat4_b,
+            dtype=_VP.dt_mlp_up,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             program_config=gate_up_pc,
@@ -1048,9 +1168,9 @@ class TTNNDotsVisionMLP(StatelessTTNNModule):
             gate,
             up,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-            fast_and_approximate_mode=True,
-            dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            fast_and_approximate_mode=_VP.mlp_fast_silu,
+            dtype=_VP.dt_activations,
+            memory_config=interm_mem,
         )
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
@@ -1060,15 +1180,18 @@ class TTNNDotsVisionMLP(StatelessTTNNModule):
         down_m = int(gate_up_mul.shape[0]) * int(gate_up_mul.shape[1]) * int(gate_up_mul.shape[2])
         down_k = int(self.tt_fc2_weight.shape[-2])
         down_n = int(self.tt_fc2_weight.shape[-1])
-        down_pc = _vision_mlp_down_l1_pc(self.device) or _vision_matmul_program_config(
-            self.device, down_m, down_k, down_n
+        down_pc = (
+            _vision_mlp_down_l1_pc(self.device)
+            or _vision_matmul_program_config(self.device, down_m, down_k, down_n)
+            if _VP.use_tuned_program_configs
+            else None
         )
         output = ttnn.linear(
             gate_up_mul,
             self.tt_fc2_weight,
             bias=self.tt_fc2_bias,
-            dtype=ttnn.bfloat4_b,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=_VP.dt_mlp_down,
+            memory_config=interm_mem,
             compute_kernel_config=self.compute_kernel_config,
             program_config=down_pc,
         )
@@ -1149,13 +1272,13 @@ class TTNNDotsVisionPatchEmbed(StatelessTTNNModule):
             self._proj_k_padded = k_padded
             self.tt_proj_weight = ttnn.from_torch(
                 w,
-                dtype=ttnn.bfloat8_b,
+                dtype=_VP.dt_weights,
                 layout=ttnn.TILE_LAYOUT,
             )
         if self._proj_bias is not None:
             self.tt_proj_bias = ttnn.from_torch(
                 self._proj_bias.reshape(1, 1, 1, -1).to(torch.bfloat16),
-                dtype=ttnn.bfloat8_b,
+                dtype=_VP.dt_weights,
                 layout=ttnn.TILE_LAYOUT,
             )
         if self._norm_weight is not None:
@@ -1221,7 +1344,7 @@ class TTNNDotsVisionPatchEmbed(StatelessTTNNModule):
                 self.tt_proj_weight,
                 bias=self.tt_proj_bias,
                 transpose_b=True,
-                dtype=ttnn.bfloat8_b,
+                dtype=_VP.dt_activations,
                 memory_config=mem,
                 compute_kernel_config=self.vision_matmul_compute_kernel_config,
             )
@@ -1278,7 +1401,7 @@ class TTNNDotsVisionPatchEmbed(StatelessTTNNModule):
             self.tt_proj_weight,
             bias=self.tt_proj_bias,
             transpose_b=True,
-            dtype=ttnn.bfloat8_b,
+            dtype=_VP.dt_activations,
             memory_config=mem,
             compute_kernel_config=self.vision_matmul_compute_kernel_config,
         )
@@ -1288,7 +1411,7 @@ class TTNNDotsVisionPatchEmbed(StatelessTTNNModule):
                 out,
                 weight=self.tt_norm_weight,
                 epsilon=1e-5,
-                dtype=ttnn.bfloat8_b,
+                dtype=_VP.dt_activations,
                 compute_kernel_config=self.vision_norm_compute_kernel_config,
             )
 
@@ -1367,15 +1490,15 @@ class TTNNDotsVisionAttention(StatelessTTNNModule):
         # preserves input dtype -- so Q/K can stay BFP8 the whole way from
         # the QKV matmul into SDPA, eliminating the 4 typecasts per layer
         # the llama kernel forced (~1.3 ms x 42 layers in vision prefill).
-        self.tt_qkv_weight = preprocess_linear_weight(self._qkv_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+        self.tt_qkv_weight = preprocess_linear_weight(self._qkv_weight, dtype=_VP.dt_weights, layout=ttnn.TILE_LAYOUT)
         if self._qkv_bias is not None:
-            self.tt_qkv_bias = preprocess_linear_bias(self._qkv_bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            self.tt_qkv_bias = preprocess_linear_bias(self._qkv_bias, dtype=_VP.dt_weights, layout=ttnn.TILE_LAYOUT)
         self.tt_o_proj_weight = preprocess_linear_weight(
-            self._o_proj_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+            self._o_proj_weight, dtype=_VP.dt_weights, layout=ttnn.TILE_LAYOUT
         )
         if self._o_proj_bias is not None:
             self.tt_o_proj_bias = preprocess_linear_bias(
-                self._o_proj_bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+                self._o_proj_bias, dtype=_VP.dt_weights, layout=ttnn.TILE_LAYOUT
             )
 
     def move_weights_to_device_impl(self):
@@ -1450,11 +1573,18 @@ class TTNNDotsVisionAttention(StatelessTTNNModule):
             k_chunk = 1024
         # q_chunk = 512
         # k_chunk = 512   -- same product (256K), overflow..
+        # k_chunk=1024 only fits in L1 when V is BFP4 (the sweep note above:
+        # "BFP8 V, q=256, k=1024 -> OOM (+7 KB over L1)"). Any tier that raises V
+        # above BFP4 (hifi2/hifi4 -> BFP8, bf16 -> BF16) overflows the scores CB by
+        # ~7 KB, so cap k_chunk at 512 (halves the scores CB; ~2x K passes) unless
+        # V is BFP4. baseline keeps k_chunk=1024.
+        if _VP.dt_sdpa_v != ttnn.bfloat4_b and k_chunk > 512:
+            k_chunk = 512
         return SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
-            exp_approx_mode=True,
+            exp_approx_mode=_VP.sdpa_exp_approx,
         )
 
     def _sdpa_padded_with_key_mask(
@@ -1560,12 +1690,12 @@ class TTNNDotsVisionAttention(StatelessTTNNModule):
         # L1 cap. Halving ``out_block_h`` doubles outer-M iterations, and
         # this matmul is weight-DRAM-bound -- the 2x weight re-reads from
         # DRAM more than wipe out the activation L1 win.
-        qkv_pc = _vision_matmul_program_config(self.device, qkv_m, qkv_k, qkv_n)
+        qkv_pc = _vision_matmul_program_config(self.device, qkv_m, qkv_k, qkv_n) if _VP.use_tuned_program_configs else None
         qkv = ttnn.linear(
             hidden_states,
             self.tt_qkv_weight,
             bias=self.tt_qkv_bias,
-            dtype=ttnn.bfloat8_b,
+            dtype=_VP.dt_activations,
             memory_config=mem,
             compute_kernel_config=self.compute_kernel_config,
             program_config=qkv_pc,
@@ -1597,7 +1727,7 @@ class TTNNDotsVisionAttention(StatelessTTNNModule):
         # number of outer K/V passes halves (12288/1024=12 vs 12288/512=24), and
         # the isolated SDPA sweep measures ~5% per-call savings net of this
         # typecast.
-        v = ttnn.typecast(v, ttnn.bfloat4_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        v = ttnn.typecast(v, _VP.dt_sdpa_v, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # SDPA still requires interleaved Q/K/V (sdpa_device_operation.cpp:44 forbids
         # sharded inputs) and at S=12288 the BFP8 Q+K+V (~46 MB) plus SDPA's static
@@ -1609,9 +1739,16 @@ class TTNNDotsVisionAttention(StatelessTTNNModule):
         # matmul_device_operation.cpp:841 constrains out_subblock_w/h when output is sharded.
         o_k = int(self.tt_o_proj_weight.shape[-2])
         o_n = int(self.tt_o_proj_weight.shape[-1])
-        o_pc = _vision_matmul_program_config(self.device, qkv_m, o_k, o_n)
-        out_bs = _vision_block_sharded_mem(self.device, qkv_m, o_n)
-        o_bs_pc = _vision_o_proj_bs_program_config(self.device)
+        # bf16 tier: the L1 BLOCK_SHARDED o_proj output + tuned PC are sized for
+        # BFP8; fall back to the DRAM-interleaved o_proj with an auto PC.
+        if _VP.use_tuned_program_configs:
+            o_pc = _vision_matmul_program_config(self.device, qkv_m, o_k, o_n)
+            out_bs = _vision_block_sharded_mem(self.device, qkv_m, o_n)
+            o_bs_pc = _vision_o_proj_bs_program_config(self.device)
+        else:
+            o_pc = None
+            out_bs = None
+            o_bs_pc = None
 
         def _run_o_proj(ctx: ttnn.Tensor) -> ttnn.Tensor:
             ctx = self._concat_heads(ctx)
@@ -1621,7 +1758,7 @@ class TTNNDotsVisionAttention(StatelessTTNNModule):
                     ctx,
                     self.tt_o_proj_weight,
                     bias=self.tt_o_proj_bias,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=_VP.dt_activations,
                     memory_config=out_bs,
                     compute_kernel_config=self.compute_kernel_config,
                     program_config=o_bs_pc,
@@ -1630,7 +1767,7 @@ class TTNNDotsVisionAttention(StatelessTTNNModule):
                 ctx,
                 self.tt_o_proj_weight,
                 bias=self.tt_o_proj_bias,
-                dtype=ttnn.bfloat8_b,
+                dtype=_VP.dt_activations,
                 memory_config=mem,
                 compute_kernel_config=self.compute_kernel_config,
                 program_config=o_pc,
@@ -1746,7 +1883,7 @@ class TTNNDotsVisionBlock(StatelessTTNNModule):
     ) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(
-                hidden_states, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                hidden_states, ttnn.TILE_LAYOUT, dtype=_VP.dt_activations, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
         _vision_debug_mem("in", hidden_states)
 
@@ -1768,7 +1905,7 @@ class TTNNDotsVisionBlock(StatelessTTNNModule):
         # promotes to BF16, doubling the residual tile footprint going into
         # ``norm2``. Now both operands are BFP8 and so is the result, so the
         # whole layer (and the next one's norm input) stays in BFP8.
-        hidden_states = ttnn.add(residual, attn_out, dtype=ttnn.bfloat8_b)
+        hidden_states = ttnn.add(residual, attn_out, dtype=_VP.dt_activations)
         _vision_debug_mem("after attn residual add", hidden_states)
         ttnn.deallocate(attn_out)
         ttnn.deallocate(residual)
@@ -1779,7 +1916,7 @@ class TTNNDotsVisionBlock(StatelessTTNNModule):
         mlp_out = self.mlp(normed)
         _vision_debug_mem("after mlp", mlp_out)
         ttnn.deallocate(normed)
-        hidden_states = ttnn.add(residual, mlp_out, dtype=ttnn.bfloat8_b)
+        hidden_states = ttnn.add(residual, mlp_out, dtype=_VP.dt_activations)
         _vision_debug_mem("out", hidden_states)
         ttnn.deallocate(mlp_out)
         ttnn.deallocate(residual)
@@ -1892,22 +2029,22 @@ class TTNNDotsPatchMerger(StatelessTTNNModule):
                 self.tt_ln_weight = ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         self.tt_w1 = (
-            ttnn.from_torch(self._w1_weight.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            ttnn.from_torch(self._w1_weight.to(torch.bfloat16), dtype=_VP.dt_weights, layout=ttnn.TILE_LAYOUT)
             if self._w1_weight is not None
             else None
         )
         self.tt_w2 = (
-            ttnn.from_torch(self._w2_weight.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            ttnn.from_torch(self._w2_weight.to(torch.bfloat16), dtype=_VP.dt_weights, layout=ttnn.TILE_LAYOUT)
             if self._w2_weight is not None
             else None
         )
         self.tt_w1_bias = (
-            ttnn.from_torch(self._w1_bias.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            ttnn.from_torch(self._w1_bias.to(torch.bfloat16), dtype=_VP.dt_weights, layout=ttnn.TILE_LAYOUT)
             if self._w1_bias is not None
             else None
         )
         self.tt_w2_bias = (
-            ttnn.from_torch(self._w2_bias.to(torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            ttnn.from_torch(self._w2_bias.to(torch.bfloat16), dtype=_VP.dt_weights, layout=ttnn.TILE_LAYOUT)
             if self._w2_bias is not None
             else None
         )
@@ -1941,7 +2078,7 @@ class TTNNDotsPatchMerger(StatelessTTNNModule):
             replicate_mapper = ttnn.ReplicateTensorToMesh(self.device)
             self.tt_w2 = ttnn.from_torch(
                 self._w2_weight.to(torch.bfloat16),
-                dtype=ttnn.bfloat8_b,
+                dtype=_VP.dt_weights,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
                 memory_config=mem,
@@ -1950,7 +2087,7 @@ class TTNNDotsPatchMerger(StatelessTTNNModule):
             if self._w2_bias is not None:
                 self.tt_w2_bias = ttnn.from_torch(
                     self._w2_bias.to(torch.bfloat16),
-                    dtype=ttnn.bfloat8_b,
+                    dtype=_VP.dt_weights,
                     layout=ttnn.TILE_LAYOUT,
                     device=self.device,
                     memory_config=mem,
@@ -1967,7 +2104,7 @@ class TTNNDotsPatchMerger(StatelessTTNNModule):
             # Re-create w2 on device with col-shard mapper
             self.tt_w2 = ttnn.from_torch(
                 self._w2_weight.to(torch.bfloat16),
-                dtype=ttnn.bfloat8_b,
+                dtype=_VP.dt_weights,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
                 memory_config=mem,
@@ -1976,7 +2113,7 @@ class TTNNDotsPatchMerger(StatelessTTNNModule):
             if self._w2_bias is not None:
                 self.tt_w2_bias = ttnn.from_torch(
                     self._w2_bias.to(torch.bfloat16),
-                    dtype=ttnn.bfloat8_b,
+                    dtype=_VP.dt_weights,
                     layout=ttnn.TILE_LAYOUT,
                     device=self.device,
                     memory_config=mem,
@@ -2021,7 +2158,14 @@ class TTNNDotsPatchMerger(StatelessTTNNModule):
         fc1_bs_pc = _vision_merger_fc1_bs_program_config(self.device)
         fc2_bs_pc = _vision_merger_fc2_bs_program_config(self.device)
         bs_mem = _vision_block_sharded_mem(self.device, new_r, int(self.mlp_size))
-        bs_available = fc1_bs_pc is not None and fc2_bs_pc is not None and bs_mem is not None
+        # bf16 tier disables the tuned block-sharded merger path (BFP8-sized shards)
+        # and takes the grid-agnostic DRAM-interleaved fallback below.
+        bs_available = (
+            fc1_bs_pc is not None
+            and fc2_bs_pc is not None
+            and bs_mem is not None
+            and _VP.use_tuned_program_configs
+        )
 
         if self._use_layer_norm:
             hidden_states = ttnn.layer_norm(hidden_states, weight=self.tt_ln_weight, bias=self.tt_ln_bias, epsilon=1e-6)
@@ -2040,7 +2184,7 @@ class TTNNDotsPatchMerger(StatelessTTNNModule):
                 hidden_states,
                 self.tt_w1,
                 bias=self.tt_w1_bias,
-                dtype=ttnn.bfloat4_b,
+                dtype=_VP.dt_merger_fc1,
                 memory_config=bs_mem,
                 program_config=fc1_bs_pc,
                 compute_kernel_config=compute_kc,
@@ -2050,7 +2194,7 @@ class TTNNDotsPatchMerger(StatelessTTNNModule):
                 hidden_states,
                 self.tt_w2,
                 bias=self.tt_w2_bias,
-                dtype=ttnn.bfloat8_b,
+                dtype=_VP.dt_activations,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 program_config=fc2_bs_pc,
                 compute_kernel_config=compute_kc,
@@ -2067,7 +2211,7 @@ class TTNNDotsPatchMerger(StatelessTTNNModule):
                 hidden_states,
                 self.tt_w1,
                 bias=self.tt_w1_bias,
-                dtype=ttnn.bfloat8_b,
+                dtype=_VP.dt_merger_fc1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=compute_kc,
                 activation="gelu",
@@ -2076,7 +2220,7 @@ class TTNNDotsPatchMerger(StatelessTTNNModule):
                 hidden_states,
                 self.tt_w2,
                 bias=self.tt_w2_bias,
-                dtype=ttnn.bfloat8_b,
+                dtype=_VP.dt_activations,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=compute_kc,
             )
@@ -2389,7 +2533,7 @@ class TTNNDotsOCRVisionTower(StatelessTTNNModule):
         mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
         result = ttnn.from_torch(
             mask,
-            dtype=ttnn.bfloat8_b,
+            dtype=_VP.dt_activations,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
             mesh_mapper=mapper,
@@ -2416,7 +2560,7 @@ class TTNNDotsOCRVisionTower(StatelessTTNNModule):
             x = ttnn.from_torch(
                 x.to(torch.bfloat16),
                 device=self.device,
-                dtype=ttnn.bfloat8_b,
+                dtype=_VP.dt_activations,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 mesh_mapper=mapper,
