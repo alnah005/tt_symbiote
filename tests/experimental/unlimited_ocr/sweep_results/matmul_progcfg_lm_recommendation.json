@@ -1,0 +1,44 @@
+{
+  "tt_metal_commit": "a0b506c780979538b6d2fc1e57fdbfdfdabc7e31",
+  "device_arch": "P150 (Blackhole, single (1,1) mesh)",
+  "stage": "op_sweep_reswept_real_shapes",
+  "scope": "lm_qproj (1280->1280) and lm_gate (1280->6848) at their REAL model shapes",
+  "why": "prior matmul_progcfg sweep tuned these at the unrepresentative fixture M=8; the real LM runs q_proj/gate_proj at prefill M=prompt_len (~277 for the standard demo) and decode M=1.",
+  "real_shapes": {
+    "decode_M": 1,
+    "prefill_M": 277,
+    "prefill_M_source": "run_unlimited_ocr_coverage.json prompt_tokens (273 vision + text)"
+  },
+  "compute_kernel": "HiFi4 / fp32_dest_acc=False / packer_l1_acc=False (MATCHES the model _lm_compute_kernel_config; out_subblock_h*out_subblock_w <= 4)",
+  "methodology_note": "The initial re-sweep inherited the base script's packer_l1_acc=True compute kernel, which allows out_subblock_w up to 8; the model uses packer_l1_acc=False (cap 4). Re-swept with the model's real compute kernel and a 1D out-subblock cap of 4 -> the earlier lm_gate 1d_8x4_blk4_1x7 winner (osw=7) is INVALID in-model (TT_FATAL available_reg_count); the valid decode winner is 1d_8x4_blk4_1x1.",
+  "device_time_source": "tracy DEVICE KERNEL DURATION [ns], min over 3 measured iterations (parse_tracy_generic.py --kind matmul_progcfg_lm).",
+  "results_ns": {
+    "lm_qproj_decode": {"auto": 20361, "best": "1d_8x4_blk4_1x2", "best_ns": 11658, "speedup": 1.75, "pcc": 0.999771},
+    "lm_qproj_prefill": {"auto": 44059, "best": "2d_8x8_blk4_1x1", "best_ns": 30751, "speedup": 1.43, "pcc": 0.999799},
+    "lm_gate_decode": {"auto": 33936, "best": "1d_8x4_blk4_1x1", "best_ns": 31624, "speedup": 1.07, "pcc": 0.999779},
+    "lm_gate_prefill": {"auto": 71859, "best": "auto", "note": "AUTO OPTIMAL; all 2D formula configs 137k-196k ns (far slower); DRAM-sharded requires M==1 (decode only)."}
+  },
+  "applied": {
+    "lm_qproj_decode": {"config": "1d_8x4_blk4_1x2", "applied": true, "guard": "M==1 (decode); q_proj across all attention layers", "reason": "1.75x op-level, valid + safe (decode M fixed at 1), PCC identical, all tiers+demos green."},
+    "lm_gate_decode": {"config": "1d_8x4_blk4_1x1", "applied": true, "guard": "M==1 (decode); ONLY the dense-MLP gate out_features==6848 (layer 0)", "reason": "1.07x op-level, valid + safe, PCC identical. Marginal. MoE expert gates (896/1792) were NOT swept and keep AUTO."},
+    "lm_qproj_prefill": {"config": "2d_8x8_blk4_1x1", "applied": false, "reason": "op-level 1.43x is real but in-model negligible (LM prefill matmuls are a tiny fraction of the vision-dominated ~10.6s prefill) AND a fixed prefill config is only valid for a bounded M range (2D per_core_M covers Mt<=16 -> ~M<=512) so it needs a fragile shape guard. Left on AUTO."},
+    "lm_gate_prefill": {"config": "auto", "applied": false, "reason": "AUTO is optimal at the real prefill shape."}
+  },
+  "in_model_effect": {
+    "decode_wall_moved": false,
+    "single_trace_decode_tok_s": {"baseline": 17.234, "after": 17.26},
+    "dp_trace_aggregate_decode_tok_s": 67.37,
+    "note": "Decode is trace/host-bound. Applied decode kernel savings (~104us/token q_proj across 12 layers + ~2us/token gate on layer 0) are ~0.2% of the decode period and do NOT measurably move the wall. Configs are numerically inert, valid, safe, and green; kept per the apply-if-valid-and-faster mandate, but the honest wall impact is ~flat."
+  },
+  "validation": {
+    "tier1_ops": "16 passed",
+    "tier2_composites": "8 passed",
+    "tier3_decoder": "5 passed",
+    "tier4_modeling": "6 passed (text-e2e PCC 0.99620, vlm-e2e PCC 0.99813, argmax match)",
+    "tier4_traced": "2 passed (traced decode & prefill token ids bit-identical to normal)",
+    "demos": "single --trace 7/8 match; --dp 4/4 streams match; --dp --trace 4/4 streams match (all identical to baseline)",
+    "structure_check": "PASS (0 errors)",
+    "ast_torch_in_forward": "NONE",
+    "bf8_weights": "intact (preprocess_weights_impl -> bfloat8_b)"
+  }
+}

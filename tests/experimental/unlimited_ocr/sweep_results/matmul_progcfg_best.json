@@ -1,0 +1,114 @@
+{
+  "lm_head": {
+    "best_pcc99": {
+      "op": "lm_head",
+      "program_config_kind": "auto",
+      "pcc": "0.999913",
+      "device_kernel_ns": 860019.0
+    },
+    "best_pcc999": {
+      "op": "lm_head",
+      "program_config_kind": "auto",
+      "pcc": "0.999913",
+      "device_kernel_ns": 860019.0
+    }
+  },
+  "clip_fc1": {
+    "best_pcc99": {
+      "op": "clip_fc1",
+      "program_config_kind": "auto",
+      "pcc": "1.000000",
+      "device_kernel_ns": 51177.0
+    },
+    "best_pcc999": {
+      "op": "clip_fc1",
+      "program_config_kind": "auto",
+      "pcc": "1.000000",
+      "device_kernel_ns": 51177.0
+    }
+  },
+  "sam_lin1": {
+    "best_pcc99": {
+      "op": "sam_lin1",
+      "program_config_kind": "auto",
+      "pcc": "1.000000",
+      "device_kernel_ns": 257550.0
+    },
+    "best_pcc999": {
+      "op": "sam_lin1",
+      "program_config_kind": "auto",
+      "pcc": "1.000000",
+      "device_kernel_ns": 257550.0
+    }
+  },
+  "lm_gate": {
+    "best_pcc99": {
+      "op": "lm_gate",
+      "program_config_kind": "1d_8x4_blk4_1x7",
+      "pcc": "0.999958",
+      "device_kernel_ns": 31383.0
+    },
+    "best_pcc999": {
+      "op": "lm_gate",
+      "program_config_kind": "1d_8x4_blk4_1x7",
+      "pcc": "0.999958",
+      "device_kernel_ns": 31383.0
+    }
+  },
+  "clip_qkv": {
+    "best_pcc99": {
+      "op": "clip_qkv",
+      "program_config_kind": "auto",
+      "pcc": "0.999995",
+      "device_kernel_ns": 48182.0
+    },
+    "best_pcc999": {
+      "op": "clip_qkv",
+      "program_config_kind": "auto",
+      "pcc": "0.999995",
+      "device_kernel_ns": 48182.0
+    }
+  },
+  "sam_qkv": {
+    "best_pcc99": {
+      "op": "sam_qkv",
+      "program_config_kind": "auto",
+      "pcc": "0.999975",
+      "device_kernel_ns": 238976.0
+    },
+    "best_pcc999": {
+      "op": "sam_qkv",
+      "program_config_kind": "auto",
+      "pcc": "0.999975",
+      "device_kernel_ns": 238976.0
+    }
+  },
+  "lm_qproj": {
+    "best_pcc99": {
+      "op": "lm_qproj",
+      "program_config_kind": "1d_8x4_blk4_1x2",
+      "pcc": "0.999977",
+      "device_kernel_ns": 11940.0
+    },
+    "best_pcc999": {
+      "op": "lm_qproj",
+      "program_config_kind": "1d_8x4_blk4_1x2",
+      "pcc": "0.999977",
+      "device_kernel_ns": 11940.0
+    }
+  },
+  "projector": {
+    "best_pcc99": {
+      "op": "projector",
+      "program_config_kind": "2d_8x8_blk4_1x1",
+      "pcc": "0.999956",
+      "device_kernel_ns": 28352.0
+    },
+    "best_pcc999": {
+      "op": "projector",
+      "program_config_kind": "2d_8x8_blk4_1x1",
+      "pcc": "0.999956",
+      "device_kernel_ns": 28352.0
+    }
+  }
+}

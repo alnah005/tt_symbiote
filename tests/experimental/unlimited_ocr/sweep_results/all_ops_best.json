@@ -1,0 +1,540 @@
+{
+  "tt_metal_commit": "a0b506c780979538b6d2fc1e57fdbfdfdabc7e31",
+  "device_arch": "P150 (Blackhole, single (1,1) mesh)",
+  "criterion": "best = lowest tracy DEVICE KERNEL DURATION [ns] with PCC>=0.99 (best_pcc999 = same but PCC>=0.999). Device time SOLELY from tracy.",
+  "ops": {
+    "clip_qkv": {
+      "op": "clip_qkv",
+      "type": "linear",
+      "devtime_source": "tracy",
+      "best_pcc99": {
+        "op": "clip_qkv",
+        "weight_dtype": "bfloat8_b",
+        "math_fidelity": "LoFi",
+        "fp32_dest_acc": "False",
+        "pcc": "0.999979",
+        "device_kernel_ns": 47069.0
+      },
+      "best_pcc999": {
+        "op": "clip_qkv",
+        "weight_dtype": "bfloat8_b",
+        "math_fidelity": "LoFi",
+        "fp32_dest_acc": "False",
+        "pcc": "0.999979",
+        "device_kernel_ns": 47069.0
+      }
+    },
+    "clip_fc1": {
+      "op": "clip_fc1",
+      "type": "matmul_extra",
+      "devtime_source": "tracy",
+      "best_pcc99": {
+        "op": "clip_fc1",
+        "weight_dtype": "bfloat8_b",
+        "math_fidelity": "HiFi2",
+        "fp32_dest_acc": "False",
+        "out_memcfg": "L1",
+        "pcc": "0.999904",
+        "device_kernel_ns": 38950.0
+      },
+      "best_pcc999": {
+        "op": "clip_fc1",
+        "weight_dtype": "bfloat8_b",
+        "math_fidelity": "HiFi2",
+        "fp32_dest_acc": "False",
+        "out_memcfg": "L1",
+        "pcc": "0.999904",
+        "device_kernel_ns": 38950.0
+      },
+      "also_measured_in": [
+        {
+          "type": "linear",
+          "best_pcc99": {
+            "op": "clip_fc1",
+            "weight_dtype": "bfloat4_b",
+            "math_fidelity": "LoFi",
+            "fp32_dest_acc": "False",
+            "pcc": "0.999174",
+            "device_kernel_ns": 47589.0
+          }
+        }
+      ]
+    },
+    "sam_qkv": {
+      "op": "sam_qkv",
+      "type": "linear",
+      "devtime_source": "tracy",
+      "best_pcc99": {
+        "op": "sam_qkv",
+        "weight_dtype": "bfloat4_b",
+        "math_fidelity": "HiFi4",
+        "fp32_dest_acc": "False",
+        "pcc": "0.999663",
+        "device_kernel_ns": 4968541.0
+      },
+      "best_pcc999": {
+        "op": "sam_qkv",
+        "weight_dtype": "bfloat4_b",
+        "math_fidelity": "HiFi4",
+        "fp32_dest_acc": "False",
+        "pcc": "0.999663",
+        "device_kernel_ns": 4968541.0
+      }
+    },
+    "sam_lin1": {
+      "op": "sam_lin1",
+      "type": "linear",
+      "devtime_source": "tracy",
+      "best_pcc99": {
+        "op": "sam_lin1",
+        "weight_dtype": "bfloat4_b",
+        "math_fidelity": "LoFi",
+        "fp32_dest_acc": "False",
+        "pcc": "0.998967",
+        "device_kernel_ns": 1133860.0
+      },
+      "best_pcc999": {
+        "op": "sam_lin1",
+        "weight_dtype": "bfloat8_b",
+        "math_fidelity": "LoFi",
+        "fp32_dest_acc": "False",
+        "pcc": "1.000000",
+        "device_kernel_ns": 1139687.0
+      }
+    },
+    "projector": {
+      "op": "projector",
+      "type": "linear",
+      "devtime_source": "tracy",
+      "best_pcc99": {
+        "op": "projector",
+        "weight_dtype": "bfloat4_b",
+        "math_fidelity": "HiFi2",
+        "fp32_dest_acc": "True",
+        "pcc": "0.996444",
+        "device_kernel_ns": 62373.0
+      },
+      "best_pcc999": {
+        "op": "projector",
+        "weight_dtype": "bfloat16",
+        "math_fidelity": "HiFi2",
+        "fp32_dest_acc": "True",
+        "pcc": "0.999993",
+        "device_kernel_ns": 62419.0
+      }
+    },
+    "lm_gate": {
+      "op": "lm_gate",
+      "type": "linear",
+      "devtime_source": "tracy",
+      "best_pcc99": {
+        "op": "lm_gate",
+        "weight_dtype": "bfloat8_b",
+        "math_fidelity": "LoFi",
+        "fp32_dest_acc": "True",
+        "pcc": "0.999958",
+        "device_kernel_ns": 33770.0
+      },
+      "best_pcc999": {
+        "op": "lm_gate",
+        "weight_dtype": "bfloat8_b",
+        "math_fidelity": "LoFi",
+        "fp32_dest_acc": "True",
+        "pcc": "0.999958",
+        "device_kernel_ns": 33770.0
+      }
+    },
+    "lm_qproj": {
+      "op": "lm_qproj",
+      "type": "linear",
+      "devtime_source": "tracy",
+      "best_pcc99": {
+        "op": "lm_qproj",
+        "weight_dtype": "bfloat4_b",
+        "math_fidelity": "LoFi",
+        "fp32_dest_acc": "False",
+        "pcc": "0.999313",
+        "device_kernel_ns": 20257.0
+      },
+      "best_pcc999": {
+        "op": "lm_qproj",
+        "weight_dtype": "bfloat4_b",
+        "math_fidelity": "LoFi",
+        "fp32_dest_acc": "False",
+        "pcc": "0.999313",
+        "device_kernel_ns": 20257.0
+      }
+    },
+    "sdpa_clip": {
+      "op": "sdpa_clip",
+      "type": "sdpa",
+      "devtime_source": "tracy",
+      "best_pcc99": {
+        "op": "sdpa_clip",
+        "input_dtype": "bfloat16",
+        "math_fidelity": "HiFi4",
+        "fp32_dest_acc": "False",
+        "exp_approx": "False",
+        "chunk_size": "128",
+        "pcc": "0.999962",
+        "device_kernel_ns": 28964.0
+      },
+      "best_pcc999": {
+        "op": "sdpa_clip",
+        "input_dtype": "bfloat16",
+        "math_fidelity": "HiFi4",
+        "fp32_dest_acc": "False",
+        "exp_approx": "False",
+        "chunk_size": "128",
+        "pcc": "0.999962",
+        "device_kernel_ns": 28964.0
+      }
+    },
+    "sdpa_sam_window": {
+      "op": "sdpa_sam_window",
+      "type": "sdpa",
+      "devtime_source": "tracy",
+      "best_pcc99": {
+        "op": "sdpa_sam_window",
+        "input_dtype": "bfloat16",
+        "math_fidelity": "HiFi4",
+        "fp32_dest_acc": "False",
+        "exp_approx": "False",
+        "chunk_size": "128",
+        "pcc": "0.999344",
+        "device_kernel_ns": 220723.0
+      },
+      "best_pcc999": {
+        "op": "sdpa_sam_window",
+        "input_dtype": "bfloat16",
+        "math_fidelity": "HiFi4",
+        "fp32_dest_acc": "False",
+        "exp_approx": "False",
+        "chunk_size": "128",
+        "pcc": "0.999344",
+        "device_kernel_ns": 220723.0
+      }
+    },
+    "sdpa_sam_global": {
+      "op": "sdpa_sam_global",
+      "type": "sdpa",
+      "devtime_source": "tracy",
+      "best_pcc99": {
+        "op": "sdpa_sam_global",
+        "input_dtype": "bfloat16",
+        "math_fidelity": "HiFi4",
+        "fp32_dest_acc": "False",
+        "exp_approx": "True",
+        "chunk_size": "256",
+        "pcc": "0.999970",
+        "device_kernel_ns": 1696061.0
+      },
+      "best_pcc999": {
+        "op": "sdpa_sam_global",
+        "input_dtype": "bfloat16",
+        "math_fidelity": "HiFi4",
+        "fp32_dest_acc": "False",
+        "exp_approx": "True",
+        "chunk_size": "256",
+        "pcc": "0.999970",
+        "device_kernel_ns": 1696061.0
+      }
+    },
+    "sdpa_lm_prefill": {
+      "op": "sdpa_lm_prefill",
+      "type": "sdpa",
+      "devtime_source": "tracy",
+      "best_pcc99": {
+        "op": "sdpa_lm_prefill",
+        "input_dtype": "bfloat8_b",
+        "math_fidelity": "LoFi",
+        "fp32_dest_acc": "True",
+        "exp_approx": "default",
+        "chunk_size": "default",
+        "pcc": "0.999620",
+        "device_kernel_ns": 5659.0
+      },
+      "best_pcc999": {
+        "op": "sdpa_lm_prefill",
+        "input_dtype": "bfloat8_b",
+        "math_fidelity": "LoFi",
+        "fp32_dest_acc": "True",
+        "exp_approx": "default",
+        "chunk_size": "default",
+        "pcc": "0.999620",
+        "device_kernel_ns": 5659.0
+      }
+    },
+    "lm_head": {
+      "op": "lm_head",
+      "type": "matmul_extra",
+      "devtime_source": "tracy",
+      "best_pcc99": {
+        "op": "lm_head",
+        "weight_dtype": "bfloat8_b",
+        "math_fidelity": "HiFi2",
+        "fp32_dest_acc": "False",
+        "out_memcfg": "DRAM",
+        "pcc": "0.999853",
+        "device_kernel_ns": 492205.0
+      },
+      "best_pcc999": {
+        "op": "lm_head",
+        "weight_dtype": "bfloat8_b",
+        "math_fidelity": "HiFi2",
+        "fp32_dest_acc": "False",
+        "out_memcfg": "DRAM",
+        "pcc": "0.999853",
+        "device_kernel_ns": 492205.0
+      }
+    },
+    "moe_gate": {
+      "op": "moe_gate",
+      "type": "matmul_extra",
+      "devtime_source": "tracy",
+      "best_pcc99": {
+        "op": "moe_gate",
+        "weight_dtype": "bfloat16",
+        "math_fidelity": "HiFi2",
+        "fp32_dest_acc": "True",
+        "out_memcfg": "DRAM",
+        "pcc": "0.999996",
+        "device_kernel_ns": 118796.0
+      },
+      "best_pcc999": {
+        "op": "moe_gate",
+        "weight_dtype": "bfloat16",
+        "math_fidelity": "HiFi2",
+        "fp32_dest_acc": "True",
+        "out_memcfg": "DRAM",
+        "pcc": "0.999996",
+        "device_kernel_ns": 118796.0
+      }
+    },
+    "relpos_h_global": {
+      "op": "relpos_h_global",
+      "type": "matmul_extra",
+      "devtime_source": "tracy",
+      "best_pcc99": {
+        "op": "relpos_h_global",
+        "weight_dtype": "bfloat4_b",
+        "math_fidelity": "LoFi",
+        "fp32_dest_acc": "False",
+        "out_memcfg": "DRAM",
+        "pcc": "0.999225",
+        "device_kernel_ns": 125981.0
+      },
+      "best_pcc999": {
+        "op": "relpos_h_global",
+        "weight_dtype": "bfloat4_b",
+        "math_fidelity": "LoFi",
+        "fp32_dest_acc": "False",
+        "out_memcfg": "DRAM",
+        "pcc": "0.999225",
+        "device_kernel_ns": 125981.0
+      }
+    },
+    "relpos_w_global": {
+      "op": "relpos_w_global",
+      "type": "matmul_extra",
+      "devtime_source": "tracy",
+      "best_pcc99": {
+        "op": "relpos_w_global",
+        "weight_dtype": "bfloat4_b",
+        "math_fidelity": "LoFi",
+        "fp32_dest_acc": "False",
+        "out_memcfg": "DRAM",
+        "pcc": "0.999042",
+        "device_kernel_ns": 125252.0
+      },
+      "best_pcc999": {
+        "op": "relpos_w_global",
+        "weight_dtype": "bfloat4_b",
+        "math_fidelity": "LoFi",
+        "fp32_dest_acc": "False",
+        "out_memcfg": "DRAM",
+        "pcc": "0.999042",
+        "device_kernel_ns": 125252.0
+      }
+    },
+    "relpos_h_window": {
+      "op": "relpos_h_window",
+      "type": "matmul_extra",
+      "devtime_source": "tracy",
+      "best_pcc99": {
+        "op": "relpos_h_window",
+        "weight_dtype": "bfloat4_b",
+        "math_fidelity": "LoFi",
+        "fp32_dest_acc": "False",
+        "out_memcfg": "DRAM",
+        "pcc": "0.999185",
+        "device_kernel_ns": 43129.0
+      },
+      "best_pcc999": {
+        "op": "relpos_h_window",
+        "weight_dtype": "bfloat4_b",
+        "math_fidelity": "LoFi",
+        "fp32_dest_acc": "False",
+        "out_memcfg": "DRAM",
+        "pcc": "0.999185",
+        "device_kernel_ns": 43129.0
+      }
+    },
+    "relpos_w_window": {
+      "op": "relpos_w_window",
+      "type": "matmul_extra",
+      "devtime_source": "tracy",
+      "best_pcc99": {
+        "op": "relpos_w_window",
+        "weight_dtype": "bfloat4_b",
+        "math_fidelity": "LoFi",
+        "fp32_dest_acc": "False",
+        "out_memcfg": "DRAM",
+        "pcc": "0.999184",
+        "device_kernel_ns": 43734.0
+      },
+      "best_pcc999": {
+        "op": "relpos_w_window",
+        "weight_dtype": "bfloat4_b",
+        "math_fidelity": "LoFi",
+        "fp32_dest_acc": "False",
+        "out_memcfg": "DRAM",
+        "pcc": "0.999184",
+        "device_kernel_ns": 43734.0
+      }
+    }
+  },
+  "matmul_program_config_sweep": {
+    "criterion": "held each op at committed dtype+HiFi4/fp32_acc=False; swept ONLY MatmulProgramConfig (grid/block/1D-2D/DRAM-sharded). Program config affects DEVICE TIME not math; PCC is a sanity check (all explicit ~identical to AUTO, >=0.99). Device time SOLELY from tracy DEVICE KERNEL DURATION [ns].",
+    "tt_metal_commit": "a0b506c780979538b6d2fc1e57fdbfdfdabc7e31",
+    "compute_grid": "11x10 (P150 Blackhole)",
+    "per_matmul": {
+      "lm_head": {
+        "auto_device_kernel_ns": 860019.0,
+        "auto_pcc": "0.999913",
+        "best_program_config_kind": "auto",
+        "best_device_kernel_ns": 860019.0,
+        "best_pcc": "0.999913",
+        "explicit_beats_auto": false,
+        "speedup_vs_auto": 1.0,
+        "device_time_reduction_pct": 0.0,
+        "n_valid_explicit_tested": 1,
+        "n_skipped_invalid": 2,
+        "skipped_invalid": [
+          {
+            "kind": "1d_8x4_blk4_1x1",
+            "status": "error:RuntimeError"
+          },
+          {
+            "kind": "dram_sharded_8c_blk5",
+            "status": "error:RuntimeError"
+          }
+        ],
+        "verdict": "auto_optimal"
+      },
+      "clip_fc1": {
+        "auto_device_kernel_ns": 51177.0,
+        "auto_pcc": "1.000000",
+        "best_program_config_kind": "auto",
+        "best_device_kernel_ns": 51177.0,
+        "best_pcc": "1.000000",
+        "explicit_beats_auto": false,
+        "speedup_vs_auto": 1.0,
+        "device_time_reduction_pct": 0.0,
+        "n_valid_explicit_tested": 3,
+        "n_skipped_invalid": 1,
+        "skipped_invalid": [
+          {
+            "kind": "dram_sharded_8c_blk4",
+            "status": "error:RuntimeError"
+          }
+        ],
+        "verdict": "auto_optimal"
+      },
+      "sam_lin1": {
+        "auto_device_kernel_ns": 257550.0,
+        "auto_pcc": "1.000000",
+        "best_program_config_kind": "auto",
+        "best_device_kernel_ns": 257550.0,
+        "best_pcc": "1.000000",
+        "explicit_beats_auto": false,
+        "speedup_vs_auto": 1.0,
+        "device_time_reduction_pct": 0.0,
+        "n_valid_explicit_tested": 3,
+        "n_skipped_invalid": 0,
+        "skipped_invalid": [],
+        "verdict": "auto_optimal"
+      },
+      "lm_gate": {
+        "auto_device_kernel_ns": 33915.0,
+        "auto_pcc": "0.999963",
+        "best_program_config_kind": "1d_8x4_blk4_1x7",
+        "best_device_kernel_ns": 31383.0,
+        "best_pcc": "0.999958",
+        "explicit_beats_auto": true,
+        "speedup_vs_auto": 1.0807,
+        "device_time_reduction_pct": 7.47,
+        "n_valid_explicit_tested": 3,
+        "n_skipped_invalid": 0,
+        "skipped_invalid": [],
+        "verdict": "explicit_faster"
+      },
+      "clip_qkv": {
+        "auto_device_kernel_ns": 48182.0,
+        "auto_pcc": "0.999995",
+        "best_program_config_kind": "auto",
+        "best_device_kernel_ns": 48182.0,
+        "best_pcc": "0.999995",
+        "explicit_beats_auto": false,
+        "speedup_vs_auto": 1.0,
+        "device_time_reduction_pct": 0.0,
+        "n_valid_explicit_tested": 3,
+        "n_skipped_invalid": 0,
+        "skipped_invalid": [],
+        "verdict": "auto_optimal"
+      },
+      "sam_qkv": {
+        "auto_device_kernel_ns": 238976.0,
+        "auto_pcc": "0.999975",
+        "best_program_config_kind": "auto",
+        "best_device_kernel_ns": 238976.0,
+        "best_pcc": "0.999975",
+        "explicit_beats_auto": false,
+        "speedup_vs_auto": 1.0,
+        "device_time_reduction_pct": 0.0,
+        "n_valid_explicit_tested": 3,
+        "n_skipped_invalid": 0,
+        "skipped_invalid": [],
+        "verdict": "auto_optimal"
+      },
+      "lm_qproj": {
+        "auto_device_kernel_ns": 20367.0,
+        "auto_pcc": "0.999981",
+        "best_program_config_kind": "1d_8x4_blk4_1x2",
+        "best_device_kernel_ns": 11940.0,
+        "best_pcc": "0.999977",
+        "explicit_beats_auto": true,
+        "speedup_vs_auto": 1.7058,
+        "device_time_reduction_pct": 41.38,
+        "n_valid_explicit_tested": 2,
+        "n_skipped_invalid": 0,
+        "skipped_invalid": [],
+        "verdict": "explicit_faster"
+      },
+      "projector": {
+        "auto_device_kernel_ns": 63564.0,
+        "auto_pcc": "0.999953",
+        "best_program_config_kind": "2d_8x8_blk4_1x1",
+        "best_device_kernel_ns": 28352.0,
+        "best_pcc": "0.999956",
+        "explicit_beats_auto": true,
+        "speedup_vs_auto": 2.242,
+        "device_time_reduction_pct": 55.4,
+        "n_valid_explicit_tested": 3,
+        "n_skipped_invalid": 0,
+        "skipped_invalid": [],
+        "verdict": "explicit_faster"
+      }
+    }
+  }
+}

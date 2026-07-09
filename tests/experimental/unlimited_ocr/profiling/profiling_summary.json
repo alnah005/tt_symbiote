@@ -1,0 +1,164 @@
+{
+  "profile_target": "Unlimited-OCR vision prefill: DeepEncoder (SAM ViT-B 12 blocks + neck/net convs + CLIP-L 24 blocks) + MLP projector, single forward, fixed 1024x1024 global view",
+  "device_arch": "P150 (Blackhole), 1x1 mesh",
+  "tt_metal_commit": "a0b506c780979538b6d2fc1e57fdbfdfdabc7e31",
+  "device_time_column": "DEVICE KERNEL DURATION [ns] (matches tt-perf-report Device Time Sum)",
+  "signpost_window": "VISION_PREFILL -> VISION_PREFILL_END (warm-up forward excluded)",
+  "note": "Device time SOLELY from tracy ops_perf_results CSV. Warm-up forward compiled kernels; measured forward is the signposted window.",
+  "bf16_baseline": {
+    "total_vision_prefill_device_time_ns": 591046204.0,
+    "matmul_device_time_ns": 121037423.0,
+    "per_op_type_ns": {
+      "other": 456642893.0,
+      "matmul": 121037423.0,
+      "sdpa": 7676277.0,
+      "norm": 2918710.0,
+      "softmax": 2565010.0,
+      "conv": 205891.0
+    },
+    "n_ops": 1213,
+    "top_ops_ns": [
+      {
+        "op": "RepeatDeviceOperation",
+        "ns": 202906493.0
+      },
+      {
+        "op": "MatmulDeviceOperation",
+        "ns": 121037423.0
+      },
+      {
+        "op": "BinaryNgDeviceOperation",
+        "ns": 100656718.0
+      },
+      {
+        "op": "ReshapeViewDeviceOperation",
+        "ns": 99756687.0
+      },
+      {
+        "op": "TransposeDeviceOperation",
+        "ns": 10438326.0
+      },
+      {
+        "op": "PermuteDeviceOperation",
+        "ns": 10074735.0
+      },
+      {
+        "op": "TilizeDeviceOperation",
+        "ns": 9183193.0
+      },
+      {
+        "op": "SDPAOperation",
+        "ns": 7676277.0
+      },
+      {
+        "op": "UntilizeWithUnpaddingDeviceOperation",
+        "ns": 6309766.0
+      },
+      {
+        "op": "TilizeWithValPaddingDeviceOperation",
+        "ns": 4703124.0
+      },
+      {
+        "op": "TypecastDeviceOperation",
+        "ns": 4163415.0
+      },
+      {
+        "op": "UnaryDeviceOperation",
+        "ns": 3200176.0
+      },
+      {
+        "op": "LayerNormDeviceOperation",
+        "ns": 2918710.0
+      },
+      {
+        "op": "SoftmaxDeviceOperation",
+        "ns": 2565010.0
+      },
+      {
+        "op": "SliceDeviceOperation",
+        "ns": 2003879.0
+      }
+    ]
+  },
+  "bf8_current": {
+    "total_vision_prefill_device_time_ns": 587928815.0,
+    "matmul_device_time_ns": 119604065.0,
+    "per_op_type_ns": {
+      "other": 454969577.0,
+      "matmul": 119604065.0,
+      "sdpa": 7670029.0,
+      "norm": 2922704.0,
+      "softmax": 2556819.0,
+      "conv": 205621.0
+    },
+    "n_ops": 1213,
+    "top_ops_ns": [
+      {
+        "op": "RepeatDeviceOperation",
+        "ns": 202840932.0
+      },
+      {
+        "op": "MatmulDeviceOperation",
+        "ns": 119604065.0
+      },
+      {
+        "op": "ReshapeViewDeviceOperation",
+        "ns": 99599131.0
+      },
+      {
+        "op": "BinaryNgDeviceOperation",
+        "ns": 99243869.0
+      },
+      {
+        "op": "TransposeDeviceOperation",
+        "ns": 10457586.0
+      },
+      {
+        "op": "PermuteDeviceOperation",
+        "ns": 10077871.0
+      },
+      {
+        "op": "TilizeDeviceOperation",
+        "ns": 9136000.0
+      },
+      {
+        "op": "SDPAOperation",
+        "ns": 7670029.0
+      },
+      {
+        "op": "UntilizeWithUnpaddingDeviceOperation",
+        "ns": 6308832.0
+      },
+      {
+        "op": "TilizeWithValPaddingDeviceOperation",
+        "ns": 4659081.0
+      },
+      {
+        "op": "TypecastDeviceOperation",
+        "ns": 4168127.0
+      },
+      {
+        "op": "UnaryDeviceOperation",
+        "ns": 3195311.0
+      },
+      {
+        "op": "LayerNormDeviceOperation",
+        "ns": 2922704.0
+      },
+      {
+        "op": "SoftmaxDeviceOperation",
+        "ns": 2556819.0
+      },
+      {
+        "op": "SliceDeviceOperation",
+        "ns": 2009647.0
+      }
+    ]
+  },
+  "measured_speedup": {
+    "overall_prefill_x": 1.0053,
+    "matmul_x": 1.012,
+    "overall_prefill_saving_ns": 3117389.0,
+    "matmul_saving_ns": 1433358.0
+  }
+}

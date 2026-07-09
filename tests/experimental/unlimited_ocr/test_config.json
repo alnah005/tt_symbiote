@@ -1,0 +1,7 @@
+{
+  "tt_metal_commit": "a0b506c780979538b6d2fc1e57fdbfdfdabc7e31",
+  "device_arch": "P150",
+  "pcc_threshold": 0.99,
+  "hf_model_id": "baidu/Unlimited-OCR",
+  "hf_revision": "main"
+}

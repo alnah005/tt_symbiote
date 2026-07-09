@@ -1,0 +1,70 @@
+{
+  "tt_metal_commit": "a0b506c780979538b6d2fc1e57fdbfdfdabc7e31",
+  "device_arch": "P150 (Blackhole, single (1,1) mesh)",
+  "linear_ops": {
+    "lm_head": [
+      "bfloat16",
+      "bfloat8_b",
+      "bfloat4_b"
+    ],
+    "moe_gate": [
+      "float32",
+      "bfloat16",
+      "bfloat8_b"
+    ]
+  },
+  "relpos_ops": {
+    "relpos_h_global": [
+      "bfloat16",
+      "bfloat8_b",
+      "bfloat4_b"
+    ],
+    "relpos_w_global": [
+      "bfloat16",
+      "bfloat8_b",
+      "bfloat4_b"
+    ],
+    "relpos_h_window": [
+      "bfloat16",
+      "bfloat8_b",
+      "bfloat4_b"
+    ],
+    "relpos_w_window": [
+      "bfloat16",
+      "bfloat8_b",
+      "bfloat4_b"
+    ]
+  },
+  "memcfg_ops": {
+    "lm_head": {
+      "kind": "linear",
+      "dtypes": [
+        "bfloat16",
+        "bfloat8_b"
+      ]
+    },
+    "clip_fc1": {
+      "kind": "linear",
+      "dtypes": [
+        "bfloat16",
+        "bfloat8_b"
+      ]
+    }
+  },
+  "math_fidelities": [
+    "LoFi",
+    "HiFi2",
+    "HiFi4"
+  ],
+  "fp32_dest_acc": [
+    false,
+    true
+  ],
+  "out_memcfgs": [
+    "DRAM",
+    "L1"
+  ],
+  "program_config": "auto (explicit MatmulProgramConfig NOT swept)",
+  "measured_iters_per_config": 3,
+  "grid_points_total": 112
+}

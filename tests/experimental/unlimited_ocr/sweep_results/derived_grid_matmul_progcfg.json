@@ -1,0 +1,66 @@
+{
+  "tt_metal_commit": "a0b506c780979538b6d2fc1e57fdbfdfdabc7e31",
+  "device_arch": "P150 (Blackhole, single (1,1) mesh)",
+  "compute_grid": "11x10",
+  "committed_dtype_per_op": {
+    "lm_head": "bfloat16",
+    "clip_fc1": "bfloat8_b",
+    "sam_lin1": "bfloat8_b",
+    "lm_gate": "bfloat8_b",
+    "clip_qkv": "bfloat8_b",
+    "sam_qkv": "bfloat8_b",
+    "lm_qproj": "bfloat8_b",
+    "projector": "bfloat8_b"
+  },
+  "compute_kernel": "HiFi4/fp32_dest_acc=False/packer_l1_acc=True",
+  "candidates_per_op": {
+    "lm_head": [
+      "auto",
+      "1d_8x8_blk4_1x8",
+      "1d_8x4_blk4_1x1",
+      "dram_sharded_8c"
+    ],
+    "clip_fc1": [
+      "auto",
+      "2d_8x8_blk4_1x4",
+      "2d_8x4_blk4_1x4",
+      "2d_7x7_blk4_1x1",
+      "dram_sharded_8c"
+    ],
+    "sam_lin1": [
+      "auto",
+      "2d_8x8_blk4_1x4",
+      "2d_8x4_blk4_1x4",
+      "2d_7x7_blk4_1x2"
+    ],
+    "lm_gate": [
+      "auto",
+      "1d_8x8_blk4_1x4",
+      "1d_8x4_blk4_1x7",
+      "dram_sharded_8c"
+    ],
+    "clip_qkv": [
+      "auto",
+      "2d_8x8_blk4_1x4",
+      "2d_8x4_blk4_1x4",
+      "2d_7x7_blk4_1x2"
+    ],
+    "sam_qkv": [
+      "auto",
+      "2d_8x8_blk4_1x3",
+      "2d_8x4_blk4_1x3",
+      "2d_7x7_blk4_1x1"
+    ],
+    "lm_qproj": [
+      "auto",
+      "1d_8x5_blk4_1x1",
+      "1d_8x4_blk4_1x2"
+    ],
+    "projector": [
+      "auto",
+      "2d_8x8_blk4_1x1",
+      "2d_8x4_blk4_1x1",
+      "2d_7x7_blk4_1x3"
+    ]
+  }
+}

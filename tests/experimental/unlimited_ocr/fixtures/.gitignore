@@ -1,0 +1,2 @@
+# Captured reference activations are large and regenerable via capture_reference_activations.py
+*.pt

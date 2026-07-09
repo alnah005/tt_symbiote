@@ -1,0 +1,35 @@
+{
+  "tt_metal_commit": "a0b506c780979538b6d2fc1e57fdbfdfdabc7e31",
+  "device_arch": "P150 (Blackhole, single (1,1) mesh)",
+  "ops": [
+    "clip_qkv",
+    "clip_fc1",
+    "sam_qkv",
+    "sam_lin1",
+    "projector",
+    "lm_gate",
+    "lm_qproj"
+  ],
+  "weight_dtypes": [
+    "bfloat16",
+    "bfloat8_b",
+    "bfloat4_b"
+  ],
+  "math_fidelities": [
+    "LoFi",
+    "HiFi2",
+    "HiFi4"
+  ],
+  "fp32_dest_acc": [
+    false,
+    true
+  ],
+  "grid_points_per_op": 18,
+  "baseline_current_config": {
+    "weight_dtype": "bfloat16",
+    "math_fidelity": "HiFi4",
+    "fp32_dest_acc": true
+  },
+  "packer_l1_acc": true,
+  "measured_iters_per_config": 3
+}

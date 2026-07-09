@@ -1,0 +1,52 @@
+{
+  "tt_metal_commit": "a0b506c780979538b6d2fc1e57fdbfdfdabc7e31",
+  "device_arch": "P150 (Blackhole, single (1,1) mesh)",
+  "sites": {
+    "sdpa_clip": {
+      "prog_chunks": [
+        128,
+        256
+      ]
+    },
+    "sdpa_sam_window": {
+      "prog_chunks": [
+        64,
+        128
+      ]
+    },
+    "sdpa_sam_global": {
+      "prog_chunks": [
+        128,
+        256,
+        512
+      ]
+    },
+    "sdpa_lm_prefill": {
+      "prog_chunks": [
+        32
+      ]
+    }
+  },
+  "input_dtypes": [
+    "bfloat16",
+    "bfloat8_b"
+  ],
+  "math_fidelities": [
+    "LoFi",
+    "HiFi2",
+    "HiFi4"
+  ],
+  "fp32_dest_acc": [
+    false,
+    true
+  ],
+  "exp_approx_mode": [
+    true,
+    false
+  ],
+  "chunk_sizes_partB": "per-site prog_chunks (mult of 32, <= seq, q==k)",
+  "partA": "dtype x fidelity x fp32 @ ttnn-default program_config",
+  "partB": "chunk x exp_approx @ bf16/HiFi4/fp32=False",
+  "measured_iters_per_config": 3,
+  "grid_points_total": 64
+}

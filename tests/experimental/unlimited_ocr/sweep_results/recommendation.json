@@ -1,0 +1,204 @@
+{
+  "tt_metal_commit": "a0b506c780979538b6d2fc1e57fdbfdfdabc7e31",
+  "device_arch": "P150 (Blackhole, single (1,1) mesh)",
+  "stage": "op_sweep",
+  "grid": "7 linears x {bfloat16,bfloat8_b,bfloat4_b} x {LoFi,HiFi2,HiFi4} x fp32_dest_acc{F,T}; baseline bf16/HiFi4/fp32=T. EXTENDED: 4 SDPAs (input dtype x fidelity x fp32 x exp_approx x chunk) + extra matmuls (lm_head, rel-pos bmms, MoE gate) + output-memcfg pass (DRAM/L1) on the big matmuls.",
+  "pcc_dimension": "COMPLETE. linear_pcc.csv 126/126 ok. sdpa_pcc.csv 62/64 ok (2 sam_global q=k=512 chunk RuntimeError). matmul_extra_pcc.csv 112/112 ok.",
+  "device_time_dimension": "COMPLETE (tracy). Per-config DEVICE KERNEL DURATION captured for all three sweeps via one whole-file tracy run each (SWEEP_START/END signposts -> parse_tracy_generic.py). Device time SOLELY from tracy CSV (Req 4). Only the two sam_global q=k=512 configs are tracy-unavailable (they errored before the measured region).",
+  "headline": "bfloat8_b weights/inputs are essentially lossless (PCC>=0.9998) on EVERY matmul AND SDPA site, and are as-fast-or-faster than bf16. Two SDPA levers CONFIRMED: (1) the flash-SDPA fp32_dest_acc=True kernel bug is real and DRAMATIC on the CLIP flash-SDPA (PCC 0.99996 -> 0.895, and it is also SLOWER) -> keep fp32_dest_acc=False on the vision flash-SDPA; (2) the big SAM-global win is EXPLICIT MATCHED chunking q=k=256 (4.40ms->1.70ms, -61%, AND higher PCC 0.99979->0.99997); exp_approx_mode is numerically/temporally INERT as an isolated lever here. lm_head is bf8-PCC-0.999-safe and 1.7x faster (843us->492us) but keep bf16 for exact-argmax tie-safety on bbox tokens. The MoE router gate does NOT need fp32 for PCC (bf16 == fp32 at ~0.999996) and bf16 is ~12% faster; fp32 is conservative (top-k index match not directly measured).",
+  "per_op_best_pcc": {
+    "clip_qkv": {
+      "bfloat16": 1.0,
+      "bfloat8_b": 1.0,
+      "bfloat4_b": 0.99966
+    },
+    "clip_fc1": {
+      "bfloat16": 1.0,
+      "bfloat8_b": 1.0,
+      "bfloat4_b": 0.9993
+    },
+    "sam_qkv": {
+      "bfloat16": 1.0,
+      "bfloat8_b": 1.0,
+      "bfloat4_b": 0.99967
+    },
+    "sam_lin1": {
+      "bfloat16": 1.0,
+      "bfloat8_b": 1.0,
+      "bfloat4_b": 0.99897
+    },
+    "projector": {
+      "bfloat16": 0.99999,
+      "bfloat8_b": 0.99998,
+      "bfloat4_b": 0.99644
+    },
+    "lm_gate": {
+      "bfloat16": 1.0,
+      "bfloat8_b": 0.99999,
+      "bfloat4_b": 0.99763
+    },
+    "lm_qproj": {
+      "bfloat16": 1.0,
+      "bfloat8_b": 1.0,
+      "bfloat4_b": 0.99933
+    }
+  },
+  "sdpa_findings": {
+    "fp32_dest_acc_bug_CONFIRMED": {
+      "sdpa_clip_bf16_HiFi4": {
+        "fp32False_pcc": 0.999957,
+        "fp32False_ns": 35393,
+        "fp32True_pcc": 0.895353,
+        "fp32True_ns": 39501
+      },
+      "note": "fp32_dest_acc=True on ttnn.transformer.scaled_dot_product_attention REGRESSES CLIP PCC to ~0.90 (all fidelities) AND is slower. On the single-op SAM window/global shapes the fp32=True effect is mild (compounding across 12+ blocks is what hurts). Keep fp32_dest_acc=False on the vision flash-SDPA. NOTE the OPPOSITE holds for LM prefill SDPA: fp32=True HELPS (0.99990->0.99994), no bug there."
+    },
+    "sam_global_chunking_CONFIRMED": {
+      "default_auto": {
+        "pcc": 0.999793,
+        "ns": 4404844
+      },
+      "q_k_128": {
+        "pcc": 0.999956,
+        "ns": 1816744
+      },
+      "q_k_256_BEST": {
+        "pcc": 0.99997,
+        "ns": 1696061
+      },
+      "q_k_512": {
+        "status": "error:RuntimeError (unsupported at seq 4096 on this grid)"
+      },
+      "exp_approx_isolated": "at q=k=256: exp_approx True 0.999970/1696061ns vs False 0.999969/1697953ns -> INERT. The real win is explicit matched chunking (q==k==256), NOT exp_approx. This refines the model docstring's earlier 'exp_approx=False helped' (that gain was the chunking)."
+    },
+    "bf8_qkv_safe": "bfloat8_b Q/K/V inputs clear PCC>=0.999 on every site at HiFi2+ (clip 0.99992, window 0.99931, global 0.99987, lm 0.99988) and are marginally faster (global bf8 4.215ms vs bf16 4.403ms).",
+    "best_by_devtime_pcc99": {
+      "sdpa_clip": "bf16/HiFi4/fp32F/exp=F/q=k=128  -> 28964 ns, pcc 0.999962",
+      "sdpa_sam_window": "bf16/HiFi4/fp32F/q=k=128        -> 220723 ns, pcc 0.999344",
+      "sdpa_sam_global": "bf16/HiFi4/fp32F/exp=T/q=k=256  -> 1696061 ns, pcc 0.999970",
+      "sdpa_lm_prefill": "bf8/LoFi/fp32T/default          -> 5659 ns, pcc 0.999620 (bf16/HiFi2/fp32T 0.99993 also fine)"
+    }
+  },
+  "matmul_extra_findings": {
+    "lm_head_bf8_safe": {
+      "bf16_HiFi2_fp32T": {
+        "pcc": 1.0,
+        "maxdiff": 0.134,
+        "ns": 855370
+      },
+      "bf8_HiFi2_fp32T": {
+        "pcc": 0.999947,
+        "maxdiff": 0.277,
+        "ns": 493708
+      },
+      "bf8_HiFi2_fp32F": {
+        "pcc": 0.999853,
+        "maxdiff": 0.517,
+        "ns": 492205
+      },
+      "bf4": {
+        "pcc": 0.9874,
+        "verdict": "UNSAFE (<0.99)"
+      },
+      "verdict": "bf8 lm_head clears PCC>=0.999 and is 1.7x faster (843us->492us). Residual risk: maxdiff ~0.28-0.52 can flip exact argmax on sub-ULP-tie bbox coordinate tokens -> keep bf16 if exact-argmax tie-safety is required; otherwise bf8 is a real win. L1 output memcfg is MUCH SLOWER for the 1280x129280 matmul (1.89ms vs 843us) -> keep DRAM output.",
+      "l1_output_slower": {
+        "bf16_L1_ns": 1890843,
+        "bf16_DRAM_ns": 843766
+      }
+    },
+    "moe_gate_fp32_not_needed": {
+      "float32_HiFi2_fp32T": {
+        "pcc": 0.999998,
+        "ns": 132533
+      },
+      "bfloat16_HiFi2_fp32T": {
+        "pcc": 0.999996,
+        "ns": 118796
+      },
+      "bfloat8_b_HiFi2_fp32T": {
+        "pcc": 0.999987,
+        "ns": 119452
+      },
+      "verdict": "fp32 is NOT required for router-logit PCC: bf16 matches fp32 (~0.999996) and is ~12% faster (119us vs 133us); bf8 is 0.99999. CAVEAT: routing is argmax/top-k; the exact top-k index match was not directly measured, but logit PCC ~1.0 makes selection flips very unlikely. fp32 is conservative; bf16 is PCC-equivalent and cheaper."
+    },
+    "rel_pos_best": {
+      "relpos_h_global": {
+        "bf16": 0.999923,
+        "bf8": 0.99991,
+        "bf4": 0.999226
+      },
+      "relpos_w_global": {
+        "bf16": 0.999952,
+        "bf8": 1.0,
+        "bf4": 0.999058
+      },
+      "relpos_h_window": {
+        "bf16": 1.0,
+        "bf8": 0.999995,
+        "bf4": 0.999194
+      },
+      "relpos_w_window": {
+        "bf16": 0.999971,
+        "bf8": 0.999991,
+        "bf4": 0.999182
+      },
+      "verdict": "bf8 (or bf16) are effectively lossless (>=0.9999) on the static-weight rel-pos bmms; HiFi4/fp32 have negligible effect (pure matmul). bf4 still clears 0.99 (~0.9992) and is fastest but carries real error. Recommend bf8."
+    },
+    "clip_fc1_memcfg": "L1 output memcfg is FASTER for clip_fc1 (bf8/HiFi2/L1 38950ns @0.99990) than the DRAM sweep's best (bf4/LoFi/DRAM 47589ns). Small win; contrast with lm_head where L1 is much slower."
+  },
+  "recommendation": {
+    "vision_matmuls": "bfloat8_b weights (fidelity per op; fp32_dest_acc only where it helped and NOT on the vision flash-SDPA per the confirmed kernel bug) -- lossless.",
+    "vision_sdpa": "Keep fp32_dest_acc=False (kernel bug). For SAM global, use an explicit SDPAProgramConfig with q_chunk_size==k_chunk_size==256 (the -61% device-time + higher-PCC lever; already in the model). exp_approx_mode is inert -- setting it False is harmless but not the source of the gain. bf8 Q/K/V is safe if a further small saving is wanted.",
+    "lm_head": "bf8 is PCC-0.999-safe and 1.7x faster; keep the committed bf16 only for exact bbox-token argmax tie-safety. DRAM output (not L1).",
+    "moe_gate": "bf16 is PCC-equivalent to the committed fp32 and ~12% faster; fp32 is conservative. If routing tie-safety is a concern keep fp32, else bf16 is a safe cost cut.",
+    "rel_pos": "bf8 weights, lossless.",
+    "next": "config-optimize may (a) add explicit q=k=256 chunking to SAM-global SDPA [already present], (b) optionally move lm_head/MoE-gate to bf8/bf16 if argmax/routing tie-safety validated end-to-end, then re-validate full-model PCC + semantic output."
+  },
+  "artifacts": {
+    "pcc_csv": "sweep_results/{linear_pcc.csv (126), sdpa_pcc.csv (64), matmul_extra_pcc.csv (112)}",
+    "devtime_csv": "sweep_results/{linear_devtime.csv, sdpa_devtime.csv, matmul_extra_devtime.csv} (tracy DEVICE KERNEL DURATION merged with PCC)",
+    "best": "sweep_results/all_ops_best.json (17 ops: 7 linears + 4 SDPAs + lm_head + moe_gate + 4 rel-pos)",
+    "grids": "sweep_results/{derived_grid.json, derived_grid_sdpa.json, derived_grid_matmul_extra.json}",
+    "fixtures": "fixtures/{linear_*.pt, sdpa_*.pt, relpos_*.pt, moe_gate.pt} (real per-op I/O + torch-fp32 reference)",
+    "parsers": "sweep_results/{parse_tracy_generic.py, aggregate_all_ops_best.py}"
+  },
+  "matmul_progcfg_findings": {
+    "scope": "Explicit MatmulProgramConfig axis the comprehensive op-sweep left on ttnn-AUTO. 8 hot matmuls x {AUTO + 2-4 valid MatmulMultiCoreReuseMultiCast(2D) + 1D(mcast_in0) for tall/skinny + DRAM-sharded for big-N}. Dtype/fidelity held at committed value (bf8_b/HiFi4, lm_head=bf16). PCC sanity only.",
+    "coverage": "21 valid explicit configs measured across 8 ops; 3 skipped-invalid (lm_head 1d_8x4 program exception + lm_head DRAM-sharded single-shot N=129280 exceeds L1 width-shard -> needs tt_transformers-style column split; clip_fc1 DRAM-sharded requires M==1 but clip_fc1 M=257 prefill). DRAM-sharded matmul is a DECODE (M==1) construct: only lm_gate (M=8->Mt=1) was eligible+valid, and it was SLOWER than AUTO/1D.",
+    "device_time_SOLELY_from_tracy": true,
+    "explicit_beats_auto": {
+      "lm_gate": {
+        "best": "1d_8x4_blk4_1x7",
+        "auto_ns": 33915.0,
+        "best_ns": 31383.0,
+        "speedup": 1.0807,
+        "reduction_pct": 7.47
+      },
+      "lm_qproj": {
+        "best": "1d_8x4_blk4_1x2",
+        "auto_ns": 20367.0,
+        "best_ns": 11940.0,
+        "speedup": 1.7058,
+        "reduction_pct": 41.38
+      },
+      "projector": {
+        "best": "2d_8x8_blk4_1x1",
+        "auto_ns": 63564.0,
+        "best_ns": 28352.0,
+        "speedup": 2.242,
+        "reduction_pct": 55.4
+      }
+    },
+    "auto_already_optimal": [
+      "lm_head",
+      "clip_fc1",
+      "sam_lin1",
+      "clip_qkv",
+      "sam_qkv"
+    ],
+    "headline": "ttnn-AUTO is already optimal for the HEAVY vision-prefill per-block matmuls (clip_qkv, clip_fc1, sam_qkv, sam_lin1) -- every explicit 2D config was SLOWER than AUTO. Explicit program configs beat AUTO only on the small LM/projector matmuls: projector 2d_8x8 63564->28352ns (2.24x, -55.4%), lm_qproj 1d_8x4 20367->11940ns (1.71x, -41.4%), lm_gate 1d_8x4 33915->31383ns (1.08x, -7.5%). The task-highlighted lm_head DRAM-sharded / clip_fc1 / sam_lin1 do NOT beat AUTO here (lm_head DRAM-sharded is infeasible single-shot; clip_fc1/sam_lin1 AUTO optimal).",
+    "prefill_matmul_reduction": "Among vision-PREFILL matmuls only the projector (single invocation) has an explicit win: -35212 ns (63564->28352). The per-block clip/sam matmuls are AUTO-optimal (0 change). Net single-forward vision-prefill matmul saving from program-config = ~35us (projector), negligible vs the ~10.7s prefill. The larger wins (lm_qproj -8427ns/call, lm_gate -2532ns/call) are per-LM-layer decode ops; total generation saving depends on layer count x decode steps (not projected here -- would require call counts).",
+    "pcc_sanity": "All explicit winners hold PCC ~identical to AUTO: projector 0.999956 vs auto 0.999953; lm_qproj 0.999977 vs 0.999981; lm_gate 0.999958 vs 0.999963. Confirms program config is numerically inert (device-time-only lever).",
+    "artifacts": "sweep_results/{matmul_progcfg_pcc.csv, matmul_progcfg.csv, matmul_progcfg_best.json, derived_grid_matmul_progcfg.json, sweep_matmul_progcfg.py}"
+  }
+}

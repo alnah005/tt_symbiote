@@ -1,0 +1,41 @@
+{
+  "model_name": "unlimited_ocr",
+  "tt_metal_commit": "a0b506c780979538b6d2fc1e57fdbfdfdabc7e31",
+  "device_arch": "P150",
+  "note": "Maps each torch module/op to the tt_symbiote TTNN class. status: GREEN (real PCC on P150), IMPLEMENTED (forward written, validated), SCAFFOLD (forward NotImplementedError), BLOCKED (attempted, blocker recorded), CUSTOM-NEEDED (no reusable class), INLINE (ttnn op inside a composite forward).",
+  "tier1_ops": {
+    "nn.Linear": {"tt_class": "tt_symbiote.modules.ttnn_linear.TTNNLinear", "status": "GREEN", "pcc": 0.99999, "notes": "reused; allows P150; bfloat16 weights"},
+    "DeepseekV2RMSNorm": {"tt_class": "tt_symbiote.modules.ttnn_normalization.TTNNRMSNorm", "status": "GREEN", "pcc": 0.99997, "notes": "reused; @run_on_devices(T3K) - test re-decorates forward to widen to P150 (hardware retarget shim)"},
+    "nn.Embedding": {"tt_class": "tt_symbiote.modules.ttnn_embedding.TTNNEmbedding", "status": "GREEN", "pcc": 0.99999, "notes": "reused; indices MUST be ttnn.uint32 (auto-convert of int64 via __call__ yields wrong dtype -> feed uint32 directly). arch widened in test"},
+    "nn.SiLU / F.silu": {"tt_class": "tt_symbiote.modules.ttnn_activation.TTNNSilu (or inline ttnn.silu)", "status": "GREEN", "pcc": 1.0, "notes": "reused; arch widened in test"},
+    "nn.GELU": {"tt_class": "tt_symbiote.modules.ttnn_activation.TTNNGelu (or inline ttnn.gelu)", "status": "GREEN", "pcc": 0.99999, "notes": "reused; arch widened in test. SAM MLPBlock uses GELU"},
+    "quick_gelu (x*sigmoid(1.702x))": {"tt_class": "CUSTOM-NEEDED", "status": "CUSTOM-NEEDED", "notes": "CLIP FFN; not nn.GELU. inline ttnn.multiply(x, ttnn.sigmoid(ttnn.multiply(x,1.702)))"},
+    "LayerNorm2d (channel-first)": {"tt_class": "CUSTOM-NEEDED", "status": "CUSTOM-NEEDED", "notes": "SAM neck; manual mean/var over dim=1"},
+    "nn.LayerNorm": {"tt_class": "tt_symbiote.modules.ttnn_normalization.TTNNLayerNorm", "status": "GREEN", "pcc": 0.99999, "notes": "reused; CLIP/SAM standard LN. arch widened in test"},
+    "nn.Conv2d (NHWC)": {"tt_class": "tt_symbiote.modules.ttnn_conv.TTNNConv2dNHWC", "status": "GREEN", "notes": "reused; SAM patch_embed/neck/net convs. Tier1 test covers all 5 configs (k16s16, k1, k3p1, k3s2p1 x2); NHWC in/out; k3 convs need device l1_small_size=32768; conv2d runs on device (only the trivial output TTNNReshape is a known shared T3K-guard fallback)"},
+    "scaled_dot_product_attention (ttnn.transformer)": {"tt_class": "INLINE ttnn.transformer.scaled_dot_product_attention", "status": "GREEN", "notes": "bf16 flash-SDPA; backs LlamaMHA + CLIP attn + SAM global-layer attn. Tier1 standalone test (non-causal) vs torch SDPA"},
+    "softmax (ttnn.softmax)": {"tt_class": "INLINE ttnn.softmax(dim=-1)", "status": "GREEN", "notes": "backs MoE fp32 router scoring + SAM window fp32 attn. Tier1 standalone test vs torch.softmax"},
+    "RoPE / rotate_half (HF-Llama)": {"tt_class": "INLINE ttnn slice/neg/concat/multiply/add", "status": "GREEN", "notes": "exact ttnn ops from TTNNUnlimitedOcrLlamaMHA._rope; Tier1 standalone test vs torch apply_rotary_pos_emb (q*cos + rotate_half(q)*sin)"}
+  },
+  "tier2_composites": {
+    "DeepseekV2MLP (dense SwiGLU)": {"tt_class": "TTNNUnlimitedOcrDeepseekMLP", "status": "GREEN", "pcc": 0.99991, "notes": "IMPLEMENTED: down(silu(gate(x))*up(x)) via child TTNNLinear.forward + inline ttnn.silu/multiply"},
+    "projector (nn.Linear 2048->1280)": {"tt_class": "TTNNUnlimitedOcrMlpProjector", "status": "GREEN", "pcc": 0.99998, "notes": "IMPLEMENTED: single child TTNNLinear.forward"},
+    "DeepseekV2MoE": {"tt_class": "TTNNUnlimitedOcrMoE", "status": "GREEN", "pcc": 0.99903, "notes": "single-device softmax-scoring greedy top-6 routing (adapted from modules/ttnn_moe.py); dense expert compute + threshold gate matrix; 64 routed + 2 shared experts"},
+    "SlidingWindowLlamaAttention": {"tt_class": "TTNNUnlimitedOcrLlamaMHA", "status": "GREEN", "notes": "prefill path: q/k/v proj -> HF-Llama RoPE (rotate_half) -> causal bf16 SDPA -> o_proj. cos/sin threaded via position_embeddings"},
+    "SAM attention (rel-pos, windowed)": {"tt_class": "TTNNUnlimitedOcrSamAttention", "status": "GREEN", "notes": "windowed layers run fp32 manual attn (QK^T + rel_pos_bias -> softmax -> AV); global layers keep bf16 flash-SDPA"},
+    "CLIP attention (SDPA)": {"tt_class": "TTNNUnlimitedOcrClipAttention", "status": "GREEN", "notes": "bf16 ttnn.transformer.scaled_dot_product_attention"}
+  },
+  "tier3_blocks": {
+    "DeepseekV2DecoderLayer (dense L0)": {"tt_class": "TTNNUnlimitedOcrDecoderLayer", "status": "GREEN", "notes": "RMSNorm + LlamaMHA + dense SwiGLU MLP (layer 0); RMSNorm + LlamaMHA + MoE (layers 1..11), all green"},
+    "SAM Block": {"tt_class": "TTNNUnlimitedOcrSamBlock", "status": "GREEN", "notes": "LN + windowed/global SAM attn + MLP(GELU); part of the green SAM encoder tower"},
+    "CLIP Block": {"tt_class": "TTNNUnlimitedOcrClipBlock", "status": "GREEN", "notes": "LN + bf16 SDPA attn + quick_gelu FFN; part of the green CLIP encoder tower"}
+  },
+  "tier4_model": {
+    "UnlimitedOCRForCausalLM": {"tt_class": "TTNNUnlimitedOcrForCausalLM", "status": "GREEN", "pcc": {"text_e2e": 0.99768, "vlm_e2e": 0.99442}, "notes": "full e2e: text-only path GREEN 0.99768; VLM (image+text) path GREEN 0.99442"},
+    "DeepseekV2Model": {"tt_class": "TTNNUnlimitedOcrDeepseekModel", "status": "GREEN", "pcc": 0.99997, "notes": "embed_tokens + 12 decoder layers + final RMSNorm"},
+    "DeepEncoder": {"tt_class": "TTNNUnlimitedOcrDeepEncoder", "status": "xfail", "pcc": 0.984, "notes": "functional at 0.984 (< 0.99 gate): SAM(0.9987) fed into bf16 CLIP tower amplifies residual bf16 SDPA error; CLIP fed the REAL SAM features greens at 0.997. Closing fully needs fp32 attention (OOM/perf cost)"},
+    "SAM encoder": {"tt_class": "TTNNUnlimitedOcrSamEncoder", "status": "GREEN", "pcc": 0.9987, "notes": "patch_embed + pos_embed + 12 blocks + neck/net conv compressor; window layers fp32 attn to clear the 0.99 gate"},
+    "CLIP encoder": {"tt_class": "TTNNUnlimitedOcrClipEncoder", "status": "GREEN", "pcc": 0.997, "notes": "embeddings(cls+pos) + pre_layrnorm + 24 blocks; fed REAL SAM features"},
+    "lm_head (nn.Linear 1280->129280)": {"tt_class": "tt_symbiote.modules.ttnn_linear.TTNNLinear", "status": "GREEN", "notes": "same TTNNLinear op as tier1; wired into the green ForCausalLM e2e"}
+  }
+}

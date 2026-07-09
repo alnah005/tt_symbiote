@@ -28,6 +28,7 @@ _RECIPE_BEARING_SUBPACKAGES = (
     "gemma4",
     "qwen3_vl",
     "dots_ocr",
+    "unlimited_ocr",
 )
 
 
